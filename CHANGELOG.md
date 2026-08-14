@@ -6,6 +6,12 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+### Aggiunto
+
+- Skill agent-native `skills/gen-image-video/SKILL.md`: contratto di output,
+  matrice provider verificata, ricette (reference di stile, image-to-video),
+  costi indicativi e quirk noti. Installabile con un symlink in `~/.claude/skills/`.
+
 ## [0.3.0] - 2026-08-14
 
 ### Modificato
