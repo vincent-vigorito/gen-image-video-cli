@@ -66,7 +66,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `giv — generazione immagini e video multi-provider (per ora: gemini)
+	fmt.Fprint(os.Stderr, `giv — generazione immagini e video multi-provider (gemini, openai, xai, openrouter)
 
 Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
