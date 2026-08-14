@@ -6,6 +6,12 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+### Aggiunto
+
+- `video --duration <s>`: durata del clip in secondi (Veo 3.1: 4, 6 o 8;
+  0 = default del modello). Testato end-to-end con `veo-3.1-fast-generate-preview`
+  in image-to-video.
+
 ## [0.1.0] - 2026-08-14
 
 ### Aggiunto

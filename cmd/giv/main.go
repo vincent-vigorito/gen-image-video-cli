@@ -78,6 +78,7 @@ giv video:
   --resolution <r>   720p, 1080p
   --negative "<t>"   negative prompt
   --image <file>     frame iniziale (image-to-video)
+  --duration <s>     durata in secondi (Veo 3.1: 4, 6, 8)
 
 Credenziali: GEMINI_API_KEY da env di processo, ./credentials.env o ./.env
 Output: file salvati in --out, manifest JSON su stdout (i log vanno su stderr)
@@ -191,6 +192,7 @@ func cmdVideo(args []string) error {
 	resolution := fs.String("resolution", "", "720p o 1080p")
 	negative := fs.String("negative", "", "negative prompt")
 	image := fs.String("image", "", "frame iniziale (image-to-video)")
+	duration := fs.Int("duration", 0, "durata in secondi (Veo 3.1: 4, 6 o 8; 0 = default modello)")
 	out := fs.String("out", "out", "directory di output")
 	name := fs.String("name", "", "slug per i nomi file")
 	prompt, err := parsePrompt(fs, args)
@@ -205,6 +207,7 @@ func cmdVideo(args []string) error {
 	media, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
 		Prompt: prompt, Model: *model, Aspect: *aspect,
 		Resolution: *resolution, Negative: *negative, Image: *image,
+		Duration: *duration,
 	})
 	if err != nil {
 		return err

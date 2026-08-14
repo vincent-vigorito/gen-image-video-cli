@@ -301,6 +301,9 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 	if req.Negative != "" {
 		params["negativePrompt"] = req.Negative
 	}
+	if req.Duration > 0 {
+		params["durationSeconds"] = req.Duration
+	}
 	body := map[string]any{"instances": []any{instance}}
 	if len(params) > 0 {
 		body["parameters"] = params

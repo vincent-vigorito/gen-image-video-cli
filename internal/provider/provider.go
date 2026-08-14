@@ -23,6 +23,7 @@ type VideoRequest struct {
 	Resolution string
 	Negative   string
 	Image      string // frame iniziale opzionale
+	Duration   int    // secondi, 0 = default del modello
 }
 
 type Media struct {
