@@ -35,8 +35,14 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 giv models [--provider P] [--all] [--json]      # elenca modelli image/video (verifica anche l'auth)
 giv image  [flag] "<prompt>"                    # genera immagini
 giv video  [flag] "<prompt>"                    # genera video (job asincrono, 1-5 min)
+giv log    [-n N] [--sum-cost] [--json]         # registro generazioni (giv-log.jsonl nella cwd)
 giv version
 ```
+
+`--input` e `--image` accettano **anche URL http(s)**: vengono scaricati da soli (niente
+curl preventivo). `giv log --sum-cost` dà il totale speso registrato nella directory —
+usalo per riferire i costi a fine lavoro. Su openrouter `models --json` include il
+`pricing` per modello: consultalo per scegliere il motore economico.
 
 Flag comuni: `--provider` (gemini|openai|xai|openrouter, default gemini), `--model`
 (default sensato per provider), `--out`, `--name`. Il prompt va passato come **singolo
@@ -57,7 +63,7 @@ non serve gestire i retry lato agente.
 |---|---|---|---|---|---|
 | `gemini` | ✅ | ✅ Veo | ✅ | ✅ | `gemini-3-pro-image` (top), `gemini-2.5-flash-image` (default), `imagen-4.0-*`; video `veo-3.1-fast-generate-preview` |
 | `openai` | ✅ | ✅ Sora | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-1` (default), `gpt-image-2` (top); video `sora-2` (720p, `--duration` 4\|8\|12) |
-| `xai` | ✅ | ❌ | ❌ | ❌ | `grok-imagine-image-2.0` (default), `-quality` |
+| `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `-quality`; video `grok-imagine-video-1.5` (fino a 15s, 480p default, image-to-video ok) |
 | `openrouter` | ✅ | ✅ | ✅ | ✅ | `google/gemini-3-pro-image`, `bytedance-seed/seedream-5-0-lite|pro`; video `bytedance/seedance-2.0-mini` (economico), `google/veo-3.1` (default) |
 
 - Veo (gemini): `--duration` 4|6|8 — il default del modello è 8s e **costa il doppio** di 4.
@@ -71,9 +77,8 @@ non serve gestire i retry lato agente.
 in `dati-siti/STILE-ILLUSTRAZIONI-ALEGRIA.md` del workspace):
 
 ```bash
-curl -sf -o /tmp/ref.webp <URL-reference>
 ./bin/giv image --model gemini-3-pro-image --aspect 16:9 --name <slug> \
-  --input /tmp/ref.webp \
+  --input <URL-reference-o-file> \
   "<stile richiesto, EXACT same style as the reference image> CHANGE the palette to: <hex+ruoli>. Subject: <scena>. NO text, NO words, NO letters, NO numbers anywhere."
 ```
 
@@ -93,7 +98,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 
 - Immagini: Nano Banana flash ~$0.04 · Nano Banana Pro ~$0.13-0.25 · gpt-image-2 ~$0.25 ·
   Seedream Lite pochi cent · grok ~$0.07.
-- Video: seedance-2.0-mini 4s/720p ~$0.12 · veo-3.1-fast 4s ~$0.60 · sora-2 4s ~$0.40.
+- Video: seedance-2.0-mini 4s/720p ~$0.12 · veo-3.1-fast 4s ~$0.60 · sora-2 4s ~$0.40 ·
+  grok-imagine-video-1.5 economico ma 480p di default.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale.
 

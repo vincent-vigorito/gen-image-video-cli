@@ -5,6 +5,8 @@ Google Gemini, OpenAI, x.ai e OpenRouter (che aggiunge i motori ByteDance
 Seedream/Seedance). Un solo binario, `giv`, progettato per essere **usato dagli
 agenti** — Claude Code, LLM con tool-use, script e pipeline CI — prima ancora che
 dagli umani: nessun prompt interattivo, output interamente parsabile, errori chiari.
+E resta deliberatamente una CLI: **nessun server, nessun MCP, nessun runtime** — un
+binario, le tue chiavi, e qualsiasi agente o script sa usarlo.
 
 ```bash
 ./bin/giv image --provider openrouter --model bytedance-seed/seedream-5-0-lite \
@@ -39,6 +41,11 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
 - **retry automatico sui 5xx transitori** — fino a 2 ritentativi con backoff (avviso su
   stderr): un blip del provider non fa fallire il task dell'agente.
 - **riproducibilità** — `--seed` dove il provider lo supporta (Gemini, OpenRouter).
+- **registro locale** — ogni generazione è appesa a `giv-log.jsonl` nella directory
+  corrente; `giv log` la storia, `giv log --sum-cost` il totale speso registrato.
+- **input da URL** — `--input` e `--image` accettano anche URL http(s), scaricati da soli.
+- **prezzi interrogabili** — `giv models --provider openrouter --json` include il listino
+  per modello: un agente può scegliere il motore economico senza tabelle hardcoded.
 - **skill inclusa** — `skills/gen-image-video/SKILL.md`: guida operativa per agenti con
   matrice provider verificata, ricette e quirk noti.
 
@@ -59,6 +66,7 @@ cp .env.example .env      # inserisci le chiavi dei provider che usi
 giv models [--provider P] [--all] [--json]   # modelli image/video disponibili
 giv image  [flag] "<prompt>"                 # genera immagini
 giv video  [flag] "<prompt>"                 # genera video (job asincrono, 1-5 min)
+giv log    [-n N] [--sum-cost] [--json]      # registro locale delle generazioni
 giv version
 ```
 
@@ -68,8 +76,8 @@ i flag possono stare prima o dopo.
 
 | Comando | Flag specifici |
 |---|---|
-| `image` | `-n <num>` · `--aspect <1:1\|16:9\|9:16\|4:3\|3:4>` · `--seed <n>` · `--input <file>` (ripetibile: reference di stile / editing) |
-| `video` | `--aspect` · `--resolution <720p\|1080p>` · `--duration <s>` · `--negative "<t>"` · `--image <file>` (frame iniziale, image-to-video) |
+| `image` | `-n <num>` · `--aspect <1:1\|16:9\|9:16\|4:3\|3:4>` · `--seed <n>` · `--input <file\|url>` (ripetibile: reference di stile / editing) |
+| `video` | `--aspect` · `--resolution <720p\|1080p>` · `--duration <s>` · `--negative "<t>"` · `--image <file\|url>` (frame iniziale, image-to-video) |
 
 ## Provider
 
@@ -77,7 +85,7 @@ i flag possono stare prima o dopo.
 |---|---|---|---|---|---|
 | `gemini` (default) | ✅ Nano Banana, Imagen | ✅ Veo (`--duration` 4/6/8) | ✅ | ✅ | ✅ |
 | `openai` | ✅ gpt-image-* | ✅ Sora (`sora-2`, 720p, `--duration` 4/8/12) | ✅ via edits | ✅ via size | ❌ |
-| `xai` | ✅ grok-imagine-image-* | ❌ | ❌ | ❌ | ❌ |
+| `xai` | ✅ grok-imagine-image-* | ✅ grok-imagine-video (fino a 15s) | ❌ immagini / ✅ video | ❌ immagini / ✅ video | ❌ |
 | `openrouter` | ✅ Google, OpenAI, ByteDance | ✅ Seedance, Veo, Sora | ✅ | ✅ | ✅ |
 
 Note:

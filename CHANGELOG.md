@@ -6,6 +6,23 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-14
+
+### Aggiunto
+
+- `--input` e `--image` accettano **URL http(s)**: il file viene scaricato in
+  automatico in tmp (estensione dall'URL o dal Content-Type). La ricetta con
+  reference dai tenant non richiede più il curl preventivo.
+- **Registro locale delle generazioni**: ogni manifest viene appeso a
+  `giv-log.jsonl` nella directory corrente (gitignorato). Nuovo comando
+  `giv log` (`-n`, `--json`) e `giv log --sum-cost` per il totale speso.
+- `models --json` su openrouter include il **pricing per modello** (raw del
+  provider): permette di scegliere il motore economico senza tabelle hardcoded.
+- Video **x.ai grok-imagine** (`/videos/generations` asincrona con polling):
+  default `grok-imagine-video-1.5`, `--duration` fino a 15s, `--aspect`,
+  `--resolution`, `--image` come data URL. Testato image-to-video (480p default).
+  La matrice video è ora completa su tutti e quattro i provider.
+
 ## [0.4.0] - 2026-08-14
 
 ### Aggiunto

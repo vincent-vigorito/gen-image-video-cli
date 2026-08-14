@@ -25,6 +25,7 @@ import (
 type Options struct {
 	Router   bool // endpoint dedicati /images e /videos di OpenRouter
 	Sora     bool // video via API /videos di OpenAI (Sora)
+	Grok     bool // video via API /videos/generations di x.ai
 	UseSize  bool // mappa --aspect sul parametro size (OpenAI)
 	B64Param bool // invia response_format=b64_json (x.ai; gpt-image-1 lo rifiuta)
 }
@@ -118,8 +119,9 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 	if c.opts.Router {
 		var resp struct {
 			Data []struct {
-				ID           string `json:"id"`
-				Name         string `json:"name"`
+				ID           string         `json:"id"`
+				Name         string         `json:"name"`
+				Pricing      map[string]any `json:"pricing"`
 				Architecture struct {
 					OutputModalities []string `json:"output_modalities"`
 				} `json:"architecture"`
@@ -138,7 +140,7 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 					kind = "video"
 				}
 			}
-			out = append(out, provider.ModelInfo{Name: m.ID, DisplayName: m.Name, Kind: kind})
+			out = append(out, provider.ModelInfo{Name: m.ID, DisplayName: m.Name, Kind: kind, Pricing: m.Pricing})
 		}
 	} else {
 		var resp struct {
@@ -320,8 +322,84 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 		return c.routerVideo(ctx, req)
 	case c.opts.Sora:
 		return c.soraVideo(ctx, req)
+	case c.opts.Grok:
+		return c.grokVideo(ctx, req)
 	default:
 		return nil, fmt.Errorf("generazione video non supportata per %s", c.name)
+	}
+}
+
+// grokVideo usa l'API asincrona /videos/generations di x.ai (grok-imagine-video).
+func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+	if req.Negative != "" {
+		fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da %s, ignorato\n", c.name)
+	}
+	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
+	if req.Duration > 0 {
+		body["duration"] = req.Duration
+	}
+	if req.Aspect != "" {
+		body["aspect_ratio"] = req.Aspect
+	}
+	if req.Resolution != "" {
+		body["resolution"] = req.Resolution
+	}
+	if req.Image != "" {
+		u, err := dataURL(req.Image)
+		if err != nil {
+			return nil, err
+		}
+		body["image"] = map[string]string{"url": u}
+	}
+
+	var job struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/videos/generations", body, &job); err != nil {
+		return nil, err
+	}
+	if job.RequestID == "" {
+		return nil, fmt.Errorf("%s: nessun request_id nella risposta", c.name)
+	}
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.RequestID)
+
+	deadline := time.Now().Add(15 * time.Minute)
+	for {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s: timeout dopo 15m sul job %s", c.name, job.RequestID)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+		var st struct {
+			Status string `json:"status"`
+			Video  struct {
+				URL string `json:"url"`
+			} `json:"video"`
+			Error json.RawMessage `json:"error"`
+		}
+		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/videos/"+job.RequestID, nil, &st); err != nil {
+			return nil, err
+		}
+		switch st.Status {
+		case "done", "completed":
+			fmt.Fprintln(os.Stderr)
+			if st.Video.URL == "" {
+				return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
+			}
+			data, err := c.download(ctx, st.Video.URL)
+			if err != nil {
+				return nil, err
+			}
+			return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}}, nil
+		case "failed", "error", "expired":
+			fmt.Fprintln(os.Stderr)
+			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+		default:
+			fmt.Fprint(os.Stderr, ".")
+		}
 	}
 }
 

@@ -3,9 +3,10 @@ package provider
 import "context"
 
 type ModelInfo struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"` // image | video | other
-	DisplayName string `json:"display_name,omitempty"`
+	Name        string         `json:"name"`
+	Kind        string         `json:"kind"` // image | video | other
+	DisplayName string         `json:"display_name,omitempty"`
+	Pricing     map[string]any `json:"pricing,omitempty"` // raw del provider (per ora: openrouter)
 }
 
 type ImageRequest struct {

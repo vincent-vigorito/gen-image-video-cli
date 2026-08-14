@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"gen-image-video-cli/internal/config"
 	"gen-image-video-cli/internal/output"
@@ -14,7 +21,10 @@ import (
 	"gen-image-video-cli/internal/provider/openaicompat"
 )
 
-const version = "0.4.0"
+const (
+	version = "0.5.0"
+	logFile = "giv-log.jsonl"
+)
 
 var defaultImageModels = map[string]string{
 	"gemini":     "gemini-2.5-flash-image",
@@ -26,6 +36,7 @@ var defaultImageModels = map[string]string{
 var defaultVideoModels = map[string]string{
 	"gemini":     "veo-3.0-fast-generate-001",
 	"openai":     "sora-2",
+	"xai":        "grok-imagine-video-1.5",
 	"openrouter": "google/veo-3.1",
 }
 
@@ -50,6 +61,8 @@ func main() {
 		err = cmdImage(os.Args[2:])
 	case "video":
 		err = cmdVideo(os.Args[2:])
+	case "log":
+		err = cmdLog(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -72,6 +85,7 @@ Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (Veo, job asincrono ~1-5 min)
+  giv log    [-n N|--sum-cost]     registro locale delle generazioni (giv-log.jsonl)
   giv version                      stampa la versione
 
 Flag comuni:
@@ -87,7 +101,8 @@ giv image:
   -n <num>           numero di immagini (default 1)
   --aspect <ratio>   1:1, 16:9, 9:16, 4:3, 3:4
   --seed <n>         seed deterministico (gemini, openrouter; altrove ignorato con avviso)
-  --input <file>     immagine di input/riferimento, ripetibile (non supportato da xai e Imagen)
+  --input <file|url> immagine di input/riferimento, ripetibile (non supportato da xai e Imagen);
+                     gli URL http(s) vengono scaricati automaticamente (vale anche per --image di video)
 
 giv video:
   --aspect <ratio>   16:9, 9:16
@@ -152,7 +167,7 @@ func newProvider(name string) (provider.Provider, error) {
 			openaicompat.Options{UseSize: true, Sora: true}), nil
 	case "xai":
 		return openaicompat.New("xai", "https://api.x.ai/v1", key,
-			openaicompat.Options{B64Param: true}), nil
+			openaicompat.Options{B64Param: true, Grok: true}), nil
 	default: // openrouter
 		return openaicompat.New("openrouter", "https://openrouter.ai/api/v1", key,
 			openaicompat.Options{Router: true}), nil
@@ -224,9 +239,15 @@ func cmdImage(args []string) error {
 	if err != nil {
 		return err
 	}
+	resolved := make([]string, len(inputs))
+	for i, in := range inputs {
+		if resolved[i], err = resolveInput(in); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintf(os.Stderr, "generazione immagine con %s/%s…\n", *prov, m)
 	res, err := c.GenerateImage(context.Background(), provider.ImageRequest{
-		Prompt: prompt, Model: m, N: *n, Aspect: *aspect, Seed: *seed, Inputs: inputs,
+		Prompt: prompt, Model: m, N: *n, Aspect: *aspect, Seed: *seed, Inputs: resolved,
 	})
 	if err != nil {
 		return err
@@ -239,7 +260,7 @@ func cmdImage(args []string) error {
 	if err != nil {
 		return err
 	}
-	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+	return emit("image", manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
 }
 
 func cmdVideo(args []string) error {
@@ -265,10 +286,16 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
+	img := *image
+	if img != "" {
+		if img, err = resolveInput(img); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
 	res, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
 		Prompt: prompt, Model: m, Aspect: *aspect,
-		Resolution: *resolution, Negative: *negative, Image: *image,
+		Resolution: *resolution, Negative: *negative, Image: img,
 		Duration: *duration,
 	})
 	if err != nil {
@@ -282,5 +309,129 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
-	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+	return emit("video", manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+}
+
+type logEntry struct {
+	Ts      string `json:"ts"`
+	Command string `json:"command"`
+	manifest
+}
+
+// emit stampa il manifest su stdout e lo appende al registro locale.
+func emit(command string, man manifest) error {
+	entry := logEntry{Ts: time.Now().Format(time.RFC3339), Command: command, manifest: man}
+	if err := output.AppendLog(logFile, entry); err != nil {
+		fmt.Fprintf(os.Stderr, "avviso: registro %s non aggiornato: %v\n", logFile, err)
+	}
+	return output.PrintJSON(man)
+}
+
+var inputHTTP = &http.Client{Timeout: 120 * time.Second}
+
+// resolveInput accetta un path locale o un URL http(s); gli URL vengono scaricati in tmp.
+func resolveInput(p string) (string, error) {
+	if !strings.HasPrefix(p, "http://") && !strings.HasPrefix(p, "https://") {
+		return p, nil
+	}
+	resp, err := inputHTTP.Get(p)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download input %s: HTTP %d", p, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(p)
+	if err != nil {
+		return "", err
+	}
+	ext := filepath.Ext(u.Path)
+	if ext == "" {
+		ext = extForMime(resp.Header.Get("Content-Type"))
+	}
+	sum := sha256.Sum256([]byte(p))
+	dst := filepath.Join(os.TempDir(), fmt.Sprintf("giv-input-%x%s", sum[:6], ext))
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "input scaricato: %s (%d byte)\n", dst, len(data))
+	return dst, nil
+}
+
+func extForMime(ct string) string {
+	switch {
+	case strings.Contains(ct, "png"):
+		return ".png"
+	case strings.Contains(ct, "jpeg"):
+		return ".jpg"
+	case strings.Contains(ct, "webp"):
+		return ".webp"
+	case strings.Contains(ct, "gif"):
+		return ".gif"
+	default:
+		return ".bin"
+	}
+}
+
+func cmdLog(args []string) error {
+	fs := flag.NewFlagSet("log", flag.ExitOnError)
+	n := fs.Int("n", 20, "numero di righe da mostrare")
+	sum := fs.Bool("sum-cost", false, "totale generazioni e costo registrato")
+	asJSON := fs.Bool("json", false, "righe raw JSONL")
+	fs.Parse(args)
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("nessun registro %s in questa directory", logFile)
+		}
+		return err
+	}
+	var lines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	if *sum {
+		var total float64
+		for _, l := range lines {
+			var e struct {
+				CostUSD float64 `json:"cost_usd"`
+			}
+			if json.Unmarshal([]byte(l), &e) == nil {
+				total += e.CostUSD
+			}
+		}
+		return output.PrintJSON(map[string]any{"generations": len(lines), "cost_usd": total})
+	}
+	if len(lines) > *n {
+		lines = lines[len(lines)-*n:]
+	}
+	if *asJSON {
+		for _, l := range lines {
+			fmt.Println(l)
+		}
+		return nil
+	}
+	for _, l := range lines {
+		var e logEntry
+		if json.Unmarshal([]byte(l), &e) != nil {
+			continue
+		}
+		cost := ""
+		if e.CostUSD > 0 {
+			cost = fmt.Sprintf("  $%.4f", e.CostUSD)
+		}
+		file0 := ""
+		if len(e.Files) > 0 {
+			file0 = e.Files[0].Path
+		}
+		fmt.Printf("%s  %-5s  %s/%s%s  %s\n", e.Ts, e.Command, e.Provider, e.Model, cost, file0)
+	}
+	return nil
 }

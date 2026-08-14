@@ -91,3 +91,13 @@ func PrintJSON(v any) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
+
+// AppendLog appende una riga JSONL al registro delle generazioni.
+func AppendLog(path string, v any) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return json.NewEncoder(f).Encode(v)
+}

@@ -14,5 +14,8 @@ credentials.env
 projects/*
 !projects/.gitkeep
 
+# registro locale delle generazioni
+giv-log.jsonl
+
 # macOS
 .DS_Store
