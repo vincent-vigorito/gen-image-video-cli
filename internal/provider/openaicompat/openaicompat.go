@@ -22,7 +22,7 @@ import (
 
 // Options distingue i dialetti dei provider OpenAI-compatible.
 type Options struct {
-	Chat     bool // immagini via chat completions con modalities (OpenRouter)
+	Router   bool // endpoint dedicati /images e /videos di OpenRouter
 	UseSize  bool // mappa --aspect sul parametro size (OpenAI)
 	B64Param bool // invia response_format=b64_json (x.ai; gpt-image-1 lo rifiuta)
 }
@@ -107,7 +107,7 @@ func apiErrorMessage(data []byte) string {
 
 func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 	var out []provider.ModelInfo
-	if c.opts.Chat {
+	if c.opts.Router {
 		var resp struct {
 			Data []struct {
 				ID           string `json:"id"`
@@ -160,8 +160,8 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 // --- immagini ---
 
 func (c *Client) GenerateImage(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
-	if c.opts.Chat {
-		return c.chatImages(ctx, req)
+	if c.opts.Router {
+		return c.routerImages(ctx, req)
 	}
 	if len(req.Inputs) > 0 {
 		return c.imagesEdits(ctx, req)
@@ -229,10 +229,42 @@ func (c *Client) imagesEdits(ctx context.Context, req provider.ImageRequest) ([]
 	return c.mediaFromImages(ctx, resp)
 }
 
+// routerImages usa l'endpoint dedicato /images di OpenRouter (unico supportato
+// dai modelli ByteDance; accetta anche quelli Google/OpenAI).
+func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
+	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
+	if req.N > 1 {
+		body["n"] = req.N
+	}
+	if req.Aspect != "" {
+		body["aspect_ratio"] = req.Aspect
+	}
+	if len(req.Inputs) > 0 {
+		var refs []map[string]any
+		for _, path := range req.Inputs {
+			u, err := dataURL(path)
+			if err != nil {
+				return nil, err
+			}
+			refs = append(refs, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]string{"url": u},
+			})
+		}
+		body["input_references"] = refs
+	}
+	var resp imagesResponse
+	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images", body, &resp); err != nil {
+		return nil, err
+	}
+	return c.mediaFromImages(ctx, resp)
+}
+
 type imagesResponse struct {
 	Data []struct {
-		B64JSON string `json:"b64_json"`
-		URL     string `json:"url"`
+		B64JSON   string `json:"b64_json"`
+		URL       string `json:"url"`
+		MediaType string `json:"media_type"`
 	} `json:"data"`
 }
 
@@ -252,7 +284,11 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 		if err != nil {
 			return nil, err
 		}
-		media = append(media, provider.Media{Mime: http.DetectContentType(data), Data: data})
+		mime := d.MediaType
+		if mime == "" {
+			mime = http.DetectContentType(data)
+		}
+		media = append(media, provider.Media{Mime: mime, Data: data})
 	}
 	if len(media) == 0 {
 		return nil, fmt.Errorf("%s: nessuna immagine nella risposta", c.name)
@@ -260,106 +296,108 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 	return media, nil
 }
 
-func (c *Client) chatImages(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
-	if req.Aspect != "" {
-		fmt.Fprintf(os.Stderr, "avviso: --aspect non supportato da %s, ignorato\n", c.name)
+// --- video ---
+
+func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) ([]provider.Media, error) {
+	if !c.opts.Router {
+		return nil, fmt.Errorf("generazione video non ancora supportata per %s (in roadmap: Sora via /videos)", c.name)
 	}
-	content := []map[string]any{{"type": "text", "text": req.Prompt}}
-	for _, path := range req.Inputs {
-		data, err := os.ReadFile(path)
+	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
+	if req.Duration > 0 {
+		body["duration"] = req.Duration
+	}
+	if req.Resolution != "" {
+		body["resolution"] = req.Resolution
+	}
+	if req.Aspect != "" {
+		body["aspect_ratio"] = req.Aspect
+	}
+	if req.Image != "" {
+		u, err := dataURL(req.Image)
 		if err != nil {
 			return nil, err
 		}
-		content = append(content, map[string]any{
-			"type": "image_url",
-			"image_url": map[string]any{
-				"url": "data:" + mimeForFile(path) + ";base64," + base64.StdEncoding.EncodeToString(data),
-			},
-		})
-	}
-	body := map[string]any{
-		"model":      req.Model,
-		"messages":   []map[string]any{{"role": "user", "content": content}},
-		"modalities": []string{"image", "text"},
+		body["frame_images"] = []map[string]any{{
+			"type":       "image_url",
+			"image_url":  map[string]string{"url": u},
+			"frame_type": "first_frame",
+		}}
 	}
 
-	n := req.N
-	if n < 1 {
-		n = 1
+	var job struct {
+		ID         string `json:"id"`
+		PollingURL string `json:"polling_url"`
+		Status     string `json:"status"`
 	}
-	var media []provider.Media
-	// una chiamata per sample, come per gemini generateContent
-	for i := 0; i < n; i++ {
-		var resp chatResponse
-		err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/chat/completions", body, &resp)
-		// modelli image-only (es. Seedream): il matching rifiuta "text", riprova solo "image"
-		if err != nil && strings.Contains(err.Error(), "output modalities") {
-			body["modalities"] = []string{"image"}
-			resp = chatResponse{}
-			err = c.doJSON(ctx, http.MethodPost, c.baseURL+"/chat/completions", body, &resp)
+	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
+		return nil, err
+	}
+	if job.PollingURL == "" {
+		return nil, fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status)
+	}
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.ID)
+
+	deadline := time.Now().Add(15 * time.Minute)
+	for {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s: timeout dopo 15m sul job %s", c.name, job.ID)
 		}
-		if err != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+		var st struct {
+			Status       string          `json:"status"`
+			UnsignedURLs []string        `json:"unsigned_urls"`
+			Error        json.RawMessage `json:"error"`
+		}
+		if err := c.doJSON(ctx, http.MethodGet, job.PollingURL, nil, &st); err != nil {
 			return nil, err
 		}
-		got := false
-		for _, ch := range resp.Choices {
-			var text string
-			if json.Unmarshal(ch.Message.Content, &text) == nil && strings.TrimSpace(text) != "" {
-				fmt.Fprintln(os.Stderr, strings.TrimSpace(text))
+		switch st.Status {
+		case "completed":
+			fmt.Fprintln(os.Stderr)
+			if len(st.UnsignedURLs) == 0 {
+				return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 			}
-			for _, img := range ch.Message.Images {
-				m, err := mediaFromDataURL(img.ImageURL.URL)
+			var media []provider.Media
+			for _, u := range st.UnsignedURLs {
+				// le content URL stanno sullo stesso host API e richiedono l'Authorization
+				data, err := c.downloadAuth(ctx, u)
 				if err != nil {
 					return nil, err
 				}
-				media = append(media, m)
-				got = true
+				media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 			}
-		}
-		if !got {
-			return media, fmt.Errorf("%s: il modello non ha restituito immagini (sample %d)", c.name, i+1)
+			return media, nil
+		case "failed", "cancelled", "error":
+			fmt.Fprintln(os.Stderr)
+			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+		default:
+			fmt.Fprint(os.Stderr, ".")
 		}
 	}
-	return media, nil
 }
 
-type chatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content json.RawMessage `json:"content"`
-			Images  []struct {
-				ImageURL struct {
-					URL string `json:"url"`
-				} `json:"image_url"`
-			} `json:"images"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
-func mediaFromDataURL(u string) (provider.Media, error) {
-	rest, ok := strings.CutPrefix(u, "data:")
-	if !ok {
-		return provider.Media{}, fmt.Errorf("URL immagine inatteso (non data:): %.60s", u)
-	}
-	meta, b64, ok := strings.Cut(rest, ",")
-	if !ok {
-		return provider.Media{}, fmt.Errorf("data URL malformato")
-	}
-	data, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return provider.Media{}, err
-	}
-	mime := strings.TrimSuffix(meta, ";base64")
-	if mime == "" {
-		mime = http.DetectContentType(data)
-	}
-	return provider.Media{Mime: mime, Data: data}, nil
-}
+// --- helper ---
 
 func (c *Client) download(ctx context.Context, url string) ([]byte, error) {
+	return c.get(ctx, url, false)
+}
+
+// downloadAuth è per le URL sull'host API del provider: mai usarla su CDN esterne.
+func (c *Client) downloadAuth(ctx context.Context, url string) ([]byte, error) {
+	return c.get(ctx, url, true)
+}
+
+func (c *Client) get(ctx context.Context, url string, auth bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if auth {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -370,6 +408,14 @@ func (c *Client) download(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: download HTTP %d", c.name, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func dataURL(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return "data:" + mimeForFile(path) + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
 func sizeForAspect(aspect string) string {
@@ -396,10 +442,4 @@ func mimeForFile(path string) string {
 	default:
 		return "application/octet-stream"
 	}
-}
-
-// --- video ---
-
-func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) ([]provider.Media, error) {
-	return nil, fmt.Errorf("generazione video non ancora supportata per %s (in roadmap: Sora via /videos)", c.name)
 }

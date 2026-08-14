@@ -6,11 +6,24 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
-### Corretto
+## [0.3.0] - 2026-08-14
 
-- OpenRouter: fallback automatico a `modalities: ["image"]` per i modelli
-  image-only (es. `bytedance-seed/seedream-5-0-pro`), che rifiutano la
-  richiesta standard `["image", "text"]` con un 404 sulle modality.
+### Modificato
+
+- OpenRouter migrato agli endpoint media dedicati (`/images` e `/videos`) al
+  posto delle chat completions con `modalities`: sono l'unica via supportata
+  dai modelli ByteDance (Seedream/Seedance) e abilitano `--aspect`
+  (`aspect_ratio`) e `--input` (`input_references`) su tutti i motori.
+  Verificato con `bytedance-seed/seedream-5-0-lite` (con reference) e con
+  `google/gemini-2.5-flash-image`.
+
+### Aggiunto
+
+- Video via OpenRouter (`/videos`, job asincrono con polling): `--duration`,
+  `--resolution`, `--aspect`, `--image` usato come `first_frame`. Testato con
+  `bytedance/seedance-2.0-mini` (4s 720p, $0.12). Default: `google/veo-3.1`.
+  Il download del risultato passa dalle content URL dell'host API con
+  Authorization (`downloadAuth`, mai usato su CDN esterne).
 
 ## [0.2.0] - 2026-08-14
 

@@ -14,7 +14,7 @@ import (
 	"gen-image-video-cli/internal/provider/openaicompat"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 var defaultImageModels = map[string]string{
 	"gemini":     "gemini-2.5-flash-image",
@@ -24,7 +24,8 @@ var defaultImageModels = map[string]string{
 }
 
 var defaultVideoModels = map[string]string{
-	"gemini": "veo-3.0-fast-generate-001",
+	"gemini":     "veo-3.0-fast-generate-001",
+	"openrouter": "google/veo-3.1",
 }
 
 type manifest struct {
@@ -150,7 +151,7 @@ func newProvider(name string) (provider.Provider, error) {
 			openaicompat.Options{B64Param: true}), nil
 	default: // openrouter
 		return openaicompat.New("openrouter", "https://openrouter.ai/api/v1", key,
-			openaicompat.Options{Chat: true}), nil
+			openaicompat.Options{Router: true}), nil
 	}
 }
 

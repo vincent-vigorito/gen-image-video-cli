@@ -66,7 +66,7 @@ manifest JSON, l'unico output pensato per il parsing:
 | `gemini` (default) | ✅ Nano Banana, Imagen | ✅ Veo | API nativa `generativelanguage`; `--input` supportato |
 | `openai` | ✅ gpt-image-* | 🔜 Sora | `--input` via `images/edits`, `--aspect` via `size` |
 | `xai` | ✅ grok-imagine-image-* | 🔜 | niente `--input` né `--aspect` (limiti API) |
-| `openrouter` | ✅ motori Google e OpenAI | — | via chat completions; `--input` ok, `--aspect` no |
+| `openrouter` | ✅ Google, OpenAI, ByteDance | ✅ Seedance, Veo, Sora | endpoint dedicati `/images` e `/videos`; `--input` e `--aspect` ok |
 
 ## Struttura
 
