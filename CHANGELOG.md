@@ -6,6 +6,12 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+### Corretto
+
+- OpenRouter: fallback automatico a `modalities: ["image"]` per i modelli
+  image-only (es. `bytedance-seed/seedream-5-0-pro`), che rifiutano la
+  richiesta standard `["image", "text"]` con un 404 sulle modality.
+
 ## [0.2.0] - 2026-08-14
 
 ### Aggiunto

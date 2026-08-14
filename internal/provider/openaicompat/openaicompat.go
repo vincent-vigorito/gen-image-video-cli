@@ -290,19 +290,15 @@ func (c *Client) chatImages(ctx context.Context, req provider.ImageRequest) ([]p
 	var media []provider.Media
 	// una chiamata per sample, come per gemini generateContent
 	for i := 0; i < n; i++ {
-		var resp struct {
-			Choices []struct {
-				Message struct {
-					Content json.RawMessage `json:"content"`
-					Images  []struct {
-						ImageURL struct {
-							URL string `json:"url"`
-						} `json:"image_url"`
-					} `json:"images"`
-				} `json:"message"`
-			} `json:"choices"`
+		var resp chatResponse
+		err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/chat/completions", body, &resp)
+		// modelli image-only (es. Seedream): il matching rifiuta "text", riprova solo "image"
+		if err != nil && strings.Contains(err.Error(), "output modalities") {
+			body["modalities"] = []string{"image"}
+			resp = chatResponse{}
+			err = c.doJSON(ctx, http.MethodPost, c.baseURL+"/chat/completions", body, &resp)
 		}
-		if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/chat/completions", body, &resp); err != nil {
+		if err != nil {
 			return nil, err
 		}
 		got := false
@@ -325,6 +321,19 @@ func (c *Client) chatImages(ctx context.Context, req provider.ImageRequest) ([]p
 		}
 	}
 	return media, nil
+}
+
+type chatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content json.RawMessage `json:"content"`
+			Images  []struct {
+				ImageURL struct {
+					URL string `json:"url"`
+				} `json:"image_url"`
+			} `json:"images"`
+		} `json:"message"`
+	} `json:"choices"`
 }
 
 func mediaFromDataURL(u string) (provider.Media, error) {
