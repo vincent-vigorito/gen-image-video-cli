@@ -17,12 +17,14 @@ import (
 	"strings"
 	"time"
 
+	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/provider"
 )
 
 // Options distingue i dialetti dei provider OpenAI-compatible.
 type Options struct {
 	Router   bool // endpoint dedicati /images e /videos di OpenRouter
+	Sora     bool // video via API /videos di OpenAI (Sora)
 	UseSize  bool // mappa --aspect sul parametro size (OpenAI)
 	B64Param bool // invia response_format=b64_json (x.ai; gpt-image-1 lo rifiuta)
 }
@@ -44,47 +46,53 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 
 func (c *Client) Name() string { return c.name }
 
-func (c *Client) do(ctx context.Context, method, url, contentType string, body io.Reader, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("%s: HTTP %d: %s", c.name, resp.StatusCode, apiErrorMessage(data))
-	}
-	if out != nil {
-		return json.Unmarshal(data, out)
-	}
-	return nil
-}
-
-func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) error {
-	var rdr io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
+func (c *Client) do(ctx context.Context, method, url, contentType string, body []byte, out any) error {
+	return httpx.Retry(ctx, func() error {
+		var rdr io.Reader
+		if body != nil {
+			rdr = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 		if err != nil {
 			return err
 		}
-		rdr = bytes.NewReader(data)
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return &httpx.Error{Prefix: c.name, Status: resp.StatusCode, Msg: apiErrorMessage(data)}
+		}
+		if out != nil {
+			return json.Unmarshal(data, out)
+		}
+		return nil
+	})
+}
+
+func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) error {
+	var payload []byte
+	if body != nil {
+		var err error
+		payload, err = json.Marshal(body)
+		if err != nil {
+			return err
+		}
 	}
 	ct := ""
-	if body != nil {
+	if payload != nil {
 		ct = "application/json"
 	}
-	return c.do(ctx, method, url, ct, rdr, out)
+	return c.do(ctx, method, url, ct, payload, out)
 }
 
 func apiErrorMessage(data []byte) string {
@@ -159,17 +167,31 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 
 // --- immagini ---
 
-func (c *Client) GenerateImage(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
+func (c *Client) GenerateImage(ctx context.Context, req provider.ImageRequest) (*provider.Result, error) {
 	if c.opts.Router {
 		return c.routerImages(ctx, req)
 	}
-	if len(req.Inputs) > 0 {
-		return c.imagesEdits(ctx, req)
+	if req.Seed != 0 {
+		fmt.Fprintf(os.Stderr, "avviso: --seed non supportato da %s, ignorato\n", c.name)
 	}
-	return c.imagesGenerations(ctx, req)
+	var resp imagesResponse
+	var err error
+	if len(req.Inputs) > 0 {
+		resp, err = c.imagesEdits(ctx, req)
+	} else {
+		resp, err = c.imagesGenerations(ctx, req)
+	}
+	if err != nil {
+		return nil, err
+	}
+	media, err := c.mediaFromImages(ctx, resp)
+	if err != nil {
+		return nil, err
+	}
+	return &provider.Result{Media: media}, nil
 }
 
-func (c *Client) imagesGenerations(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
+func (c *Client) imagesGenerations(ctx context.Context, req provider.ImageRequest) (imagesResponse, error) {
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
 	if req.N > 1 {
 		body["n"] = req.N
@@ -185,13 +207,12 @@ func (c *Client) imagesGenerations(ctx context.Context, req provider.ImageReques
 		body["response_format"] = "b64_json"
 	}
 	var resp imagesResponse
-	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images/generations", body, &resp); err != nil {
-		return nil, err
-	}
-	return c.mediaFromImages(ctx, resp)
+	err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images/generations", body, &resp)
+	return resp, err
 }
 
-func (c *Client) imagesEdits(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
+func (c *Client) imagesEdits(ctx context.Context, req provider.ImageRequest) (imagesResponse, error) {
+	var resp imagesResponse
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	w.WriteField("model", req.Model)
@@ -203,41 +224,29 @@ func (c *Client) imagesEdits(ctx context.Context, req provider.ImageRequest) ([]
 		w.WriteField("size", sizeForAspect(req.Aspect))
 	}
 	for _, path := range req.Inputs {
-		h := textproto.MIMEHeader{}
-		h.Set("Content-Disposition",
-			fmt.Sprintf(`form-data; name="image[]"; filename="%s"`, filepath.Base(path)))
-		h.Set("Content-Type", mimeForFile(path))
-		part, err := w.CreatePart(h)
-		if err != nil {
-			return nil, err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := part.Write(data); err != nil {
-			return nil, err
+		if err := addFilePart(w, "image[]", path); err != nil {
+			return resp, err
 		}
 	}
 	if err := w.Close(); err != nil {
-		return nil, err
+		return resp, err
 	}
-	var resp imagesResponse
-	if err := c.do(ctx, http.MethodPost, c.baseURL+"/images/edits", w.FormDataContentType(), &buf, &resp); err != nil {
-		return nil, err
-	}
-	return c.mediaFromImages(ctx, resp)
+	err := c.do(ctx, http.MethodPost, c.baseURL+"/images/edits", w.FormDataContentType(), buf.Bytes(), &resp)
+	return resp, err
 }
 
 // routerImages usa l'endpoint dedicato /images di OpenRouter (unico supportato
 // dai modelli ByteDance; accetta anche quelli Google/OpenAI).
-func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
+func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*provider.Result, error) {
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
 	if req.N > 1 {
 		body["n"] = req.N
 	}
 	if req.Aspect != "" {
 		body["aspect_ratio"] = req.Aspect
+	}
+	if req.Seed != 0 {
+		body["seed"] = req.Seed
 	}
 	if len(req.Inputs) > 0 {
 		var refs []map[string]any
@@ -257,7 +266,11 @@ func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) ([
 	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images", body, &resp); err != nil {
 		return nil, err
 	}
-	return c.mediaFromImages(ctx, resp)
+	media, err := c.mediaFromImages(ctx, resp)
+	if err != nil {
+		return nil, err
+	}
+	return &provider.Result{Media: media, CostUSD: resp.Usage.Cost}, nil
 }
 
 type imagesResponse struct {
@@ -266,6 +279,9 @@ type imagesResponse struct {
 		URL       string `json:"url"`
 		MediaType string `json:"media_type"`
 	} `json:"data"`
+	Usage struct {
+		Cost float64 `json:"cost"`
+	} `json:"usage"`
 }
 
 func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]provider.Media, error) {
@@ -298,10 +314,18 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 
 // --- video ---
 
-func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) ([]provider.Media, error) {
-	if !c.opts.Router {
-		return nil, fmt.Errorf("generazione video non ancora supportata per %s (in roadmap: Sora via /videos)", c.name)
+func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+	switch {
+	case c.opts.Router:
+		return c.routerVideo(ctx, req)
+	case c.opts.Sora:
+		return c.soraVideo(ctx, req)
+	default:
+		return nil, fmt.Errorf("generazione video non supportata per %s", c.name)
 	}
+}
+
+func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
 	if req.Duration > 0 {
 		body["duration"] = req.Duration
@@ -351,6 +375,9 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 			Status       string          `json:"status"`
 			UnsignedURLs []string        `json:"unsigned_urls"`
 			Error        json.RawMessage `json:"error"`
+			Usage        struct {
+				Cost float64 `json:"cost"`
+			} `json:"usage"`
 		}
 		if err := c.doJSON(ctx, http.MethodGet, job.PollingURL, nil, &st); err != nil {
 			return nil, err
@@ -370,7 +397,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 				}
 				media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 			}
-			return media, nil
+			return &provider.Result{Media: media, CostUSD: st.Usage.Cost}, nil
 		case "failed", "cancelled", "error":
 			fmt.Fprintln(os.Stderr)
 			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
@@ -378,6 +405,96 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 			fmt.Fprint(os.Stderr, ".")
 		}
 	}
+}
+
+// soraVideo usa l'API asincrona /videos di OpenAI (sora-2, sora-2-pro).
+func (c *Client) soraVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+	size := "1280x720"
+	if req.Aspect == "9:16" || req.Aspect == "3:4" {
+		size = "720x1280"
+	}
+	if req.Resolution != "" && req.Resolution != "720p" {
+		fmt.Fprintf(os.Stderr, "avviso: sora via API lavora a 720p (size %s), --resolution %s ignorata\n", size, req.Resolution)
+	}
+	if req.Negative != "" {
+		fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da sora, ignorato\n")
+	}
+
+	var job soraJob
+	if req.Image == "" {
+		body := map[string]any{"model": req.Model, "prompt": req.Prompt, "size": size}
+		if req.Duration > 0 {
+			body["seconds"] = strconv.Itoa(req.Duration)
+		}
+		if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
+			return nil, err
+		}
+	} else {
+		// image-to-video: multipart con input_reference (deve avere esattamente la size del video)
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		w.WriteField("model", req.Model)
+		w.WriteField("prompt", req.Prompt)
+		w.WriteField("size", size)
+		if req.Duration > 0 {
+			w.WriteField("seconds", strconv.Itoa(req.Duration))
+		}
+		if err := addFilePart(w, "input_reference", req.Image); err != nil {
+			return nil, err
+		}
+		if err := w.Close(); err != nil {
+			return nil, err
+		}
+		if err := c.do(ctx, http.MethodPost, c.baseURL+"/videos", w.FormDataContentType(), buf.Bytes(), &job); err != nil {
+			return nil, err
+		}
+	}
+	if job.ID == "" {
+		return nil, fmt.Errorf("%s: nessun id video nella risposta", c.name)
+	}
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.ID)
+
+	deadline := time.Now().Add(15 * time.Minute)
+	for {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s: timeout dopo 15m sul job %s", c.name, job.ID)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+		var st soraJob
+		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/videos/"+job.ID, nil, &st); err != nil {
+			return nil, err
+		}
+		switch st.Status {
+		case "completed":
+			fmt.Fprintln(os.Stderr)
+			data, err := c.downloadAuth(ctx, c.baseURL+"/videos/"+job.ID+"/content")
+			if err != nil {
+				return nil, err
+			}
+			return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}}, nil
+		case "failed":
+			fmt.Fprintln(os.Stderr)
+			msg := "errore non specificato"
+			if st.Error != nil && st.Error.Message != "" {
+				msg = st.Error.Message
+			}
+			return nil, fmt.Errorf("%s: job failed: %s", c.name, msg)
+		default:
+			fmt.Fprint(os.Stderr, ".")
+		}
+	}
+}
+
+type soraJob struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Error  *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // --- helper ---
@@ -408,6 +525,23 @@ func (c *Client) get(ctx context.Context, url string, auth bool) ([]byte, error)
 		return nil, fmt.Errorf("%s: download HTTP %d", c.name, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func addFilePart(w *multipart.Writer, field, path string) error {
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition",
+		fmt.Sprintf(`form-data; name="%s"; filename="%s"`, field, filepath.Base(path)))
+	h.Set("Content-Type", mimeForFile(path))
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_, err = part.Write(data)
+	return err
 }
 
 func dataURL(path string) (string, error) {

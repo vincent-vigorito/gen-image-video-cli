@@ -13,6 +13,7 @@ type ImageRequest struct {
 	Model  string
 	N      int
 	Aspect string
+	Seed   int      // 0 = non impostato
 	Inputs []string // path di immagini di riferimento (editing/reference)
 }
 
@@ -31,9 +32,14 @@ type Media struct {
 	Data []byte
 }
 
+type Result struct {
+	Media   []Media
+	CostUSD float64 // 0 = costo non riportato dal provider
+}
+
 type Provider interface {
 	Name() string
 	Models(ctx context.Context) ([]ModelInfo, error)
-	GenerateImage(ctx context.Context, req ImageRequest) ([]Media, error)
-	GenerateVideo(ctx context.Context, req VideoRequest) ([]Media, error)
+	GenerateImage(ctx context.Context, req ImageRequest) (*Result, error)
+	GenerateVideo(ctx context.Context, req VideoRequest) (*Result, error)
 }

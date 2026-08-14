@@ -14,7 +14,7 @@ import (
 	"gen-image-video-cli/internal/provider/openaicompat"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 var defaultImageModels = map[string]string{
 	"gemini":     "gemini-2.5-flash-image",
@@ -25,6 +25,7 @@ var defaultImageModels = map[string]string{
 
 var defaultVideoModels = map[string]string{
 	"gemini":     "veo-3.0-fast-generate-001",
+	"openai":     "sora-2",
 	"openrouter": "google/veo-3.1",
 }
 
@@ -33,6 +34,7 @@ type manifest struct {
 	Model    string            `json:"model"`
 	Prompt   string            `json:"prompt"`
 	Files    []output.FileInfo `json:"files"`
+	CostUSD  float64           `json:"cost_usd,omitempty"`
 }
 
 func main() {
@@ -74,16 +76,18 @@ Uso:
 
 Flag comuni:
   --provider <p>     gemini (default) | openai | xai | openrouter
-  --model <nome>     modello; default per provider — gemini: gemini-2.5-flash-image,
-                     openai: gpt-image-1, xai: grok-2-image,
-                     openrouter: google/gemini-2.5-flash-image; video solo gemini (Veo)
+  --model <nome>     modello; default image — gemini: gemini-2.5-flash-image,
+                     openai: gpt-image-1, xai: grok-imagine-image-2.0,
+                     openrouter: google/gemini-2.5-flash-image
+                     default video — gemini: Veo, openai: sora-2, openrouter: google/veo-3.1
   --out <dir>        directory di output (default: out)
   --name <slug>      base dei nomi file (default: derivato dal prompt)
 
 giv image:
   -n <num>           numero di immagini (default 1)
   --aspect <ratio>   1:1, 16:9, 9:16, 4:3, 3:4
-  --input <file>     immagine di input/riferimento, ripetibile (editing — solo modelli gemini-*-image)
+  --seed <n>         seed deterministico (gemini, openrouter; altrove ignorato con avviso)
+  --input <file>     immagine di input/riferimento, ripetibile (non supportato da xai e Imagen)
 
 giv video:
   --aspect <ratio>   16:9, 9:16
@@ -145,7 +149,7 @@ func newProvider(name string) (provider.Provider, error) {
 		return gemini.New(key), nil
 	case "openai":
 		return openaicompat.New("openai", "https://api.openai.com/v1", key,
-			openaicompat.Options{UseSize: true}), nil
+			openaicompat.Options{UseSize: true, Sora: true}), nil
 	case "xai":
 		return openaicompat.New("xai", "https://api.x.ai/v1", key,
 			openaicompat.Options{B64Param: true}), nil
@@ -205,6 +209,7 @@ func cmdImage(args []string) error {
 	aspect := fs.String("aspect", "", "aspect ratio")
 	out := fs.String("out", "out", "directory di output")
 	name := fs.String("name", "", "slug per i nomi file")
+	seed := fs.Int("seed", 0, "seed deterministico (gemini, openrouter; altrove ignorato)")
 	var inputs stringList
 	fs.Var(&inputs, "input", "immagine di input (ripetibile)")
 	prompt, err := parsePrompt(fs, args)
@@ -220,8 +225,8 @@ func cmdImage(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "generazione immagine con %s/%s…\n", *prov, m)
-	media, err := c.GenerateImage(context.Background(), provider.ImageRequest{
-		Prompt: prompt, Model: m, N: *n, Aspect: *aspect, Inputs: inputs,
+	res, err := c.GenerateImage(context.Background(), provider.ImageRequest{
+		Prompt: prompt, Model: m, N: *n, Aspect: *aspect, Seed: *seed, Inputs: inputs,
 	})
 	if err != nil {
 		return err
@@ -230,11 +235,11 @@ func cmdImage(args []string) error {
 	if slug == "" {
 		slug = output.Slug(prompt)
 	}
-	files, err := output.SaveAll(*out, slug, media)
+	files, err := output.SaveAll(*out, slug, res.Media)
 	if err != nil {
 		return err
 	}
-	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files})
+	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
 }
 
 func cmdVideo(args []string) error {
@@ -261,7 +266,7 @@ func cmdVideo(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
-	media, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
+	res, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
 		Prompt: prompt, Model: m, Aspect: *aspect,
 		Resolution: *resolution, Negative: *negative, Image: *image,
 		Duration: *duration,
@@ -273,9 +278,9 @@ func cmdVideo(args []string) error {
 	if slug == "" {
 		slug = output.Slug(prompt)
 	}
-	files, err := output.SaveAll(*out, slug, media)
+	files, err := output.SaveAll(*out, slug, res.Media)
 	if err != nil {
 		return err
 	}
-	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files})
+	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
 }

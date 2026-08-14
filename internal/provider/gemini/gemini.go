@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/provider"
 )
 
@@ -31,38 +32,44 @@ func New(apiKey string) *Client {
 func (c *Client) Name() string { return "gemini" }
 
 func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) error {
-	var rdr io.Reader
+	var payload []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		payload, err = json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		rdr = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("x-goog-api-key", c.APIKey)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gemini: HTTP %d: %s", resp.StatusCode, apiErrorMessage(data))
-	}
-	if out != nil {
-		return json.Unmarshal(data, out)
-	}
-	return nil
+	return httpx.Retry(ctx, func() error {
+		var rdr io.Reader
+		if payload != nil {
+			rdr = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, rdr)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("x-goog-api-key", c.APIKey)
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return &httpx.Error{Prefix: "gemini", Status: resp.StatusCode, Msg: apiErrorMessage(data)}
+		}
+		if out != nil {
+			return json.Unmarshal(data, out)
+		}
+		return nil
+	})
 }
 
 func apiErrorMessage(data []byte) string {
@@ -140,11 +147,18 @@ func classify(name string, methods []string) string {
 
 // --- immagini ---
 
-func (c *Client) GenerateImage(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
+func (c *Client) GenerateImage(ctx context.Context, req provider.ImageRequest) (*provider.Result, error) {
+	var media []provider.Media
+	var err error
 	if strings.HasPrefix(req.Model, "imagen") {
-		return c.imagenPredict(ctx, req)
+		media, err = c.imagenPredict(ctx, req)
+	} else {
+		media, err = c.generateContentImages(ctx, req)
 	}
-	return c.generateContentImages(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &provider.Result{Media: media}, nil
 }
 
 func (c *Client) imagenPredict(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
@@ -158,6 +172,9 @@ func (c *Client) imagenPredict(ctx context.Context, req provider.ImageRequest) (
 	params := map[string]any{"sampleCount": n}
 	if req.Aspect != "" {
 		params["aspectRatio"] = req.Aspect
+	}
+	if req.Seed != 0 {
+		params["seed"] = req.Seed
 	}
 	body := map[string]any{
 		"instances":  []map[string]any{{"prompt": req.Prompt}},
@@ -216,6 +233,9 @@ func (c *Client) generateContentImages(ctx context.Context, req provider.ImageRe
 	genCfg := map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}}
 	if req.Aspect != "" {
 		genCfg["imageConfig"] = map[string]any{"aspectRatio": req.Aspect}
+	}
+	if req.Seed != 0 {
+		genCfg["seed"] = req.Seed
 	}
 	body := map[string]any{
 		"contents":         []map[string]any{{"parts": parts}},
@@ -279,7 +299,7 @@ func mimeForFile(path string) string {
 
 // --- video (Veo, job asincrono) ---
 
-func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) ([]provider.Media, error) {
+func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
 	instance := map[string]any{"prompt": req.Prompt}
 	if req.Image != "" {
 		data, err := os.ReadFile(req.Image)
@@ -361,7 +381,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 			}
 			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 		}
-		return media, nil
+		return &provider.Result{Media: media}, nil
 	}
 }
 

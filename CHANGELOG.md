@@ -6,11 +6,28 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-14
+
 ### Aggiunto
 
+- `cost_usd` nel manifest quando il provider riporta il costo della chiamata
+  (OpenRouter, immagini e video).
+- **Retry automatico sui 5xx transitori** su tutti i provider: fino a 2
+  ritentativi con backoff 2s/4s, avviso su stderr (`internal/httpx`).
+- Video **OpenAI Sora** (`/videos` asincrono con polling): default `sora-2`,
+  `--duration` 4|8|12, 720p; `--image` inviato come `input_reference` multipart
+  (deve avere esattamente la size del video). Testato end-to-end (4s, 1280×720).
+- `image --seed`: riproducibilità su gemini (`generationConfig.seed` /
+  `parameters.seed`) e openrouter (`seed`); su openai/xai viene ignorato con
+  avviso.
 - Skill agent-native `skills/gen-image-video/SKILL.md`: contratto di output,
   matrice provider verificata, ricette (reference di stile, image-to-video),
   costi indicativi e quirk noti. Installabile con un symlink in `~/.claude/skills/`.
+
+### Modificato
+
+- README riscritto in chiave **agent-native**: contratto di output in apertura,
+  matrice provider con capacità per flag, sezione "Uso da un agente".
 
 ## [0.3.0] - 2026-08-14
 
