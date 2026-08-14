@@ -6,11 +6,27 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-14
+
 ### Aggiunto
 
+- Adapter **openaicompat**: provider `openai`, `xai` e `openrouter` per le immagini.
+  OpenAI e x.ai via `images/generations` (per OpenAI anche `images/edits` multipart
+  quando si passa `--input`); OpenRouter via chat completions con `modalities`
+  (accetta `--input` come data URL). Video su questi provider: non ancora
+  supportato (in roadmap: Sora).
+- Flag `--provider` su `models`, `image` e `video` (default: `gemini`) con
+  modello di default per provider.
+- `image --aspect` mappato sul parametro `size` per OpenAI; avviso su stderr
+  dove l'aspect non è supportato (x.ai, OpenRouter).
 - `video --duration <s>`: durata del clip in secondi (Veo 3.1: 4, 6 o 8;
   0 = default del modello). Testato end-to-end con `veo-3.1-fast-generate-preview`
   in image-to-video.
+
+### Modificato
+
+- Default x.ai: `grok-imagine-image-2.0` (la famiglia `grok-2-image` non è più
+  esposta dall'API).
 
 ## [0.1.0] - 2026-08-14
 

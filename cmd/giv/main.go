@@ -11,13 +11,21 @@ import (
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
 	"gen-image-video-cli/internal/provider/gemini"
+	"gen-image-video-cli/internal/provider/openaicompat"
 )
 
-const (
-	version           = "0.1.0"
-	defaultImageModel = "gemini-2.5-flash-image"
-	defaultVideoModel = "veo-3.0-fast-generate-001"
-)
+const version = "0.2.0"
+
+var defaultImageModels = map[string]string{
+	"gemini":     "gemini-2.5-flash-image",
+	"openai":     "gpt-image-1",
+	"xai":        "grok-imagine-image-2.0",
+	"openrouter": "google/gemini-2.5-flash-image",
+}
+
+var defaultVideoModels = map[string]string{
+	"gemini": "veo-3.0-fast-generate-001",
+}
 
 type manifest struct {
 	Provider string            `json:"provider"`
@@ -64,7 +72,10 @@ Uso:
   giv version                      stampa la versione
 
 Flag comuni:
-  --model <nome>     modello (default image: `+defaultImageModel+`, video: `+defaultVideoModel+`)
+  --provider <p>     gemini (default) | openai | xai | openrouter
+  --model <nome>     modello; default per provider — gemini: gemini-2.5-flash-image,
+                     openai: gpt-image-1, xai: grok-2-image,
+                     openrouter: google/gemini-2.5-flash-image; video solo gemini (Veo)
   --out <dir>        directory di output (default: out)
   --name <slug>      base dei nomi file (default: derivato dal prompt)
 
@@ -80,7 +91,8 @@ giv video:
   --image <file>     frame iniziale (image-to-video)
   --duration <s>     durata in secondi (Veo 3.1: 4, 6, 8)
 
-Credenziali: GEMINI_API_KEY da env di processo, ./credentials.env o ./.env
+Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY
+             da env di processo, ./credentials.env o ./.env
 Output: file salvati in --out, manifest JSON su stdout (i log vanno su stderr)
 `)
 }
@@ -111,20 +123,54 @@ func parsePrompt(fs *flag.FlagSet, args []string) (string, error) {
 	return prompt, nil
 }
 
-func geminiClient() (*gemini.Client, error) {
-	key := config.Get("GEMINI_API_KEY")
-	if key == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY mancante: mettila in .env o credentials.env nella directory corrente, oppure esportala")
+var envKeys = map[string]string{
+	"gemini":     "GEMINI_API_KEY",
+	"openai":     "OPENAI_API_KEY",
+	"xai":        "XAI_API_KEY",
+	"openrouter": "OPENROUTER_API_KEY",
+}
+
+func newProvider(name string) (provider.Provider, error) {
+	envKey, ok := envKeys[name]
+	if !ok {
+		return nil, fmt.Errorf("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter)", name)
 	}
-	return gemini.New(key), nil
+	key := config.Get(envKey)
+	if key == "" {
+		return nil, fmt.Errorf("%s mancante: mettila in .env o credentials.env nella directory corrente, oppure esportala", envKey)
+	}
+	switch name {
+	case "gemini":
+		return gemini.New(key), nil
+	case "openai":
+		return openaicompat.New("openai", "https://api.openai.com/v1", key,
+			openaicompat.Options{UseSize: true}), nil
+	case "xai":
+		return openaicompat.New("xai", "https://api.x.ai/v1", key,
+			openaicompat.Options{B64Param: true}), nil
+	default: // openrouter
+		return openaicompat.New("openrouter", "https://openrouter.ai/api/v1", key,
+			openaicompat.Options{Chat: true}), nil
+	}
+}
+
+func resolveModel(flagValue, providerName string, defaults map[string]string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if m := defaults[providerName]; m != "" {
+		return m, nil
+	}
+	return "", fmt.Errorf("nessun modello di default per %s: specifica --model", providerName)
 }
 
 func cmdModels(args []string) error {
 	fs := flag.NewFlagSet("models", flag.ExitOnError)
+	prov := fs.String("provider", "gemini", "provider")
 	all := fs.Bool("all", false, "includi anche i modelli non image/video")
 	asJSON := fs.Bool("json", false, "output JSON")
 	fs.Parse(args)
-	c, err := geminiClient()
+	c, err := newProvider(*prov)
 	if err != nil {
 		return err
 	}
@@ -152,7 +198,8 @@ func cmdModels(args []string) error {
 
 func cmdImage(args []string) error {
 	fs := flag.NewFlagSet("image", flag.ExitOnError)
-	model := fs.String("model", defaultImageModel, "modello")
+	prov := fs.String("provider", "gemini", "provider")
+	model := fs.String("model", "", "modello (default: dipende dal provider)")
 	n := fs.Int("n", 1, "numero di immagini")
 	aspect := fs.String("aspect", "", "aspect ratio")
 	out := fs.String("out", "out", "directory di output")
@@ -163,13 +210,17 @@ func cmdImage(args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := geminiClient()
+	c, err := newProvider(*prov)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "generazione immagine con %s…\n", *model)
+	m, err := resolveModel(*model, *prov, defaultImageModels)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "generazione immagine con %s/%s…\n", *prov, m)
 	media, err := c.GenerateImage(context.Background(), provider.ImageRequest{
-		Prompt: prompt, Model: *model, N: *n, Aspect: *aspect, Inputs: inputs,
+		Prompt: prompt, Model: m, N: *n, Aspect: *aspect, Inputs: inputs,
 	})
 	if err != nil {
 		return err
@@ -182,12 +233,13 @@ func cmdImage(args []string) error {
 	if err != nil {
 		return err
 	}
-	return output.PrintJSON(manifest{Provider: c.Name(), Model: *model, Prompt: prompt, Files: files})
+	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files})
 }
 
 func cmdVideo(args []string) error {
 	fs := flag.NewFlagSet("video", flag.ExitOnError)
-	model := fs.String("model", defaultVideoModel, "modello")
+	prov := fs.String("provider", "gemini", "provider")
+	model := fs.String("model", "", "modello (default: dipende dal provider)")
 	aspect := fs.String("aspect", "", "aspect ratio")
 	resolution := fs.String("resolution", "", "720p o 1080p")
 	negative := fs.String("negative", "", "negative prompt")
@@ -199,13 +251,17 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := geminiClient()
+	c, err := newProvider(*prov)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "generazione video con %s…\n", *model)
+	m, err := resolveModel(*model, *prov, defaultVideoModels)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
 	media, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
-		Prompt: prompt, Model: *model, Aspect: *aspect,
+		Prompt: prompt, Model: m, Aspect: *aspect,
 		Resolution: *resolution, Negative: *negative, Image: *image,
 		Duration: *duration,
 	})
@@ -220,5 +276,5 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
-	return output.PrintJSON(manifest{Provider: c.Name(), Model: *model, Prompt: prompt, Files: files})
+	return output.PrintJSON(manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files})
 }

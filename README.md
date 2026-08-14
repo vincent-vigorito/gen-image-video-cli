@@ -30,8 +30,11 @@ Per lavorare per-progetto senza toccare la config globale: cartella
 # elenca i modelli image/video disponibili sul tuo account
 ./bin/giv models [--all] [--json]
 
-# genera immagini
+# genera immagini (provider di default: gemini)
 ./bin/giv image --model gemini-3-pro-image --aspect 16:9 -n 2 "a cat astronaut"
+
+# stesso prompt su un altro provider
+./bin/giv image --provider openai --model gpt-image-2 --aspect 16:9 "a cat astronaut"
 
 # editing / reference di stile (solo modelli gemini-*-image, --input ripetibile)
 ./bin/giv image --input ref.webp "same style, new subject"
@@ -58,10 +61,12 @@ manifest JSON, l'unico output pensato per il parsing:
 
 ## Provider
 
-| Provider | Immagini | Video | Note |
+| Provider (`--provider`) | Immagini | Video | Note |
 |---|---|---|---|
-| Gemini (Google AI Studio) | ✅ Nano Banana, Imagen | ✅ Veo | API nativa `generativelanguage` |
-| OpenAI / x.ai / OpenRouter | 🔜 | 🔜 | adapter OpenAI-compatible unico, in roadmap |
+| `gemini` (default) | ✅ Nano Banana, Imagen | ✅ Veo | API nativa `generativelanguage`; `--input` supportato |
+| `openai` | ✅ gpt-image-* | 🔜 Sora | `--input` via `images/edits`, `--aspect` via `size` |
+| `xai` | ✅ grok-imagine-image-* | 🔜 | niente `--input` né `--aspect` (limiti API) |
+| `openrouter` | ✅ motori Google e OpenAI | — | via chat completions; `--input` ok, `--aspect` no |
 
 ## Struttura
 
