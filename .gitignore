@@ -1,0 +1,12 @@
+# binari generati
+bin/*
+!bin/.gitkeep
+
+# output media generati
+out/*
+!out/.gitkeep
+
+# credenziali — MAI nel repo
+.env
+credentials.env
+projects/*/credentials.env
