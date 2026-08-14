@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	version           = "0.1.0"
 	defaultImageModel = "gemini-2.5-flash-image"
 	defaultVideoModel = "veo-3.0-fast-generate-001"
 )
@@ -38,6 +39,8 @@ func main() {
 		err = cmdImage(os.Args[2:])
 	case "video":
 		err = cmdVideo(os.Args[2:])
+	case "version", "--version", "-v":
+		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -58,6 +61,7 @@ Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (Veo, job asincrono ~1-5 min)
+  giv version                      stampa la versione
 
 Flag comuni:
   --model <nome>     modello (default image: `+defaultImageModel+`, video: `+defaultVideoModel+`)

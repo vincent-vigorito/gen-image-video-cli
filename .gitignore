@@ -9,4 +9,10 @@ out/*
 # credenziali — MAI nel repo
 .env
 credentials.env
-projects/*/credentials.env
+
+# materiali interni per-progetto (credenziali, asset, riferimenti clienti)
+projects/*
+!projects/.gitkeep
+
+# macOS
+.DS_Store
