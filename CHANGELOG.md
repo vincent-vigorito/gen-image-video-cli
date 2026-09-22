@@ -6,6 +6,25 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-22
+
+### Modificato
+
+- Default video **gemini**: `veo-3.1-fast-generate-preview` (il precedente
+  `veo-3.0-fast-generate-001` è stato ritirato e rispondeva 404).
+- Default immagine **gemini** e **openrouter**: Nano Banana 2
+  (`gemini-3.1-flash-image` / `google/gemini-3.1-flash-image`) al posto di
+  `gemini-2.5-flash-image`.
+- `models --provider openrouter` interroga `/models?output_modalities=all`:
+  senza filtro l'API elencava solo i modelli con output testuale (11 modelli
+  immagine, nessun video). Ora compaiono l'intero catalogo immagini e video
+  (ByteDance, Flux, Recraft, Kling, Wan…) col relativo pricing.
+
+### Rimosso
+
+- Supporto **Imagen** (`:predict`): i modelli `imagen-4.0-*` sono stati ritirati
+  dalla Gemini API.
+
 ## [0.5.0] - 2026-08-14
 
 ### Aggiunto

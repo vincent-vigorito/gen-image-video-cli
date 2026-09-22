@@ -57,14 +57,14 @@ gemini e openrouter, altrove ignorato con avviso), `--input <file>` ripetibile
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente.
 
-## Matrice provider (verificata 14/08/2026)
+## Matrice provider (verificata 22/09/2026)
 
 | provider | immagini | video | `--input` | `--aspect` | modelli chiave |
 |---|---|---|---|---|---|
-| `gemini` | ✅ | ✅ Veo | ✅ | ✅ | `gemini-3-pro-image` (top), `gemini-2.5-flash-image` (default), `imagen-4.0-*`; video `veo-3.1-fast-generate-preview` |
-| `openai` | ✅ | ✅ Sora | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-1` (default), `gpt-image-2` (top); video `sora-2` (720p, `--duration` 4\|8\|12) |
+| `gemini` | ✅ | ✅ Veo | ✅ | ✅ | `gemini-3-pro-image` (top), `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; video `veo-3.1-fast-generate-preview` (default), `veo-3.1-lite-generate-preview`, `veo-3.1-generate-preview` |
+| `openai` | ✅ | ✅ Sora | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-1` (default), `gpt-image-1-mini`, `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2.5-flare`/`-sunburst` (08/09, non ancora provati); video `sora-2` (720p, `--duration` 4\|8\|12), `sora-2-pro` |
 | `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `-quality`; video `grok-imagine-video-1.5` (fino a 15s, 480p default, image-to-video ok) |
-| `openrouter` | ✅ | ✅ | ✅ | ✅ | `google/gemini-3-pro-image`, `bytedance-seed/seedream-5-0-lite|pro`; video `bytedance/seedance-2.0-mini` (economico), `google/veo-3.1` (default) |
+| `openrouter` | ✅ | ✅ | ✅ | ✅ | `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `bytedance-seed/seedream-5-0-lite|pro`, Flux 2, Recraft v4…; video `bytedance/seedance-2.0-mini` (economico), `bytedance/seedance-2.5`, `google/veo-3.1` (default), `google/veo-3.1-fast`/`-lite`, Kling, Wan… |
 
 - Veo (gemini): `--duration` 4|6|8 — il default del modello è 8s e **costa il doppio** di 4.
 - Sora con `--image`: l'immagine deve avere **esattamente la size** del video
@@ -96,7 +96,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 
 ## Costi indicativi (agosto 2026)
 
-- Immagini: Nano Banana flash ~$0.04 · Nano Banana Pro ~$0.13-0.25 · gpt-image-2 ~$0.25 ·
+- Immagini: Nano Banana flash ~$0.04 · Nano Banana 2 ~$0.07 (1024², misurato su OpenRouter 22/09) ·
+  Nano Banana Pro ~$0.13-0.25 · gpt-image-2 ~$0.25 ·
   Seedream Lite pochi cent · grok ~$0.07.
 - Video: seedance-2.0-mini 4s/720p ~$0.12 · veo-3.1-fast 4s ~$0.60 · sora-2 4s ~$0.40 ·
   grok-imagine-video-1.5 economico ma 480p di default.
@@ -105,13 +106,13 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 
 ## Quirk noti
 
-- **OpenRouter, modelli ByteDance**: non compaiono in `giv models` ma esistono — usare
-  gli id noti; scheda modello via `GET /api/v1/models/<id>/endpoints`.
+- **OpenRouter**: `giv models --provider openrouter` elenca l'intero catalogo immagini
+  e video (dalla v0.6.0; prima mancavano ByteDance e tutti i video); scheda di un modello
+  via `GET /api/v1/models/<id>/endpoints`.
 - **HTTP 500 dal provider "Seed"** (ByteDance su OpenRouter): instabilità temporanea
   dell'endpoint, riprovare più tardi — non è un errore del CLI.
-- **Modelli Imagen**: non accettano `--input` (il CLI lo segnala); per editing usare
-  i modelli `gemini-*-image`.
-- I nomi modello **cambiano spesso** (es. `grok-2-image` sparito, sostituito da
-  `grok-imagine-image-*`): in caso di 404 sul modello, rifare `giv models --provider <p>`.
+- I nomi modello **cambiano spesso** (es. `grok-2-image` → `grok-imagine-image-*`;
+  a settembre 2026 ritirati `veo-3.0-*` e `imagen-4.0-*`): in caso di 404 sul modello,
+  rifare `giv models --provider <p>`.
 - La clausola "NO text, NO letters" nel prompt va **sempre** tenuta per le illustrazioni:
   tutti i modelli tendono a scrivere etichette.

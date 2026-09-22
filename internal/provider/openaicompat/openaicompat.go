@@ -127,7 +127,8 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 				} `json:"architecture"`
 			} `json:"data"`
 		}
-		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/models", nil, &resp); err != nil {
+		// senza filtro /models elenca solo i modelli con output testuale
+		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/models?output_modalities=all", nil, &resp); err != nil {
 			return nil, err
 		}
 		for _, m := range resp.Data {

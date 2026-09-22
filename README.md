@@ -83,14 +83,15 @@ i flag possono stare prima o dopo.
 
 | `--provider` | Immagini | Video | `--input` | `--aspect` | `--seed` |
 |---|---|---|---|---|---|
-| `gemini` (default) | ✅ Nano Banana, Imagen | ✅ Veo (`--duration` 4/6/8) | ✅ | ✅ | ✅ |
+| `gemini` (default) | ✅ Nano Banana (2.5, 3 Pro, 3.1 flash/lite) | ✅ Veo 3.1 (`--duration` 4/6/8) | ✅ | ✅ | ✅ |
 | `openai` | ✅ gpt-image-* | ✅ Sora (`sora-2`, 720p, `--duration` 4/8/12) | ✅ via edits | ✅ via size | ❌ |
 | `xai` | ✅ grok-imagine-image-* | ✅ grok-imagine-video (fino a 15s) | ❌ immagini / ✅ video | ❌ immagini / ✅ video | ❌ |
-| `openrouter` | ✅ Google, OpenAI, ByteDance | ✅ Seedance, Veo, Sora | ✅ | ✅ | ✅ |
+| `openrouter` | ✅ Google, OpenAI, ByteDance, Flux, Recraft… | ✅ Seedance, Veo, Sora, Kling, Wan… | ✅ | ✅ | ✅ |
 
 Note:
 - OpenRouter usa gli endpoint media dedicati (`/images`, `/videos` asincrono) — l'unica
-  via per i modelli ByteDance; riporta `cost_usd` nel manifest.
+  via per i modelli ByteDance; riporta `cost_usd` nel manifest. `giv models --provider
+  openrouter` elenca l'intero catalogo immagini e video.
 - Sora con `--image` (input_reference): l'immagine deve avere **esattamente** la size
   del video richiesto.
 - I nomi modello cambiano spesso: in caso di 404 rifare `giv models --provider <p>`.
@@ -123,7 +124,7 @@ cmd/giv/                  entrypoint e parsing comandi
 internal/config/          risoluzione credenziali (env → credentials.env → .env)
 internal/httpx/           errori HTTP tipizzati + retry sui 5xx
 internal/provider/        interfaccia Provider + tipi comuni
-internal/provider/gemini/ adapter Gemini (generateContent, predict, predictLongRunning)
+internal/provider/gemini/ adapter Gemini (generateContent, predictLongRunning)
 internal/provider/openaicompat/  adapter OpenAI-compatible (openai, xai, openrouter, Sora)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native

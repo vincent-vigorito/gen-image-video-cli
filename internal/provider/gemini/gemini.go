@@ -148,64 +148,11 @@ func classify(name string, methods []string) string {
 // --- immagini ---
 
 func (c *Client) GenerateImage(ctx context.Context, req provider.ImageRequest) (*provider.Result, error) {
-	var media []provider.Media
-	var err error
-	if strings.HasPrefix(req.Model, "imagen") {
-		media, err = c.imagenPredict(ctx, req)
-	} else {
-		media, err = c.generateContentImages(ctx, req)
-	}
+	media, err := c.generateContentImages(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return &provider.Result{Media: media}, nil
-}
-
-func (c *Client) imagenPredict(ctx context.Context, req provider.ImageRequest) ([]provider.Media, error) {
-	if len(req.Inputs) > 0 {
-		return nil, fmt.Errorf("i modelli Imagen non accettano immagini di input: usa un modello gemini-*-image")
-	}
-	n := req.N
-	if n < 1 {
-		n = 1
-	}
-	params := map[string]any{"sampleCount": n}
-	if req.Aspect != "" {
-		params["aspectRatio"] = req.Aspect
-	}
-	if req.Seed != 0 {
-		params["seed"] = req.Seed
-	}
-	body := map[string]any{
-		"instances":  []map[string]any{{"prompt": req.Prompt}},
-		"parameters": params,
-	}
-	var resp struct {
-		Predictions []struct {
-			MimeType           string `json:"mimeType"`
-			BytesBase64Encoded string `json:"bytesBase64Encoded"`
-		} `json:"predictions"`
-	}
-	url := fmt.Sprintf("%s/models/%s:predict", baseURL, req.Model)
-	if err := c.doJSON(ctx, http.MethodPost, url, body, &resp); err != nil {
-		return nil, err
-	}
-	var media []provider.Media
-	for _, p := range resp.Predictions {
-		data, err := base64.StdEncoding.DecodeString(p.BytesBase64Encoded)
-		if err != nil {
-			return nil, err
-		}
-		mime := p.MimeType
-		if mime == "" {
-			mime = "image/png"
-		}
-		media = append(media, provider.Media{Mime: mime, Data: data})
-	}
-	if len(media) == 0 {
-		return nil, fmt.Errorf("gemini: nessuna immagine nella risposta")
-	}
-	return media, nil
 }
 
 type gcPart struct {

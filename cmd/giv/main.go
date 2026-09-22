@@ -22,19 +22,19 @@ import (
 )
 
 const (
-	version = "0.5.0"
+	version = "0.6.0"
 	logFile = "giv-log.jsonl"
 )
 
 var defaultImageModels = map[string]string{
-	"gemini":     "gemini-2.5-flash-image",
+	"gemini":     "gemini-3.1-flash-image",
 	"openai":     "gpt-image-1",
 	"xai":        "grok-imagine-image-2.0",
-	"openrouter": "google/gemini-2.5-flash-image",
+	"openrouter": "google/gemini-3.1-flash-image",
 }
 
 var defaultVideoModels = map[string]string{
-	"gemini":     "veo-3.0-fast-generate-001",
+	"gemini":     "veo-3.1-fast-generate-preview",
 	"openai":     "sora-2",
 	"xai":        "grok-imagine-video-1.5",
 	"openrouter": "google/veo-3.1",
@@ -84,16 +84,17 @@ func usage() {
 Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
   giv image  [flag] "<prompt>"     genera immagini
-  giv video  [flag] "<prompt>"     genera un video (Veo, job asincrono ~1-5 min)
+  giv video  [flag] "<prompt>"     genera un video (job asincrono ~1-5 min)
   giv log    [-n N|--sum-cost]     registro locale delle generazioni (giv-log.jsonl)
   giv version                      stampa la versione
 
 Flag comuni:
   --provider <p>     gemini (default) | openai | xai | openrouter
-  --model <nome>     modello; default image — gemini: gemini-2.5-flash-image,
+  --model <nome>     modello; default image — gemini: gemini-3.1-flash-image,
                      openai: gpt-image-1, xai: grok-imagine-image-2.0,
-                     openrouter: google/gemini-2.5-flash-image
-                     default video — gemini: Veo, openai: sora-2, openrouter: google/veo-3.1
+                     openrouter: google/gemini-3.1-flash-image
+                     default video — gemini: veo-3.1-fast-generate-preview, openai: sora-2,
+                     xai: grok-imagine-video-1.5, openrouter: google/veo-3.1
   --out <dir>        directory di output (default: out)
   --name <slug>      base dei nomi file (default: derivato dal prompt)
 
@@ -101,7 +102,7 @@ giv image:
   -n <num>           numero di immagini (default 1)
   --aspect <ratio>   1:1, 16:9, 9:16, 4:3, 3:4
   --seed <n>         seed deterministico (gemini, openrouter; altrove ignorato con avviso)
-  --input <file|url> immagine di input/riferimento, ripetibile (non supportato da xai e Imagen);
+  --input <file|url> immagine di input/riferimento, ripetibile (non supportato da xai);
                      gli URL http(s) vengono scaricati automaticamente (vale anche per --image di video)
 
 giv video:
