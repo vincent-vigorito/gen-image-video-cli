@@ -24,7 +24,6 @@ import (
 // Options distingue i dialetti dei provider OpenAI-compatible.
 type Options struct {
 	Router   bool // endpoint dedicati /images e /videos di OpenRouter
-	Sora     bool // video via API /videos di OpenAI (Sora)
 	Grok     bool // video via API /videos/generations di x.ai
 	UseSize  bool // mappa --aspect sul parametro size (OpenAI)
 	B64Param bool // invia response_format=b64_json (x.ai; gpt-image-1 lo rifiuta)
@@ -321,8 +320,6 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 	switch {
 	case c.opts.Router:
 		return c.routerVideo(ctx, req)
-	case c.opts.Sora:
-		return c.soraVideo(ctx, req)
 	case c.opts.Grok:
 		return c.grokVideo(ctx, req)
 	default:
@@ -484,96 +481,6 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (*p
 			fmt.Fprint(os.Stderr, ".")
 		}
 	}
-}
-
-// soraVideo usa l'API asincrona /videos di OpenAI (sora-2, sora-2-pro).
-func (c *Client) soraVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
-	size := "1280x720"
-	if req.Aspect == "9:16" || req.Aspect == "3:4" {
-		size = "720x1280"
-	}
-	if req.Resolution != "" && req.Resolution != "720p" {
-		fmt.Fprintf(os.Stderr, "avviso: sora via API lavora a 720p (size %s), --resolution %s ignorata\n", size, req.Resolution)
-	}
-	if req.Negative != "" {
-		fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da sora, ignorato\n")
-	}
-
-	var job soraJob
-	if req.Image == "" {
-		body := map[string]any{"model": req.Model, "prompt": req.Prompt, "size": size}
-		if req.Duration > 0 {
-			body["seconds"] = strconv.Itoa(req.Duration)
-		}
-		if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
-			return nil, err
-		}
-	} else {
-		// image-to-video: multipart con input_reference (deve avere esattamente la size del video)
-		var buf bytes.Buffer
-		w := multipart.NewWriter(&buf)
-		w.WriteField("model", req.Model)
-		w.WriteField("prompt", req.Prompt)
-		w.WriteField("size", size)
-		if req.Duration > 0 {
-			w.WriteField("seconds", strconv.Itoa(req.Duration))
-		}
-		if err := addFilePart(w, "input_reference", req.Image); err != nil {
-			return nil, err
-		}
-		if err := w.Close(); err != nil {
-			return nil, err
-		}
-		if err := c.do(ctx, http.MethodPost, c.baseURL+"/videos", w.FormDataContentType(), buf.Bytes(), &job); err != nil {
-			return nil, err
-		}
-	}
-	if job.ID == "" {
-		return nil, fmt.Errorf("%s: nessun id video nella risposta", c.name)
-	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.ID)
-
-	deadline := time.Now().Add(15 * time.Minute)
-	for {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo 15m sul job %s", c.name, job.ID)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(10 * time.Second):
-		}
-		var st soraJob
-		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/videos/"+job.ID, nil, &st); err != nil {
-			return nil, err
-		}
-		switch st.Status {
-		case "completed":
-			fmt.Fprintln(os.Stderr)
-			data, err := c.downloadAuth(ctx, c.baseURL+"/videos/"+job.ID+"/content")
-			if err != nil {
-				return nil, err
-			}
-			return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}}, nil
-		case "failed":
-			fmt.Fprintln(os.Stderr)
-			msg := "errore non specificato"
-			if st.Error != nil && st.Error.Message != "" {
-				msg = st.Error.Message
-			}
-			return nil, fmt.Errorf("%s: job failed: %s", c.name, msg)
-		default:
-			fmt.Fprint(os.Stderr, ".")
-		}
-	}
-}
-
-type soraJob struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  *struct {
-		Message string `json:"message"`
-	} `json:"error"`
 }
 
 // --- helper ---
