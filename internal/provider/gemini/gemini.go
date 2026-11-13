@@ -32,6 +32,10 @@ func New(apiKey string) *Client {
 func (c *Client) Name() string { return "gemini" }
 
 func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) error {
+	return c.doJSONWith(ctx, httpx.Retry, method, url, body, out)
+}
+
+func (c *Client) doJSONWith(ctx context.Context, retry httpx.RetryFunc, method, url string, body, out any) error {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -40,7 +44,7 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) 
 			return err
 		}
 	}
-	return httpx.Retry(ctx, func() error {
+	return retry(ctx, func() error {
 		var rdr io.Reader
 		if payload != nil {
 			rdr = bytes.NewReader(payload)
@@ -63,7 +67,8 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) 
 			return err
 		}
 		if resp.StatusCode != http.StatusOK {
-			return &httpx.Error{Prefix: "gemini", Status: resp.StatusCode, Msg: apiErrorMessage(data)}
+			return &httpx.Error{Prefix: "gemini", Status: resp.StatusCode, Msg: apiErrorMessage(data),
+				RetryAfter: httpx.ParseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
 		if out != nil {
 			return json.Unmarshal(data, out)
@@ -246,7 +251,7 @@ func mimeForFile(path string) string {
 
 // --- video (Veo, job asincrono) ---
 
-func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (res *provider.Result, err error) {
 	instance := map[string]any{"prompt": req.Prompt}
 	if req.Image != "" {
 		data, err := os.ReadFile(req.Image)
@@ -280,18 +285,21 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 		Name string `json:"name"`
 	}
 	url := fmt.Sprintf("%s/models/%s:predictLongRunning", baseURL, req.Model)
-	if err := c.doJSON(ctx, http.MethodPost, url, body, &op); err != nil {
-		return nil, err
+	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
+	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, url, body, &op); err != nil {
+		return nil, httpx.Start(err)
 	}
 	if op.Name == "" {
-		return nil, fmt.Errorf("gemini: nessun operation name nella risposta")
+		return nil, httpx.Start(fmt.Errorf("gemini: nessun operation name nella risposta"))
 	}
 	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", op.Name)
+	// da qui ogni errore porta l'id del job
+	defer func() { err = httpx.Job(op.Name, err) }()
 
 	deadline := time.Now().Add(15 * time.Minute)
 	for {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("gemini: timeout dopo 15m sul job %s", op.Name)
+			return nil, fmt.Errorf("gemini: timeout dopo 15m")
 		}
 		select {
 		case <-ctx.Done():
@@ -305,7 +313,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 			} `json:"error"`
 			Response json.RawMessage `json:"response"`
 		}
-		if err := c.doJSON(ctx, http.MethodGet, baseURL+"/"+op.Name, nil, &st); err != nil {
+		if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, baseURL+"/"+op.Name, nil, &st); err != nil {
 			return nil, err
 		}
 		if !st.Done {
