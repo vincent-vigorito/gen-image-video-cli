@@ -21,6 +21,10 @@ import (
 	"gen-image-video-cli/internal/provider"
 )
 
+// pollInterval e' l'attesa fra due controlli dello stato di un job video;
+// i test del package la accorciano.
+var pollInterval = 10 * time.Second
+
 // Options distingue i dialetti dei provider OpenAI-compatible.
 type Options struct {
 	Router   bool // endpoint dedicati /images e /videos di OpenRouter
@@ -372,7 +376,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 	if job.RequestID == "" {
 		return nil, httpx.Start(fmt.Errorf("%s: nessun request_id nella risposta", c.name))
 	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.RequestID)
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", job.RequestID, pollInterval)
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(job.RequestID, err) }()
 
@@ -384,7 +388,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(10 * time.Second):
+		case <-time.After(pollInterval):
 		}
 		var st struct {
 			Status string `json:"status"`
@@ -451,7 +455,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 	if job.PollingURL == "" {
 		return nil, httpx.Start(fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status))
 	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.ID)
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", job.ID, pollInterval)
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(job.ID, err) }()
 
@@ -463,7 +467,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(10 * time.Second):
+		case <-time.After(pollInterval):
 		}
 		var st struct {
 			Status       string          `json:"status"`

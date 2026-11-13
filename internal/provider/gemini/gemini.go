@@ -20,6 +20,10 @@ import (
 
 const baseURL = "https://generativelanguage.googleapis.com/v1beta"
 
+// pollInterval e' l'attesa fra due controlli dello stato di un job video;
+// i test del package la accorciano.
+var pollInterval = 10 * time.Second
+
 type Client struct {
 	APIKey string
 	HTTP   *http.Client
@@ -292,7 +296,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 	if op.Name == "" {
 		return nil, httpx.Start(fmt.Errorf("gemini: nessun operation name nella risposta"))
 	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", op.Name)
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", op.Name, pollInterval)
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(op.Name, err) }()
 
@@ -304,7 +308,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(10 * time.Second):
+		case <-time.After(pollInterval):
 		}
 		var st struct {
 			Done  bool `json:"done"`
