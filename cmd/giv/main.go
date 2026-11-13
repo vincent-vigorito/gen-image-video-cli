@@ -26,18 +26,21 @@ const (
 	logFile = "giv-log.jsonl"
 )
 
+// providers è l'ordine dei provider nel testo di aiuto.
+var providers = []string{"gemini", "openai", "xai", "openrouter"}
+
+// Tabelle dei modelli di default: valgono per il codice e per il testo di aiuto.
 var defaultImageModels = map[string]string{
 	"gemini":     "gemini-3.1-flash-image",
-	"openai":     "gpt-image-1",
+	"openai":     "gpt-image-2.6-flare",
 	"xai":        "grok-imagine-image-2.0",
 	"openrouter": "google/gemini-3.1-flash-image",
 }
 
+// gemini non ha un default video (serve --model); openai non ha un'API video.
 var defaultVideoModels = map[string]string{
-	"gemini":     "veo-3.1-fast-generate-preview",
-	"openai":     "sora-2",
 	"xai":        "grok-imagine-video-1.5",
-	"openrouter": "google/veo-3.1",
+	"openrouter": "google/gemini-omni-1.2-flash",
 }
 
 type manifest struct {
@@ -79,7 +82,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `giv — generazione immagini e video multi-provider (gemini, openai, xai, openrouter)
+	fmt.Fprintf(os.Stderr, `giv — generazione immagini e video multi-provider (gemini, openai, xai, openrouter)
 
 Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
@@ -89,13 +92,9 @@ Uso:
   giv version                      stampa la versione
 
 Flag comuni:
-  --provider <p>     gemini (default) | openai | xai | openrouter
-  --model <nome>     modello; default image — gemini: gemini-3.1-flash-image,
-                     openai: gpt-image-1, xai: grok-imagine-image-2.0,
-                     openrouter: google/gemini-3.1-flash-image
-                     default video — gemini: veo-3.1-fast-generate-preview, openai: sora-2,
-                     xai: grok-imagine-video-1.5, openrouter: google/veo-3.1
-  --out <dir>        directory di output (default: out)
+  --provider <p>     gemini | openai | xai | openrouter (default: GIV_PROVIDER, altrimenti gemini)
+  --model <nome>     modello; senza --model il default del provider:
+%s  --out <dir>        directory di output (default: out)
   --name <slug>      base dei nomi file (default: derivato dal prompt)
 
 giv image:
@@ -110,12 +109,39 @@ giv video:
   --resolution <r>   720p, 1080p
   --negative "<t>"   negative prompt
   --image <file>     frame iniziale (image-to-video)
-  --duration <s>     durata in secondi (Veo 3.1: 4, 6, 8)
+  --duration <s>     durata in secondi (valori ammessi dal modello)
 
-Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY
-             da env di processo, ./credentials.env o ./.env
+Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY e GIV_PROVIDER
+             da env di processo, ./credentials.env, ./.env o ~/.config/giv/credentials.env
+             (in quest'ordine: vince il primo che la definisce)
 Output: file salvati in --out, manifest JSON su stdout (i log vanno su stderr)
-`)
+`, defaultsHelp())
+}
+
+// defaultsHelp genera la tabella dei modelli di default dalle mappe defaultImageModels
+// e defaultVideoModels, così l'aiuto non diverge dal codice.
+func defaultsHelp() string {
+	const indent = "                       "
+	rows := [][3]string{{"provider", "image", "video"}}
+	for _, p := range providers {
+		video := defaultVideoModels[p]
+		switch {
+		case p == "openai":
+			video = "non supportato: usa openrouter o xai"
+		case video == "":
+			video = "nessun default: --model obbligatorio"
+		}
+		rows = append(rows, [3]string{p, defaultImageModels[p], video})
+	}
+	w0, w1 := 0, 0
+	for _, r := range rows {
+		w0, w1 = max(w0, len(r[0])), max(w1, len(r[1]))
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		fmt.Fprintf(&b, "%s%-*s  %-*s  %s\n", indent, w0, r[0], w1, r[1], r[2])
+	}
+	return b.String()
 }
 
 type stringList []string
@@ -151,21 +177,38 @@ var envKeys = map[string]string{
 	"openrouter": "OPENROUTER_API_KEY",
 }
 
-func newProvider(name string) (provider.Provider, error) {
-	envKey, ok := envKeys[name]
-	if !ok {
-		return nil, fmt.Errorf("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter)", name)
+// defaultProvider è il provider usato senza --provider: GIV_PROVIDER (env o file
+// di configurazione, come le chiavi), altrimenti gemini.
+func defaultProvider() string {
+	if p := strings.TrimSpace(config.Get("GIV_PROVIDER")); p != "" {
+		return p
 	}
+	return "gemini"
+}
+
+func checkProvider(name string) error {
+	if _, ok := envKeys[name]; !ok {
+		return fmt.Errorf("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter)", name)
+	}
+	return nil
+}
+
+func newProvider(name string) (provider.Provider, error) {
+	if err := checkProvider(name); err != nil {
+		return nil, err
+	}
+	envKey := envKeys[name]
 	key := config.Get(envKey)
 	if key == "" {
-		return nil, fmt.Errorf("%s mancante: mettila in .env o credentials.env nella directory corrente, oppure esportala", envKey)
+		return nil, fmt.Errorf("%s mancante: mettila in .env o credentials.env nella directory corrente "+
+			"o in ~/.config/giv/credentials.env, oppure esportala", envKey)
 	}
 	switch name {
 	case "gemini":
 		return gemini.New(key), nil
 	case "openai":
 		return openaicompat.New("openai", "https://api.openai.com/v1", key,
-			openaicompat.Options{UseSize: true, Sora: true}), nil
+			openaicompat.Options{UseSize: true}), nil
 	case "xai":
 		return openaicompat.New("xai", "https://api.x.ai/v1", key,
 			openaicompat.Options{B64Param: true, Grok: true}), nil
@@ -185,9 +228,23 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 	return "", fmt.Errorf("nessun modello di default per %s: specifica --model", providerName)
 }
 
+// resolveVideoModel è resolveModel per i video, con i casi senza default spiegati:
+// openai non ha un'API video, gemini non ha un modello video di default.
+func resolveVideoModel(flagValue, providerName string) (string, error) {
+	switch {
+	case providerName == "openai":
+		return "", fmt.Errorf("openai non ha un'API video: usa --provider openrouter (default %s) o --provider xai (default %s)",
+			defaultVideoModels["openrouter"], defaultVideoModels["xai"])
+	case providerName == "gemini" && flagValue == "":
+		return "", fmt.Errorf("nessun modello video di default per gemini: usa --provider openrouter --model %s, "+
+			"oppure indica un modello gemini con --model", defaultVideoModels["openrouter"])
+	}
+	return resolveModel(flagValue, providerName, defaultVideoModels)
+}
+
 func cmdModels(args []string) error {
 	fs := flag.NewFlagSet("models", flag.ExitOnError)
-	prov := fs.String("provider", "gemini", "provider")
+	prov := fs.String("provider", defaultProvider(), "provider")
 	all := fs.Bool("all", false, "includi anche i modelli non image/video")
 	asJSON := fs.Bool("json", false, "output JSON")
 	fs.Parse(args)
@@ -219,7 +276,7 @@ func cmdModels(args []string) error {
 
 func cmdImage(args []string) error {
 	fs := flag.NewFlagSet("image", flag.ExitOnError)
-	prov := fs.String("provider", "gemini", "provider")
+	prov := fs.String("provider", defaultProvider(), "provider")
 	model := fs.String("model", "", "modello (default: dipende dal provider)")
 	n := fs.Int("n", 1, "numero di immagini")
 	aspect := fs.String("aspect", "", "aspect ratio")
@@ -266,24 +323,29 @@ func cmdImage(args []string) error {
 
 func cmdVideo(args []string) error {
 	fs := flag.NewFlagSet("video", flag.ExitOnError)
-	prov := fs.String("provider", "gemini", "provider")
+	prov := fs.String("provider", defaultProvider(), "provider")
 	model := fs.String("model", "", "modello (default: dipende dal provider)")
 	aspect := fs.String("aspect", "", "aspect ratio")
 	resolution := fs.String("resolution", "", "720p o 1080p")
 	negative := fs.String("negative", "", "negative prompt")
 	image := fs.String("image", "", "frame iniziale (image-to-video)")
-	duration := fs.Int("duration", 0, "durata in secondi (Veo 3.1: 4, 6 o 8; 0 = default modello)")
+	duration := fs.Int("duration", 0, "durata in secondi (0 = default modello)")
 	out := fs.String("out", "out", "directory di output")
 	name := fs.String("name", "", "slug per i nomi file")
 	prompt, err := parsePrompt(fs, args)
 	if err != nil {
 		return err
 	}
-	c, err := newProvider(*prov)
+	// provider e modello prima delle credenziali: gli errori video (openai, gemini
+	// senza --model) escono senza chiave e senza chiamate di rete
+	if err := checkProvider(*prov); err != nil {
+		return err
+	}
+	m, err := resolveVideoModel(*model, *prov)
 	if err != nil {
 		return err
 	}
-	m, err := resolveModel(*model, *prov, defaultVideoModels)
+	c, err := newProvider(*prov)
 	if err != nil {
 		return err
 	}
