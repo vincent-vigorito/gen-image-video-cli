@@ -90,7 +90,6 @@ func runGiv(t *testing.T, env []string, args ...string) (stdout, stderr string, 
 	return so.String(), se.String(), code, atomic.LoadInt32(h)
 }
 
-
 func TestHelpDefaults(t *testing.T) {
 	_, help, code, _ := runGiv(t, nil, "--help")
 	if code != 0 {
