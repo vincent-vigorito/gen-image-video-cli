@@ -47,7 +47,11 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 func (c *Client) Name() string { return c.name }
 
 func (c *Client) do(ctx context.Context, method, url, contentType string, body []byte, out any) error {
-	return httpx.Retry(ctx, func() error {
+	return c.doWith(ctx, httpx.Retry, method, url, contentType, body, out)
+}
+
+func (c *Client) doWith(ctx context.Context, retry httpx.RetryFunc, method, url, contentType string, body []byte, out any) error {
+	return retry(ctx, func() error {
 		var rdr io.Reader
 		if body != nil {
 			rdr = bytes.NewReader(body)
@@ -70,7 +74,8 @@ func (c *Client) do(ctx context.Context, method, url, contentType string, body [
 			return err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return &httpx.Error{Prefix: c.name, Status: resp.StatusCode, Msg: apiErrorMessage(data)}
+			return &httpx.Error{Prefix: c.name, Status: resp.StatusCode, Msg: apiErrorMessage(data),
+				RetryAfter: httpx.ParseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
 		if out != nil {
 			return json.Unmarshal(data, out)
@@ -80,6 +85,10 @@ func (c *Client) do(ctx context.Context, method, url, contentType string, body [
 }
 
 func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) error {
+	return c.doJSONWith(ctx, httpx.Retry, method, url, body, out)
+}
+
+func (c *Client) doJSONWith(ctx context.Context, retry httpx.RetryFunc, method, url string, body, out any) error {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -92,7 +101,7 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) 
 	if payload != nil {
 		ct = "application/json"
 	}
-	return c.do(ctx, method, url, ct, payload, out)
+	return c.doWith(ctx, retry, method, url, ct, payload, out)
 }
 
 func apiErrorMessage(data []byte) string {
@@ -241,9 +250,6 @@ func (c *Client) imagesEdits(ctx context.Context, req provider.ImageRequest) (im
 // dai modelli ByteDance; accetta anche quelli Google/OpenAI).
 func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*provider.Result, error) {
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
-	if req.N > 1 {
-		body["n"] = req.N
-	}
 	if req.Aspect != "" {
 		body["aspect_ratio"] = req.Aspect
 	}
@@ -264,15 +270,21 @@ func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*
 		}
 		body["input_references"] = refs
 	}
-	var resp imagesResponse
-	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images", body, &resp); err != nil {
-		return nil, err
+	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati
+	res := &provider.Result{}
+	for i := 0; i < max(req.N, 1); i++ {
+		var resp imagesResponse
+		if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images", body, &resp); err != nil {
+			return nil, err
+		}
+		media, err := c.mediaFromImages(ctx, resp)
+		if err != nil {
+			return nil, err
+		}
+		res.Media = append(res.Media, media...)
+		res.CostUSD += resp.Usage.Cost
 	}
-	media, err := c.mediaFromImages(ctx, resp)
-	if err != nil {
-		return nil, err
-	}
-	return &provider.Result{Media: media, CostUSD: resp.Usage.Cost}, nil
+	return res, nil
 }
 
 type imagesResponse struct {
@@ -328,7 +340,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (
 }
 
 // grokVideo usa l'API asincrona /videos/generations di x.ai (grok-imagine-video).
-func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res *provider.Result, err error) {
 	if req.Negative != "" {
 		fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da %s, ignorato\n", c.name)
 	}
@@ -353,18 +365,21 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (*pro
 	var job struct {
 		RequestID string `json:"request_id"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/videos/generations", body, &job); err != nil {
-		return nil, err
+	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
+	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos/generations", body, &job); err != nil {
+		return nil, httpx.Start(err)
 	}
 	if job.RequestID == "" {
-		return nil, fmt.Errorf("%s: nessun request_id nella risposta", c.name)
+		return nil, httpx.Start(fmt.Errorf("%s: nessun request_id nella risposta", c.name))
 	}
 	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.RequestID)
+	// da qui ogni errore porta l'id del job
+	defer func() { err = httpx.Job(job.RequestID, err) }()
 
 	deadline := time.Now().Add(15 * time.Minute)
 	for {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo 15m sul job %s", c.name, job.RequestID)
+			return nil, fmt.Errorf("%s: timeout dopo 15m", c.name)
 		}
 		select {
 		case <-ctx.Done():
@@ -378,7 +393,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (*pro
 			} `json:"video"`
 			Error json.RawMessage `json:"error"`
 		}
-		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/videos/"+job.RequestID, nil, &st); err != nil {
+		if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, c.baseURL+"/videos/"+job.RequestID, nil, &st); err != nil {
 			return nil, err
 		}
 		switch st.Status {
@@ -401,7 +416,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (*pro
 	}
 }
 
-func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (res *provider.Result, err error) {
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
 	if req.Duration > 0 {
 		body["duration"] = req.Duration
@@ -429,18 +444,21 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (*p
 		PollingURL string `json:"polling_url"`
 		Status     string `json:"status"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
-		return nil, err
+	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
+	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
+		return nil, httpx.Start(err)
 	}
 	if job.PollingURL == "" {
-		return nil, fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status)
+		return nil, httpx.Start(fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status))
 	}
 	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni 10s)\n", job.ID)
+	// da qui ogni errore porta l'id del job
+	defer func() { err = httpx.Job(job.ID, err) }()
 
 	deadline := time.Now().Add(15 * time.Minute)
 	for {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo 15m sul job %s", c.name, job.ID)
+			return nil, fmt.Errorf("%s: timeout dopo 15m", c.name)
 		}
 		select {
 		case <-ctx.Done():
@@ -455,7 +473,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (*p
 				Cost float64 `json:"cost"`
 			} `json:"usage"`
 		}
-		if err := c.doJSON(ctx, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+		if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
 			return nil, err
 		}
 		switch st.Status {

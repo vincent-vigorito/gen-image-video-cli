@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"gen-image-video-cli/internal/config"
+	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
 	"gen-image-video-cli/internal/provider/gemini"
@@ -25,6 +27,67 @@ const (
 	version = "0.6.0"
 	logFile = "giv-log.jsonl"
 )
+
+// Codici di uscita, come negli altri CLI del progetto (1 = errore generico).
+const (
+	exitError    = 1
+	exitUsage    = 2  // uso sbagliato: flag, prompt, provider o modello
+	exitNotFound = 3  // modello non trovato (HTTP 404)
+	exitAuth     = 4  // autenticazione o credito (HTTP 401/402/403)
+	exitAPI      = 5  // errore dell'API o di rete
+	exitRate     = 7  // troppe richieste (HTTP 429)
+	exitNoKey    = 10 // chiave API mancante
+)
+
+// cliError è un errore deciso dal CLI con il suo codice di uscita.
+type cliError struct {
+	code int
+	msg  string
+}
+
+func (e *cliError) Error() string { return e.msg }
+
+func usageError(format string, a ...any) error {
+	return &cliError{code: exitUsage, msg: fmt.Sprintf(format, a...)}
+}
+
+// exitCode sceglie codice di uscita e suggerimento per l'errore.
+func exitCode(err error) (int, string) {
+	var ce *cliError
+	if errors.As(err, &ce) {
+		return ce.code, ""
+	}
+	var se *httpx.StartError
+	if errors.As(err, &se) {
+		return exitAPI, "controlla sul provider se il job è partito prima di rilanciare: un secondo invio può far pagare due video"
+	}
+	var je *httpx.JobError
+	job := errors.As(err, &je)
+	jobHint := ""
+	if job {
+		jobHint = fmt.Sprintf("il job %s è già partito e può essere addebitato: cercalo sul provider prima di rilanciare", je.ID)
+	}
+	var he *httpx.Error
+	if errors.As(err, &he) {
+		switch he.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return exitAuth, fmt.Sprintf("chiave rifiutata da %s: controlla %s", he.Prefix, envKeys[he.Prefix])
+		case http.StatusPaymentRequired:
+			return exitAuth, fmt.Sprintf("credito esaurito su %s: ricaricalo o usa un altro provider (--provider o GIV_PROVIDER)", he.Prefix)
+		case http.StatusTooManyRequests:
+			return exitRate, "troppe richieste: riprova tra qualche minuto"
+		case http.StatusNotFound:
+			if !job {
+				return exitNotFound, fmt.Sprintf("modello non trovato: elenca quelli disponibili con giv models --provider %s", he.Prefix)
+			}
+		}
+		return exitAPI, jobHint
+	}
+	if job || httpx.IsNetwork(err) {
+		return exitAPI, jobHint
+	}
+	return exitError, ""
+}
 
 // providers è l'ordine dei provider nel testo di aiuto.
 var providers = []string{"gemini", "openai", "xai", "openrouter"}
@@ -54,7 +117,7 @@ type manifest struct {
 func main() {
 	if len(os.Args) < 2 {
 		usage()
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	var err error
 	switch os.Args[1] {
@@ -73,11 +136,15 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "comando sconosciuto: %s\n\n", os.Args[1])
 		usage()
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	if err != nil {
+		code, hint := exitCode(err)
 		fmt.Fprintln(os.Stderr, "errore:", err)
-		os.Exit(1)
+		if hint != "" {
+			fmt.Fprintln(os.Stderr, "suggerimento:", hint)
+		}
+		os.Exit(code)
 	}
 }
 
@@ -152,19 +219,19 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 // parsePrompt accetta i flag sia prima che dopo il prompt (quotato).
 func parsePrompt(fs *flag.FlagSet, args []string) (string, error) {
 	if err := fs.Parse(args); err != nil {
-		return "", err
+		return "", usageError("%v", err)
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return "", fmt.Errorf("manca il prompt")
+		return "", usageError("manca il prompt")
 	}
 	prompt := rest[0]
 	if len(rest) > 1 {
 		if err := fs.Parse(rest[1:]); err != nil {
-			return "", err
+			return "", usageError("%v", err)
 		}
 		if len(fs.Args()) > 0 {
-			return "", fmt.Errorf("passa il prompt come singolo argomento tra virgolette")
+			return "", usageError("passa il prompt come singolo argomento tra virgolette")
 		}
 	}
 	return prompt, nil
@@ -188,7 +255,7 @@ func defaultProvider() string {
 
 func checkProvider(name string) error {
 	if _, ok := envKeys[name]; !ok {
-		return fmt.Errorf("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter)", name)
+		return usageError("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter)", name)
 	}
 	return nil
 }
@@ -200,8 +267,8 @@ func newProvider(name string) (provider.Provider, error) {
 	envKey := envKeys[name]
 	key := config.Get(envKey)
 	if key == "" {
-		return nil, fmt.Errorf("%s mancante: mettila in .env o credentials.env nella directory corrente "+
-			"o in ~/.config/giv/credentials.env, oppure esportala", envKey)
+		return nil, &cliError{code: exitNoKey, msg: envKey + " mancante: mettila in .env o credentials.env nella directory " +
+			"corrente o in ~/.config/giv/credentials.env, oppure esportala"}
 	}
 	switch name {
 	case "gemini":
@@ -225,7 +292,7 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 	if m := defaults[providerName]; m != "" {
 		return m, nil
 	}
-	return "", fmt.Errorf("nessun modello di default per %s: specifica --model", providerName)
+	return "", usageError("nessun modello di default per %s: specifica --model", providerName)
 }
 
 // resolveVideoModel è resolveModel per i video, con i casi senza default spiegati:
@@ -233,10 +300,10 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 func resolveVideoModel(flagValue, providerName string) (string, error) {
 	switch {
 	case providerName == "openai":
-		return "", fmt.Errorf("openai non ha un'API video: usa --provider openrouter (default %s) o --provider xai (default %s)",
+		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s) o --provider xai (default %s)",
 			defaultVideoModels["openrouter"], defaultVideoModels["xai"])
 	case providerName == "gemini" && flagValue == "":
-		return "", fmt.Errorf("nessun modello video di default per gemini: usa --provider openrouter --model %s, "+
+		return "", usageError("nessun modello video di default per gemini: usa --provider openrouter --model %s, "+
 			"oppure indica un modello gemini con --model", defaultVideoModels["openrouter"])
 	}
 	return resolveModel(flagValue, providerName, defaultVideoModels)
