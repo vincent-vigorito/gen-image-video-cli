@@ -6,6 +6,46 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-13
+
+### Aggiunto
+
+- **Codici di uscita parlanti** (come gli altri CLI del progetto): 2 uso errato,
+  3 modello non trovato (404), 4 autenticazione o credito (401/402/403), 5 errore
+  dell'API o di rete, 7 troppe richieste (429), 10 chiave API mancante; 1 resta
+  l'errore generico. Su stderr un `suggerimento:` indica cosa fare (es. `giv models
+  --provider <p>` su un 404, cambiare provider su un 402).
+- `GIV_PROVIDER`: provider usato senza `--provider` (env o file di configurazione);
+  senza, resta `gemini`.
+- Le credenziali (e `GIV_PROVIDER`) si leggono anche da
+  `~/.config/giv/credentials.env`, ultimo fallback dopo env di processo,
+  `./credentials.env` e `./.env`: `giv` funziona da qualsiasi directory.
+- `image -n` maggiore di 1 su **OpenRouter**: una richiesta per immagine (l'endpoint
+  `/images` accetta `n=1`), costi sommati in `cost_usd`. Prima rispondeva
+  «n must be exactly 1».
+- Il testo di aiuto (`giv --help`) genera la tabella dei modelli di default dalle stesse
+  mappe usate dal codice: non può più divergere.
+
+### Modificato
+
+- Default immagine **openai**: `gpt-image-2.6-flare` (`gpt-image-1` non è più disponibile).
+- Default video **openrouter**: `google/gemini-omni-1.2-flash` (al posto di
+  `google/veo-3.1`).
+- Video **gemini**: nessun default (`veo-3.1-fast-generate-preview` non è più
+  disponibile). Senza `--model` esce con codice 2 e indica
+  `--provider openrouter --model google/gemini-omni-1.2-flash`.
+- L'**attesa dei video** (polling del job) ritenta 5xx, 429 ed errori di rete, fino a
+  5 volte con backoff o `Retry-After`: un disturbo passeggero non butta più un video
+  già avviato. L'id del job è sempre nel messaggio d'errore, per ritrovarlo sul provider.
+- La richiesta che **avvia** un job video non viene più ripetuta dopo un 5xx o un
+  timeout: il job potrebbe essere partito e un secondo invio farebbe pagare due video.
+  Esce con codice 5 e un suggerimento.
+
+### Rimosso
+
+- Video **OpenAI Sora**: nessuna API video OpenAI utilizzabile. `giv video --provider
+  openai` esce subito con codice 2 e indica `openrouter` o `xai`.
+
 ## [0.6.0] - 2026-09-22
 
 ### Modificato

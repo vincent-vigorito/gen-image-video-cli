@@ -7,12 +7,14 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 
 ## Setup
 
-- Repo: `~/Documents/Prototipi/cli-swerpify/gen-image-video-cli` — binario `bin/giv`
-  (se manca: `make build`, richiede Go 1.26+).
-- **Eseguire dalla directory del repo** (o da una cartella progetto): le chiavi si
-  risolvono in ordine env di processo → `./credentials.env` → `./.env`.
+- Repo: clone di `gen-image-video-cli` — binario `bin/giv`
+  (se manca: `make build` dalla radice del repo, richiede Go 1.26+).
+- Chiavi e `GIV_PROVIDER` si risolvono in ordine: env di processo → `./credentials.env` →
+  `./.env` → `~/.config/giv/credentials.env` (vince il primo che le definisce). L'ultimo
+  file rende `giv` usabile da qualsiasi directory, senza spostarsi nel repo.
 - Chiavi: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`
-  (bastano quelle dei provider che si usano).
+  (bastano quelle dei provider che si usano). `GIV_PROVIDER` cambia il provider usato
+  senza `--provider` (default `gemini`).
 - Multi-progetto: `projects/<nome>/` con un proprio `credentials.env`, poi
   `cd projects/<nome> && ../../bin/giv …` (la cartella è gitignorata: può tenere
   anche reference e output del cliente).
@@ -22,7 +24,12 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 - **stdout: solo il manifest JSON** `{provider, model, prompt, files:[{path, mime, bytes}], cost_usd?}`.
   Log, avvisi e puntini di polling vanno su stderr. `cost_usd` c'è quando il provider
   riporta il costo (OpenRouter): usarlo per tracciare il budget.
-- Exit code: 0 ok, 1 errore runtime (il messaggio d'errore API è in chiaro su stderr), 2 uso errato.
+- Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
+  0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
+  openai e video gemini senza `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
+  4 chiave rifiutata o credito esaurito (401/402/403: cambiare provider o ricaricare) ·
+  5 errore dell'API o di rete · 7 troppe richieste (429: aspettare) · 10 chiave API mancante.
+  Decidere dal codice: 3 → altro modello, 4 → altro provider, 7 → attendere e riprovare.
 - File salvati come `<out>/<slug>-<timestamp>[-n].<ext>` — `--name` per slug stabile,
   `--out` per la directory (default `out/`).
 - Il mime nel manifest è quello **reale** restituito dal provider (Nano Banana → jpeg,
@@ -44,31 +51,41 @@ curl preventivo). `giv log --sum-cost` dà il totale speso registrato nella dire
 usalo per riferire i costi a fine lavoro. Su openrouter `models --json` include il
 `pricing` per modello: consultalo per scegliere il motore economico.
 
-Flag comuni: `--provider` (gemini|openai|xai|openrouter, default gemini), `--model`
-(default sensato per provider), `--out`, `--name`. Il prompt va passato come **singolo
-argomento quotato**; i flag possono stare prima o dopo.
+Flag comuni: `--provider` (gemini|openai|xai|openrouter, default `GIV_PROVIDER` se
+impostato, altrimenti gemini), `--model` (default per provider: tabella sotto, anche in
+`giv --help`), `--out`, `--name`. Il prompt va passato come **singolo argomento
+quotato**; i flag possono stare prima o dopo.
 
-`image`: `-n <num>`, `--aspect <1:1|16:9|9:16|4:3|3:4>`, `--seed <n>` (riproducibilità:
+`image`: `-n <num>` (su openrouter una richiesta per immagine, costi sommati in
+`cost_usd`; se una fallisce le già generate non vengono salvate), `--aspect <1:1|16:9|9:16|4:3|3:4>`, `--seed <n>` (riproducibilità:
 gemini e openrouter, altrove ignorato con avviso), `--input <file>` ripetibile
 (reference di stile / editing).
 `video`: `--aspect`, `--resolution <720p|1080p>`, `--duration <s>`, `--negative`,
 `--image <file>` (frame iniziale, image-to-video).
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
-non serve gestire i retry lato agente.
+non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
+errori di rete (fino a 5 volte, rispettando `Retry-After`). La richiesta che **avvia** il
+video invece non viene mai ripetuta dopo un 5xx o un timeout: il job potrebbe essere già
+partito e un secondo invio costerebbe due video. Se esce con codice 5, **non rilanciare
+subito**: cercare il job sul provider (l'id è nel messaggio d'errore quando il job è
+partito) e solo dopo decidere se riprovare.
 
-## Matrice provider (verificata 22/09/2026)
+## Matrice provider (default dal codice, modelli da `giv models` del 13/11/2026)
 
 | provider | immagini | video | `--input` | `--aspect` | modelli chiave |
 |---|---|---|---|---|---|
-| `gemini` | ✅ | ✅ Veo | ✅ | ✅ | `gemini-3-pro-image` (top), `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; video `veo-3.1-fast-generate-preview` (default), `veo-3.1-lite-generate-preview`, `veo-3.1-generate-preview` |
-| `openai` | ✅ | ✅ Sora | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-1` (default), `gpt-image-1-mini`, `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2.5-flare`/`-sunburst` (08/09, non ancora provati); video `sora-2` (720p, `--duration` 4\|8\|12), `sora-2-pro` |
-| `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `-quality`; video `grok-imagine-video-1.5` (fino a 15s, 480p default, image-to-video ok) |
-| `openrouter` | ✅ | ✅ | ✅ | ✅ | `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `bytedance-seed/seedream-5-0-lite|pro`, Flux 2, Recraft v4…; video `bytedance/seedance-2.0-mini` (economico), `bytedance/seedance-2.5`, `google/veo-3.1` (default), `google/veo-3.1-fast`/`-lite`, Kling, Wan… |
+| `gemini` | ✅ | ⚠️ nessun default | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; video: `giv models --provider gemini` non ne elenca, usare openrouter |
+| `openai` | ✅ | ❌ | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-2.6-flare` (default), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare`/`-sunburst`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1-mini`; nessuna API video |
+| `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `grok-imagine-image`; video `grok-imagine-video-1.5` (default, fino a 15s, 480p default, image-to-video ok), `grok-imagine-video-1.5-lite` |
+| `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, Kling, Wan… |
 
-- Veo (gemini): `--duration` 4|6|8 — il default del modello è 8s e **costa il doppio** di 4.
-- Sora con `--image`: l'immagine deve avere **esattamente la size** del video
-  (es. 1280x720), altrimenti l'API rifiuta.
+- **Video gemini**: senza `--model` esce con codice 2 e indica la chiamata da usare:
+  `--provider openrouter --model google/gemini-omni-1.2-flash`. Il percorso Veo
+  (`--duration` 4|6|8) resta nel codice per un `--model` esplicito, ma non è verificato
+  dopo il ritiro dei modelli.
+- **Video openai**: non supportato (Sora rimosso nella 0.7.0): `giv video --provider openai`
+  esce subito con codice 2, senza chiamate di rete. Usare `--provider openrouter` o `xai`.
 - Per confronti multi-provider: stesso prompt, `--name` diverso per provider.
 
 ## Ricette
@@ -94,15 +111,17 @@ in `dati-siti/STILE-ILLUSTRAZIONI-ALEGRIA.md` del workspace):
 per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)
 e controllare: stile coerente, palette giusta, **nessun testo/lettera** indesiderato.
 
-## Costi indicativi (agosto 2026)
+## Costi
 
-- Immagini: Nano Banana flash ~$0.04 · Nano Banana 2 ~$0.07 (1024², misurato su OpenRouter 22/09) ·
-  Nano Banana Pro ~$0.13-0.25 · gpt-image-2 ~$0.25 ·
-  Seedream Lite pochi cent · grok ~$0.07.
-- Video: seedance-2.0-mini 4s/720p ~$0.12 · veo-3.1-fast 4s ~$0.60 · sora-2 4s ~$0.40 ·
-  grok-imagine-video-1.5 economico ma 480p di default.
+- Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); il totale
+  registrato è `giv log --sum-cost`: usarli per il budget.
+- Il listino è `giv models --provider openrouter --json`, campo `pricing` (dollari per
+  token o per unità, come lo riporta il provider). Per molti modelli video riporta 0 (es.
+  `bytedance/seedance-2.0-mini`, `google/veo-3.1`, `x-ai/grok-imagine-video-1.5`): non
+  vuol dire gratis, il costo vero è solo nel `cost_usd` dopo la chiamata. Per gemini,
+  openai e xai diretti `models` non riporta prezzi.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
-  solo per l'output finale.
+  solo per l'output finale. `-n N` su openrouter costa N richieste.
 
 ## Quirk noti
 
@@ -112,7 +131,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 - **HTTP 500 dal provider "Seed"** (ByteDance su OpenRouter): instabilità temporanea
   dell'endpoint, riprovare più tardi — non è un errore del CLI.
 - I nomi modello **cambiano spesso** (es. `grok-2-image` → `grok-imagine-image-*`;
-  a settembre 2026 ritirati `veo-3.0-*` e `imagen-4.0-*`): in caso di 404 sul modello,
-  rifare `giv models --provider <p>`.
+  ritirati `veo-3.0-*` e `imagen-4.0-*`; al 13/11/2026 non sono più elencati `gpt-image-1`
+  su openai né modelli video su gemini): in caso di 404 sul modello (codice 3), rifare
+  `giv models --provider <p>`.
 - La clausola "NO text, NO letters" nel prompt va **sempre** tenuta per le illustrazioni:
   tutti i modelli tendono a scrivere etichette.
