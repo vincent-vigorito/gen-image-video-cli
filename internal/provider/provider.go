@@ -1,6 +1,9 @@
 package provider
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type ModelInfo struct {
 	Name        string         `json:"name"`
@@ -26,6 +29,14 @@ type VideoRequest struct {
 	Negative   string
 	Image      string // frame iniziale opzionale
 	Duration   int    // secondi, 0 = default del modello
+
+	// campi opzionali: a zero la richiesta resta quella di prima
+	LastFrame string         // ultimo fotogramma (path locale)
+	Refs      []string       // immagini di riferimento (path locali)
+	Audio     *bool          // audio nativo, nil = default del modello
+	Seed      int            // 0 = non impostato
+	Params    map[string]any // parametri passanti del modello
+	Timeout   time.Duration  // tetto di attesa del job, 0 = 15 minuti
 }
 
 type Media struct {
