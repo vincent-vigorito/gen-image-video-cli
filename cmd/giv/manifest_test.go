@@ -136,3 +136,18 @@ func TestManifestDiOggiSenzaCampiNuovi(t *testing.T) {
 		t.Errorf("manifest immagine: %v", m)
 	}
 }
+
+// Un job riuscito mette il job_id nel manifest; senza job_id il campo manca.
+func TestManifestJobIDSuJobRiuscito(t *testing.T) {
+	req := provider.VideoRequest{Model: "m", Prompt: "p"}
+	man := videoManifest("xai", "p", presets.Result{}, nil, nil, req)
+	man.done(nil, &provider.Result{JobID: "req-7"})
+	if m := keysOf(t, man); m["job_id"] != "req-7" {
+		t.Errorf("job_id atteso: %v", m)
+	}
+	man = videoManifest("xai", "p", presets.Result{}, nil, nil, req)
+	man.done(nil, &provider.Result{})
+	if _, ok := keysOf(t, man)["job_id"]; ok {
+		t.Error("job_id vuoto non va emesso")
+	}
+}
