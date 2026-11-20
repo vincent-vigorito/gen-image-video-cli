@@ -132,6 +132,8 @@ func main() {
 		err = cmdVideo(os.Args[2:])
 	case "log":
 		err = cmdLog(os.Args[2:])
+	case "presets":
+		err = cmdPresets(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -160,6 +162,9 @@ Uso:
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (job asincrono ~1-5 min)
   giv log    [-n N|--sum-cost]     registro locale delle generazioni (giv-log.jsonl)
+  giv presets [--json]             elenca i preset di camera ed effetti
+  giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--tutela prodotto|illustrazione]
+                                   frase finale dei preset per quel modello (nessuna chiamata)
   giv version                      stampa la versione
 
 Flag comuni:
@@ -192,6 +197,11 @@ giv video:
   --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
   Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
   xai: tabella interna): un controllo strutturale non supportato esce con codice 2.
+
+giv presets:
+  al massimo un preset di camera e uno di effetto; senza variante per la famiglia del
+  modello vale la frase generica (con avviso). I file ./giv-presets.json e
+  ~/.config/giv/presets.json aggiungono o sostituiscono preset (vince il primo)
 
 Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY e GIV_PROVIDER
              da env di processo, ./credentials.env, ./.env o ~/.config/giv/credentials.env
