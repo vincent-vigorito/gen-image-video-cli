@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	version = "0.7.0"
+	version = "0.8.0"
 	logFile = "giv-log.jsonl"
 )
 
@@ -176,7 +176,8 @@ Uso:
   giv log    [-n N|--sum-cost [--by provider|model]]
                                    registro locale delle generazioni (giv-log.jsonl)
   giv presets [--json]             elenca i preset di camera ed effetti
-  giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--tutela prodotto|illustrazione]
+  giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
+                   [--tutela prodotto|illustrazione] [--strict]
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv version                      stampa la versione
 
@@ -217,8 +218,10 @@ giv video:
 
 giv presets:
   al massimo un preset di camera e uno di effetto; senza variante per la famiglia del
-  modello vale la frase generica (con avviso). I file ./giv-presets.json e
-  ~/.config/giv/presets.json aggiungono o sostituiscono preset (vince il primo)
+  modello vale la frase generica (con avviso; con --strict è un errore, codice 2).
+  --negative si somma ai negative dei preset dove il modello li ha (kling, veo, wan).
+  I file ./giv-presets.json e ~/.config/giv/presets.json aggiungono o sostituiscono
+  preset (vince il primo)
 
 Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY e GIV_PROVIDER
              da env di processo, ./credentials.env, ./.env o ~/.config/giv/credentials.env

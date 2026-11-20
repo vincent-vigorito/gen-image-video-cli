@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma e immagini di riferimento), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -23,7 +23,11 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 
 - **stdout: solo il manifest JSON** `{provider, model, prompt, files:[{path, mime, bytes}], cost_usd?}`.
   Log, avvisi e puntini di polling vanno su stderr. `cost_usd` c'è quando il provider
-  riporta il costo (OpenRouter): usarlo per tracciare il budget.
+  riporta il costo (OpenRouter): usarlo per tracciare il budget. Campi opzionali, assenti
+  quando non servono: `command`, `prompt_final` (inviato coi preset), `presets[]`,
+  `inputs` (`image`/`last_frame`/`refs[]` con `sha256` breve), `params`, `job_id`,
+  `duration_s`, `cost_est_usd` + `cost_source` (stima da listino dove il costo non è
+  riportato, es. xai), `warnings[]` (controlli ignorati).
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
   openai e video gemini, anche con `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
@@ -35,19 +39,25 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 - Il mime nel manifest è quello **reale** restituito dal provider (Nano Banana → jpeg,
   gpt-image → png…): leggerlo dal manifest, non dedurlo.
 - Una chiamata può restituire **più file** (es. OpenRouter a volte dà 2 varianti): iterare su `files[]`.
+- `giv video --dry-run` non genera: stampa `{dry_run, provider, model, prompt, prompt_final,
+  params, inputs, cost_est_usd, cost_source, warnings}` (`cost_est_usd` null se non stimabile).
 
 ## Comandi
 
 ```bash
-giv models [--provider P] [--all] [--json]      # elenca modelli image/video (verifica anche l'auth)
-giv image  [flag] "<prompt>"                    # genera immagini
-giv video  [flag] "<prompt>"                    # genera video (job asincrono, 1-5 min)
-giv log    [-n N] [--sum-cost] [--json]         # registro generazioni (giv-log.jsonl nella cwd)
+giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
+                                                # elenca modelli (verifica anche l'auth); --caps con --kind video
+giv image   [flag] "<prompt>"                   # genera immagini
+giv video   [flag] "<prompt>"                   # genera video (job asincrono, 1-5 min)
+giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
+giv presets [--json]                            # preset di camera ed effetti
+giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
+                 [--tutela prodotto|illustrazione] [--strict]   # frase finale, senza chiamate
 giv version
 ```
 
-`--input` e `--image` accettano **anche URL http(s)**: vengono scaricati da soli (niente
-curl preventivo). `giv log --sum-cost` dà il totale speso registrato nella directory —
+`--input`, `--image`, `--last-frame` e `--ref` accettano **anche URL http(s)**: vengono
+scaricati da soli (niente curl preventivo). `giv log --sum-cost` dà il totale speso registrato nella directory —
 usalo per riferire i costi a fine lavoro. Su openrouter `models --json` include il
 `pricing` per modello: consultalo per scegliere il motore economico.
 
@@ -60,8 +70,13 @@ quotato**; i flag possono stare prima o dopo.
 `cost_usd`; se una fallisce le già generate non vengono salvate), `--aspect <1:1|16:9|9:16|4:3|3:4>`, `--seed <n>` (riproducibilità:
 gemini e openrouter, altrove ignorato con avviso), `--input <file>` ripetibile
 (reference di stile / editing).
-`video`: `--aspect`, `--resolution <720p|1080p>`, `--duration <s>`, `--negative`,
-`--image <file>` (frame iniziale, image-to-video).
+`video`: `--aspect <16:9|9:16>`, `--resolution <720p|1080p>`, `--duration <s>`,
+`--negative`, `--image <file|url>` (primo fotogramma), `--last-frame <file|url>` (ultimo
+fotogramma), `--ref <file|url>` ripetibile (riferimenti di personaggio o prodotto),
+`--audio on|off`, `--seed <n>`, `--param k=v` ripetibile (parametro passante, solo se il
+modello lo elenca), `--timeout <durata>` (default `15m`), `--preset <nome>` ripetibile (uno
+di camera + uno di effetto), `--tutela prodotto|illustrazione|no`, `--dry-run`,
+`--max-cost <usd>`, `--strict`.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -71,14 +86,30 @@ partito e un secondo invio costerebbe due video. Se esce con codice 5, **non ril
 subito**: cercare il job sul provider (l'id è nel messaggio d'errore quando il job è
 partito) e solo dopo decidere se riprovare.
 
+## Prima di spendere (video)
+
+- `giv video` controlla la richiesta sul modello **prima** di download e generazione:
+  openrouter legge `/videos/models` (gratuito), xai usa una tabella interna (20/11/2026).
+- **Strutturale** non supportato (`--image`, `--last-frame`, `--ref` o troppi riferimenti,
+  `--duration`/`--resolution`/`--aspect` fuori dai valori ammessi, `--audio on` su un
+  modello muto, `--param` fuori lista) → **codice 2**, nessuna chiamata; il messaggio
+  elenca i modelli dello stesso provider che lo supportano: sceglierne uno di quelli.
+- **Rifinitura** non supportata (`--seed`, `--negative`, modello fuori catalogo) →
+  avviso su stderr, la generazione parte senza quel controllo. Con `--strict` → codice 2.
+- Prima di una clip costosa: `--dry-run` (stima, prompt finale, avvisi; serve la chiave),
+  poi la stessa riga senza `--dry-run` e con `--max-cost <usd>` come tetto (oltre, o
+  stima impossibile → codice 2).
+- `giv models --provider openrouter --kind video --caps` (o `--json`): fotogrammi,
+  durate, risoluzioni, audio, parametri passanti e $/s di ogni modello video.
+
 ## Matrice provider (default dal codice, modelli da `giv models` del 13/11/2026)
 
 | provider | immagini | video | `--input` | `--aspect` | modelli chiave |
 |---|---|---|---|---|---|
 | `gemini` | ✅ | ❌ | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; nessuna API video (Veo spento), usare openrouter |
 | `openai` | ✅ | ❌ | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-2.6-flare` (default), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare`/`-sunburst`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1-mini`; nessuna API video |
-| `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `grok-imagine-image`; video `grok-imagine-video-1.5` (default, fino a 15s, 480p default, image-to-video ok), `grok-imagine-video-1.5-lite` |
-| `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, Kling, Wan… |
+| `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `grok-imagine-image`; video `grok-imagine-video-1.5` (default, 1-15 s, 480p default, primo e ultimo fotogramma, fino a 14 `--ref`), `grok-imagine-video-1.5-lite` (uguale, più economico), `grok-imagine-video` (solo primo fotogramma, 7 `--ref`); con `--ref` max 720p; `--seed` ignorato; con `--image` ignora `--aspect` |
+| `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, `kwaivgi/kling-v3.0-pro`, Wan…; capacità per modello con `giv models --kind video --caps` |
 
 - **Video gemini**: non supportato (Veo 3.1 spento sulla Gemini API dal 22/10/2026, percorso
   rimosso): `giv video --provider gemini` esce subito con codice 2, anche con `--model`,
@@ -107,19 +138,64 @@ in `dati-siti/STILE-ILLUSTRAZIONI-ALEGRIA.md` del workspace):
   --name <slug> "Bring this illustration to life with subtle 2D motion... Keep the EXACT flat style, colors and composition. NO text, NO camera movement."
 ```
 
+**Spot da una foto di prodotto** (camera da preset, prodotto fedele):
+
+```bash
+./bin/giv video --provider openrouter --model kwaivgi/kling-v3.0-pro \
+  --image foto-prodotto.jpg --preset dolly-in --duration 5 --audio off --dry-run \
+  --name spot-01 "il flacone su un piano di marmo, luce da studio"
+# stima ok (0,56 $) → stessa riga senza --dry-run, con --max-cost 0.60
+```
+
+Con `--image` la clausola `--tutela prodotto` è già il default (prodotto, etichetta e
+proporzioni come nel primo fotogramma). `--last-frame` fissa anche l'inquadratura finale.
+
+**Mascotte coerente fra scene** (la coerenza la porta il fotogramma chiave):
+
+```bash
+./bin/giv image --provider openrouter --model google/gemini-3-pro-image \
+  --input mascotte-fronte.png --input mascotte-profilo.png --name s2-key \
+  "la mascotte apre la porta del magazzino"
+./bin/giv video --provider xai --image out/s2-key-<timestamp>.jpg \
+  --ref mascotte-fronte.png --ref mascotte-profilo.png --preset static --duration 5 \
+  --name s2 "<IMAGE_0> apre la porta e saluta"
+```
+
+Una scena per chiamata, riusando le stesse immagini di riferimento; su xai i riferimenti si
+richiamano nel prompt con `<IMAGE_0>`, `<IMAGE_1>`…
+
+**Preset di camera ed effetti**:
+
+```bash
+./bin/giv presets                                              # elenco (camera ed effetto)
+./bin/giv presets show orbit slow-motion --model kwaivgi/kling-v3.0-pro --prompt "<scena>"
+./bin/giv video --provider openrouter --model kwaivgi/kling-v3.0-pro --image foto.jpg \
+  --preset orbit --preset slow-motion --name orbit-01 "<scena>"
+```
+
+Al massimo un preset di camera e uno di effetto; le coppie incompatibili escono con codice
+2. Varianti scritte per kling, veo, seedance e wan; su grok e omni vale la frase generica
+(avviso). Preset propri in `./giv-presets.json` o `~/.config/giv/presets.json`, stesso
+formato di `internal/presets/presets.json`.
+
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
 per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)
 e controllare: stile coerente, palette giusta, **nessun testo/lettera** indesiderato.
 
 ## Costi
 
-- Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); il totale
-  registrato è `giv log --sum-cost`: usarli per il budget.
-- Il listino è `giv models --provider openrouter --json`, campo `pricing` (dollari per
-  token o per unità, come lo riporta il provider). Per molti modelli video riporta 0 (es.
-  `bytedance/seedance-2.0-mini`, `google/veo-3.1`, `x-ai/grok-imagine-video-1.5`): non
-  vuol dire gratis, il costo vero è solo nel `cost_usd` dopo la chiamata. Per gemini,
-  openai e xai diretti `models` non riporta prezzi.
+- Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); dove il
+  provider non lo riporta (xai) c'è la stima `cost_est_usd`. Il totale registrato è
+  `giv log --sum-cost` (`cost_usd` riportato, `cost_est_usd` stimato, `failed_jobs` e
+  `failed_cost_est_usd` per i job partiti e poi falliti o scaduti, che possono essere
+  stati addebitati); `--by provider|model` divide i totali. Usarli per il budget.
+- Prima della chiamata: `giv video … --dry-run` dà `cost_est_usd` (listino × durata) e
+  `--max-cost` fa da tetto. Il $/s dei modelli video è in `giv models --kind video --caps`
+  (openrouter: `pricing_skus` di `/videos/models`; xai: tabella interna). I modelli a token
+  (es. Seedance) non hanno stima: il costo vero è solo nel `cost_usd` dopo la chiamata.
+- Il listino immagini è `giv models --provider openrouter --json`, campo `pricing`
+  (dollari per token o per unità, come lo riporta il provider). Per gemini, openai e xai
+  diretti `models` non riporta prezzi.
 - Prezzi video indicativi su openrouter (listino del 20/11/2026, $ al secondo a 720p, tra
   parentesi senza audio): `google/gemini-omni-1.2-flash` 0,07 (audio sempre incluso;
   1080p 0,10), `google/veo-3.1-lite` 0,05 (0,03), `google/veo-3.1-fast` 0,10 (0,08),
