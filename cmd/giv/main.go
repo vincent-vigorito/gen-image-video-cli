@@ -12,9 +12,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
+	"gen-image-video-cli/internal/caps"
 	"gen-image-video-cli/internal/config"
 	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/output"
@@ -153,6 +156,7 @@ func usage() {
 
 Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
+             [--kind image|video|other] [--caps]   --caps (con --kind video): capacità e $/s
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (job asincrono ~1-5 min)
   giv log    [-n N|--sum-cost]     registro locale delle generazioni (giv-log.jsonl)
@@ -183,6 +187,11 @@ giv video:
   --seed <n>         seed (openrouter dove il modello lo rispetta; xai ignorato con avviso)
   --param k=v        parametro passante del modello, ripetibile (openrouter; valore JSON o stringa)
   --timeout <durata> tetto di attesa del job (default 15m)
+  --dry-run          nessuna generazione: stampa parametri, avvisi e costo stimato (JSON)
+  --max-cost <usd>   rifiuta (codice 2) se il costo stimato supera il tetto o non è stimabile
+  --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
+  Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
+  xai: tabella interna): un controllo strutturale non supportato esce con codice 2.
 
 Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY e GIV_PROVIDER
              da env di processo, ./credentials.env, ./.env o ~/.config/giv/credentials.env
@@ -266,6 +275,14 @@ func checkProvider(name string) error {
 	return nil
 }
 
+// baseURLs sono gli endpoint dei provider OpenAI-compatibili (i test li
+// puntano a un server finto).
+var baseURLs = map[string]string{
+	"openai":     "https://api.openai.com/v1",
+	"xai":        "https://api.x.ai/v1",
+	"openrouter": "https://openrouter.ai/api/v1",
+}
+
 func newProvider(name string) (provider.Provider, error) {
 	if err := checkProvider(name); err != nil {
 		return nil, err
@@ -280,13 +297,13 @@ func newProvider(name string) (provider.Provider, error) {
 	case "gemini":
 		return gemini.New(key), nil
 	case "openai":
-		return openaicompat.New("openai", "https://api.openai.com/v1", key,
+		return openaicompat.New("openai", baseURLs["openai"], key,
 			openaicompat.Options{UseSize: true}), nil
 	case "xai":
-		return openaicompat.New("xai", "https://api.x.ai/v1", key,
+		return openaicompat.New("xai", baseURLs["xai"], key,
 			openaicompat.Options{B64Param: true, Grok: true}), nil
 	default: // openrouter
-		return openaicompat.New("openrouter", "https://openrouter.ai/api/v1", key,
+		return openaicompat.New("openrouter", baseURLs["openrouter"], key,
 			openaicompat.Options{Router: true}), nil
 	}
 }
@@ -319,20 +336,41 @@ func cmdModels(args []string) error {
 	fs := flag.NewFlagSet("models", flag.ExitOnError)
 	prov := fs.String("provider", defaultProvider(), "provider")
 	all := fs.Bool("all", false, "includi anche i modelli non image/video")
+	kind := fs.String("kind", "", "solo i modelli di un tipo: image, video, other")
+	withCaps := fs.Bool("caps", false, "capacità e prezzo al secondo dei modelli video (con --kind video)")
 	asJSON := fs.Bool("json", false, "output JSON")
 	fs.Parse(args)
+	switch *kind {
+	case "", "image", "video", "other":
+	default:
+		return usageError("--kind accetta image, video o other, non %q", *kind)
+	}
+	if *withCaps {
+		if *kind != "video" {
+			return usageError("--caps vale con --kind video")
+		}
+		if err := checkProvider(*prov); err != nil {
+			return err
+		}
+		if _, ok := defaultVideoModels[*prov]; !ok {
+			return usageError("--caps: nessun modello video con capacità note su %s (usa xai o openrouter)", *prov)
+		}
+	}
 	c, err := newProvider(*prov)
 	if err != nil {
 		return err
+	}
+	if *withCaps {
+		return printVideoCaps(c, *asJSON)
 	}
 	models, err := c.Models(context.Background())
 	if err != nil {
 		return err
 	}
-	if !*all {
+	if *kind != "" || !*all {
 		var f []provider.ModelInfo
 		for _, m := range models {
-			if m.Kind == "image" || m.Kind == "video" {
+			if m.Kind == *kind || *kind == "" && (m.Kind == "image" || m.Kind == "video") {
 				f = append(f, m)
 			}
 		}
@@ -345,6 +383,88 @@ func cmdModels(args []string) error {
 		fmt.Printf("%-50s %-6s %s\n", m.Name, m.Kind, m.DisplayName)
 	}
 	return nil
+}
+
+// capsRow è un modello video con capacità e intervallo di prezzo al secondo.
+type capsRow struct {
+	caps.Model
+	USDPerSecMin *float64 `json:"usd_per_s_min,omitempty"`
+	USDPerSecMax *float64 `json:"usd_per_s_max,omitempty"`
+}
+
+func printVideoCaps(c provider.Provider, asJSON bool) error {
+	vc, ok := c.(videoCapser)
+	if !ok {
+		return usageError("capacità video non disponibili per %s", c.Name())
+	}
+	catalog, err := vc.VideoCaps(context.Background())
+	if err != nil {
+		return err
+	}
+	sort.Slice(catalog, func(i, j int) bool { return catalog[i].ID < catalog[j].ID })
+	rows := make([]capsRow, len(catalog))
+	for i, m := range catalog {
+		rows[i].Model = m
+		if lo, hi, ok := m.PerSecond(); ok {
+			rows[i].USDPerSecMin, rows[i].USDPerSecMax = &lo, &hi
+		}
+	}
+	if asJSON {
+		return output.PrintJSON(rows)
+	}
+	yesNo := func(b *bool) string {
+		switch {
+		case b == nil:
+			return "?"
+		case *b:
+			return "sì"
+		}
+		return "no"
+	}
+	fmt.Printf("%-40s %-10s %-20s %-22s %-5s %-5s %s\n", "modello", "durate", "risoluzioni", "fotogrammi", "audio", "seed", "$/s")
+	for _, r := range rows {
+		price := "-"
+		if r.USDPerSecMin != nil {
+			price = fmt.Sprintf("%.4g", *r.USDPerSecMin)
+			if *r.USDPerSecMax != *r.USDPerSecMin {
+				price += fmt.Sprintf("-%.4g", *r.USDPerSecMax)
+			}
+		}
+		fmt.Printf("%-40s %-10s %-20s %-22s %-5s %-5s %s\n", r.ID, durationsText(r.Durations),
+			orDash(strings.Join(r.Resolutions, ",")), orDash(strings.Join(r.Frames, ",")),
+			yesNo(r.Audio), yesNo(r.Seed), price)
+	}
+	return nil
+}
+
+// durationsText scrive le durate come intervallo (3-15) se sono consecutive.
+func durationsText(d []int) string {
+	if len(d) == 0 {
+		return "-"
+	}
+	s := slices.Clone(d)
+	slices.Sort(s)
+	consecutive := true
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[i-1]+1 {
+			consecutive = false
+		}
+	}
+	if consecutive && len(s) > 2 {
+		return fmt.Sprintf("%d-%d", s[0], s[len(s)-1])
+	}
+	parts := make([]string, len(s))
+	for i, n := range s {
+		parts[i] = fmt.Sprint(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func cmdImage(args []string) error {
@@ -412,6 +532,9 @@ func cmdVideo(args []string) error {
 	seed := fs.Int("seed", 0, "seed (dove il modello lo rispetta)")
 	fs.Var(&params, "param", "parametro passante del modello chiave=valore (ripetibile)")
 	timeout := fs.Duration("timeout", 15*time.Minute, "tetto di attesa del job (es. 20m)")
+	dryRun := fs.Bool("dry-run", false, "nessuna generazione: stampa parametri e costo stimato")
+	maxCost := fs.Float64("max-cost", 0, "rifiuta se il costo stimato supera questi dollari")
+	strict := fs.Bool("strict", false, "anche i controlli non supportati di rifinitura sono errori")
 	prompt, err := parsePrompt(fs, args)
 	if err != nil {
 		return err
@@ -443,6 +566,9 @@ func cmdVideo(args []string) error {
 	if *timeout <= 0 {
 		return usageError("--timeout deve essere una durata positiva (es. 20m)")
 	}
+	if *maxCost < 0 {
+		return usageError("--max-cost deve essere un importo non negativo in dollari")
+	}
 	if *lastFrame != "" {
 		if err := checkInputFile("--last-frame", *lastFrame); err != nil {
 			return err
@@ -453,26 +579,33 @@ func cmdVideo(args []string) error {
 			return err
 		}
 	}
+	req.Image, req.LastFrame, req.Refs = *image, *lastFrame, slices.Clone(refs)
 	c, err := newProvider(*prov)
 	if err != nil {
 		return err
 	}
-	if req.Image = *image; req.Image != "" {
+	// capacità e costo prima dei download e della generazione
+	plan, err := checkVideo(c, &req, videoChecks{strict: *strict, maxCost: *maxCost, dryRun: *dryRun})
+	if err != nil {
+		return err
+	}
+	if *dryRun {
+		return output.PrintJSON(plan)
+	}
+	if req.Image != "" {
 		if req.Image, err = resolveInput(req.Image); err != nil {
 			return err
 		}
 	}
-	if req.LastFrame = *lastFrame; req.LastFrame != "" {
+	if req.LastFrame != "" {
 		if req.LastFrame, err = resolveInput(req.LastFrame); err != nil {
 			return err
 		}
 	}
-	for _, r := range refs {
-		p, err := resolveInput(r)
-		if err != nil {
+	for i, r := range req.Refs {
+		if req.Refs[i], err = resolveInput(r); err != nil {
 			return err
 		}
-		req.Refs = append(req.Refs, p)
 	}
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
 	res, err := c.GenerateVideo(context.Background(), req)
@@ -488,6 +621,115 @@ func cmdVideo(args []string) error {
 		return err
 	}
 	return emit("video", manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+}
+
+// videoPlan è l'esito dei controlli prima di spendere, stampato da --dry-run.
+type videoPlan struct {
+	DryRun      bool           `json:"dry_run"`
+	Provider    string         `json:"provider"`
+	Model       string         `json:"model"`
+	Prompt      string         `json:"prompt"`
+	PromptFinal string         `json:"prompt_final"`
+	Params      map[string]any `json:"params,omitempty"`
+	Inputs      map[string]any `json:"inputs,omitempty"`
+	CostEstUSD  *float64       `json:"cost_est_usd"`
+	CostSource  string         `json:"cost_source,omitempty"`
+	Warnings    []string       `json:"warnings,omitempty"`
+}
+
+type videoChecks struct {
+	strict  bool
+	maxCost float64 // 0 = nessun tetto
+	dryRun  bool
+}
+
+// videoCapser è un provider che conosce le capacità dei suoi modelli video.
+type videoCapser interface {
+	VideoCaps(ctx context.Context) ([]caps.Model, error)
+}
+
+// checkVideo controlla req su capacità e prezzi del modello (regole in
+// internal/caps), applica --max-cost e prepara il piano di --dry-run.
+// Gli avvisi vanno su stderr.
+func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks) (*videoPlan, error) {
+	plan := &videoPlan{DryRun: true, Provider: c.Name(), Model: req.Model, Prompt: req.Prompt, PromptFinal: req.Prompt}
+	warn := func(msg string) {
+		fmt.Fprintf(os.Stderr, "avviso: %s\n", msg)
+		plan.Warnings = append(plan.Warnings, msg)
+	}
+	var m *caps.Model
+	if vc, ok := c.(videoCapser); ok {
+		catalog, err := vc.VideoCaps(context.Background())
+		if err != nil {
+			if opt.strict {
+				return nil, err
+			}
+			warn(fmt.Sprintf("capacità di %s non lette (%v): controlli e stima non fatti", c.Name(), err))
+		} else {
+			m = caps.Find(catalog, req.Model)
+			warns, err := caps.Check(c.Name(), m, catalog, req, opt.strict)
+			if err != nil {
+				return nil, usageError("%v", err)
+			}
+			for _, w := range warns {
+				warn(w)
+			}
+		}
+	}
+	why := "capacità del modello non note"
+	if m != nil {
+		var est *caps.Estimate
+		if est, why = m.Estimate(*req); est != nil {
+			plan.CostEstUSD, plan.CostSource = &est.USD, est.Source
+		}
+	}
+	if opt.maxCost > 0 {
+		if plan.CostEstUSD == nil {
+			return nil, usageError("--max-cost: costo non stimabile (%s)", why)
+		}
+		if *plan.CostEstUSD > opt.maxCost {
+			return nil, usageError("costo stimato %.4f $ oltre --max-cost %.4f $ (%s)", *plan.CostEstUSD, opt.maxCost, plan.CostSource)
+		}
+	}
+	if opt.dryRun && plan.CostEstUSD == nil {
+		warn("stima del costo non disponibile: " + why)
+	}
+
+	params := map[string]any{}
+	if req.Duration > 0 {
+		params["duration"] = req.Duration
+	}
+	for k, v := range map[string]string{"resolution": req.Resolution, "aspect": req.Aspect, "negative": req.Negative} {
+		if v != "" {
+			params[k] = v
+		}
+	}
+	if req.Seed != 0 {
+		params["seed"] = req.Seed
+	}
+	if req.Audio != nil {
+		params["audio"] = map[bool]string{true: "on", false: "off"}[*req.Audio]
+	}
+	if len(req.Params) > 0 {
+		params["passthrough"] = req.Params
+	}
+	if len(params) > 0 {
+		plan.Params = params
+	}
+	inputs := map[string]any{}
+	if req.Image != "" {
+		inputs["image"] = req.Image
+	}
+	if req.LastFrame != "" {
+		inputs["last_frame"] = req.LastFrame
+	}
+	if len(req.Refs) > 0 {
+		inputs["refs"] = req.Refs
+	}
+	if len(inputs) > 0 {
+		plan.Inputs = inputs
+	}
+	return plan, nil
 }
 
 // parseAudio legge --audio: vuoto = default del modello.

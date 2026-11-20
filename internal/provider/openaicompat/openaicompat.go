@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"gen-image-video-cli/internal/caps"
 	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/provider"
 )
@@ -179,6 +180,22 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// VideoCaps sono le capacità dei modelli video: per OpenRouter dal catalogo
+// /videos/models (gratuito, letto a ogni chiamata), per xAI dalla tabella di giv.
+func (c *Client) VideoCaps(ctx context.Context) ([]caps.Model, error) {
+	switch {
+	case c.opts.Router:
+		var raw json.RawMessage
+		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/videos/models", nil, &raw); err != nil {
+			return nil, err
+		}
+		return caps.ParseOpenRouter(raw)
+	case c.opts.Grok:
+		return caps.XAI(), nil
+	}
+	return nil, fmt.Errorf("capacità video non disponibili per %s", c.name)
 }
 
 // --- immagini ---
