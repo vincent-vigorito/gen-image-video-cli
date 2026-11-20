@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,7 +96,9 @@ func TestDryRunCostEstimate(t *testing.T) {
 func TestVideoCapsRefusals(t *testing.T) {
 	starts := capsServer(t)
 	frame := filepath.Join(t.TempDir(), "f.png")
-	os.WriteFile(frame, []byte("\x89PNG\r\n\x1a\n"), 0o644)
+	var buf bytes.Buffer
+	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	os.WriteFile(frame, buf.Bytes(), 0o644)
 	cases := map[string][]string{
 		"last-frame su runway": {"--model", "runway/gen-4.5", "--last-frame", frame, "--image", frame, "x"},
 		"durata 5 su veo":      {"--model", "google/veo-3.1", "--duration", "5", "x"},
