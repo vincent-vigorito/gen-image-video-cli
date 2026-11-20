@@ -133,3 +133,24 @@ func TestNegativeWarnStrict(t *testing.T) {
 		t.Errorf("avvii di job: %d", *starts)
 	}
 }
+
+// Audio non indicato: la stima e' il massimo fra le tariffe compatibili.
+func TestCostWithoutAudioFlag(t *testing.T) {
+	starts := capsServer(t)
+	base := []string{"--model", "kwaivgi/kling-v3.0-pro", "--duration", "5", "--resolution", "720p"}
+	if got := dryCost(t, append(base, "x")...); got < 0.835 || got > 0.845 {
+		t.Errorf("senza --audio: %v want 0.84", got)
+	}
+	if got := dryCost(t, append(base, "--audio", "off", "x")...); got < 0.555 || got > 0.565 {
+		t.Errorf("--audio off: %v want 0.56", got)
+	}
+	for _, extra := range [][]string{nil, {"--dry-run"}} {
+		_, se, code := video(t, append(append(extra, "--max-cost", "0.60"), append(base, "x")...)...)
+		if code != 2 {
+			t.Errorf("--max-cost 0.60 senza --audio %v: code=%d %s", extra, code, se)
+		}
+	}
+	if *starts != 0 {
+		t.Errorf("avvii di job: %d", *starts)
+	}
+}
