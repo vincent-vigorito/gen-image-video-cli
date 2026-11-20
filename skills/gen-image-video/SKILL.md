@@ -26,7 +26,7 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
   riporta il costo (OpenRouter): usarlo per tracciare il budget.
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
-  openai e video gemini senza `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
+  openai e video gemini, anche con `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
   4 chiave rifiutata o credito esaurito (401/402/403: cambiare provider o ricaricare) ·
   5 errore dell'API o di rete · 7 troppe richieste (429: aspettare) · 10 chiave API mancante.
   Decidere dal codice: 3 → altro modello, 4 → altro provider, 7 → attendere e riprovare.
@@ -75,16 +75,16 @@ partito) e solo dopo decidere se riprovare.
 
 | provider | immagini | video | `--input` | `--aspect` | modelli chiave |
 |---|---|---|---|---|---|
-| `gemini` | ✅ | ⚠️ nessun default | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; video: `giv models --provider gemini` non ne elenca, usare openrouter |
+| `gemini` | ✅ | ❌ | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; nessuna API video (Veo spento), usare openrouter |
 | `openai` | ✅ | ❌ | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-2.6-flare` (default), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare`/`-sunburst`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1-mini`; nessuna API video |
 | `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `grok-imagine-image`; video `grok-imagine-video-1.5` (default, fino a 15s, 480p default, image-to-video ok), `grok-imagine-video-1.5-lite` |
 | `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, Kling, Wan… |
 
-- **Video gemini**: senza `--model` esce con codice 2 e indica la chiamata da usare:
-  `--provider openrouter --model google/gemini-omni-1.2-flash`. Il percorso Veo
-  (`--duration` 4|6|8) resta nel codice per un `--model` esplicito, ma non è verificato
-  dopo il ritiro dei modelli.
-- **Video openai**: non supportato (Sora rimosso nella 0.7.0): `giv video --provider openai`
+- **Video gemini**: non supportato (Veo 3.1 spento sulla Gemini API dal 22/10/2026, percorso
+  rimosso): `giv video --provider gemini` esce subito con codice 2, anche con `--model`,
+  senza chiamate di rete, e indica `--provider openrouter --model google/gemini-omni-1.2-flash`.
+  Veo resta su openrouter: `google/veo-3.1`, `-fast`, `-lite` (durate 4|6|8).
+- **Video openai**: non supportato (Sora spento da OpenAI il 24/09/2026, rimosso nella 0.7.0): `giv video --provider openai`
   esce subito con codice 2, senza chiamate di rete. Usare `--provider openrouter` o `xai`.
 - Per confronti multi-provider: stesso prompt, `--name` diverso per provider.
 
@@ -120,6 +120,10 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
   `bytedance/seedance-2.0-mini`, `google/veo-3.1`, `x-ai/grok-imagine-video-1.5`): non
   vuol dire gratis, il costo vero è solo nel `cost_usd` dopo la chiamata. Per gemini,
   openai e xai diretti `models` non riporta prezzi.
+- Prezzi video indicativi su openrouter (listino del 20/11/2026, $ al secondo a 720p, tra
+  parentesi senza audio): `google/gemini-omni-1.2-flash` 0,07 (audio sempre incluso;
+  1080p 0,10), `google/veo-3.1-lite` 0,05 (0,03), `google/veo-3.1-fast` 0,10 (0,08),
+  `google/veo-3.1` 0,40 (0,20). Veo e Sora diretti non esistono più (Gemini e OpenAI).
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 

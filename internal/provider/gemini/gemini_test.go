@@ -1,9 +1,6 @@
 package gemini
 
-import (
-	"encoding/json"
-	"testing"
-)
+import "testing"
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
@@ -21,16 +18,5 @@ func TestClassify(t *testing.T) {
 		if got := classify(c.name, c.methods); got != c.want {
 			t.Errorf("classify(%q,%v)=%q want %q", c.name, c.methods, got, c.want)
 		}
-	}
-}
-
-func TestVideoURIs(t *testing.T) {
-	raw := json.RawMessage(`{"generateVideoResponse":{"generatedSamples":[{"video":{"uri":"u1"}}],"generatedVideos":[{"video":{"uri":"u2"}}]}}`)
-	got, err := videoURIs(raw)
-	if err != nil || len(got) != 2 || got[0] != "u1" || got[1] != "u2" {
-		t.Fatalf("got %v err %v", got, err)
-	}
-	if _, err := videoURIs(json.RawMessage(`{"generateVideoResponse":{}}`)); err == nil {
-		t.Fatal("atteso errore senza video")
 	}
 }
