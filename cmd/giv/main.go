@@ -100,7 +100,7 @@ var defaultImageModels = map[string]string{
 	"openrouter": "google/gemini-3.1-flash-image",
 }
 
-// gemini non ha un default video (serve --model); openai non ha un'API video.
+// gemini e openai non hanno un'API video (vedi resolveVideoModel).
 var defaultVideoModels = map[string]string{
 	"xai":        "grok-imagine-video-1.5",
 	"openrouter": "google/gemini-omni-1.2-flash",
@@ -203,7 +203,7 @@ func defaultsHelp() string {
 	for _, p := range providers {
 		video := defaultVideoModels[p]
 		switch {
-		case p == "openai":
+		case p == "openai", p == "gemini":
 			video = "non supportato: usa openrouter o xai"
 		case video == "":
 			video = "nessun default: --model obbligatorio"
@@ -305,16 +305,16 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 	return "", usageError("nessun modello di default per %s: specifica --model", providerName)
 }
 
-// resolveVideoModel è resolveModel per i video, con i casi senza default spiegati:
-// openai non ha un'API video, gemini non ha un modello video di default.
+// resolveVideoModel è resolveModel per i video, con i casi senza video spiegati:
+// openai non ha un'API video, gemini nemmeno (Veo spento sulla Gemini API), anche con --model.
 func resolveVideoModel(flagValue, providerName string) (string, error) {
 	switch {
 	case providerName == "openai":
 		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s) o --provider xai (default %s)",
 			defaultVideoModels["openrouter"], defaultVideoModels["xai"])
-	case providerName == "gemini" && flagValue == "":
-		return "", usageError("nessun modello video di default per gemini: usa --provider openrouter --model %s, "+
-			"oppure indica un modello gemini con --model", defaultVideoModels["openrouter"])
+	case providerName == "gemini":
+		return "", usageError("gemini non ha un'API video (Veo spento sulla Gemini API dal 22/10/2026): "+
+			"usa --provider openrouter --model %s, o google/veo-3.1 per Veo", defaultVideoModels["openrouter"])
 	}
 	return resolveModel(flagValue, providerName, defaultVideoModels)
 }

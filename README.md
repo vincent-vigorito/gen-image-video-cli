@@ -109,7 +109,7 @@ Tra parentesi il modello usato senza `--model` (la stessa tabella è in `giv --h
 
 | `--provider` | Immagini | Video | `--input` | `--aspect` | `--seed` |
 |---|---|---|---|---|---|
-| `gemini` (provider di default) | ✅ Nano Banana (`gemini-3.1-flash-image`) | ⚠️ nessun default: serve `--model`, oppure usa `openrouter` | ✅ | ✅ | ✅ |
+| `gemini` (provider di default) | ✅ Nano Banana (`gemini-3.1-flash-image`) | ❌ nessuna API video (Veo spento): usa `openrouter` o `xai` | ✅ | ✅ | ✅ |
 | `openai` | ✅ gpt-image-* (`gpt-image-2.6-flare`) | ❌ nessuna API video: usa `openrouter` o `xai` | ✅ via edits | ✅ via size | ❌ |
 | `xai` | ✅ grok-imagine-image-* (`grok-imagine-image-2.0`) | ✅ grok-imagine-video (`grok-imagine-video-1.5`, fino a 15s) | ❌ immagini / ✅ video | ❌ immagini / ✅ video | ❌ |
 | `openrouter` | ✅ Google, OpenAI, ByteDance, Flux, Recraft… (`google/gemini-3.1-flash-image`) | ✅ Gemini Omni, Seedance, Veo, Kling, Wan… (`google/gemini-omni-1.2-flash`) | ✅ | ✅ | ✅ |
@@ -118,10 +118,11 @@ Note:
 - OpenRouter usa gli endpoint media dedicati (`/images`, `/videos` asincrono) — l'unica
   via per i modelli ByteDance; riporta `cost_usd` nel manifest. `giv models --provider
   openrouter` elenca l'intero catalogo immagini e video.
-- Video gemini: senza `--model` `giv` esce con codice 2 e indica la chiamata da usare,
-  `--provider openrouter --model google/gemini-omni-1.2-flash`. Al 13/11/2026
-  `giv models --provider gemini` non elenca modelli video.
-- Video openai: non supportato (Sora rimosso nella 0.7.0); `giv video --provider openai`
+- Video gemini: non supportato (Veo 3.1 spento sulla Gemini API dal 22/10/2026, il
+  percorso Veo è rimosso); `giv video --provider gemini` esce subito con codice 2, anche
+  con `--model`, senza chiamate, e indica `--provider openrouter --model
+  google/gemini-omni-1.2-flash`. Veo resta su OpenRouter (`google/veo-3.1`, `-fast`, `-lite`).
+- Video openai: non supportato (Sora spento da OpenAI il 24/09/2026, rimosso nella 0.7.0); `giv video --provider openai`
   esce subito con codice 2, senza chiamate.
 - `-n` maggiore di 1 su OpenRouter: l'API `/images` accetta una sola immagine per
   richiesta, quindi `giv` ne fa una per immagine e somma i costi in `cost_usd`. Se una
@@ -157,7 +158,7 @@ cmd/giv/                  entrypoint e parsing comandi
 internal/config/          risoluzione credenziali (env → credentials.env → .env → ~/.config/giv/credentials.env)
 internal/httpx/           errori HTTP tipizzati, retry (5xx, polling video) e job video non ripetuto
 internal/provider/        interfaccia Provider + tipi comuni
-internal/provider/gemini/ adapter Gemini (generateContent, predictLongRunning)
+internal/provider/gemini/ adapter Gemini (generateContent; niente video)
 internal/provider/openaicompat/  adapter OpenAI-compatible (openai, xai, openrouter)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
