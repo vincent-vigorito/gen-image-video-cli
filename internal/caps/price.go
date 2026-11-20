@@ -3,6 +3,7 @@ package caps
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"gen-image-video-cli/internal/provider"
@@ -22,6 +23,7 @@ type rate struct {
 	res   string  // risoluzione in minuscolo o "" (base)
 	mode  string  // "t2v", "i2v" o "" (qualsiasi)
 	refs  bool    // tariffa dei video con riferimenti (reference_)
+	sku   string  // nome nel listino
 }
 
 // basi delle sku al secondo (dopo l'eventuale cents_per_, long_ e reference_):
@@ -30,7 +32,7 @@ var perSecondBases = []string{"duration_seconds", "video_output_second", "second
 
 func parseRate(name string, v float64) (rate, bool) {
 	n := name
-	r := rate{usd: v}
+	r := rate{usd: v, sku: name}
 	if rest, ok := strings.CutPrefix(n, "cents_per_"); ok {
 		n, r.usd = rest, v/100
 	}
@@ -93,8 +95,7 @@ func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
 	if dur <= 0 {
 		return nil, "durata non indicata: serve --duration per stimare il costo di " + m.ID
 	}
-	// dimensioni richieste: "" = default del modello non noto, vale qualsiasi
-	// tariffa compatibile e si prende la più alta
+	// dimensioni richieste: "" = default del modello non noto
 	wantAudio := ""
 	switch {
 	case req.Audio != nil && *req.Audio:
@@ -108,8 +109,7 @@ func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
 		wantMode = "i2v"
 	}
 
-	var best rate
-	bestSKU, bestScore := "", -1
+	var rates []rate
 	var perImage, perRef, minimum float64
 	tokens := false
 	for _, sku := range sortedKeys(m.Pricing) {
@@ -136,26 +136,33 @@ func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
 		if r.refs && len(req.Refs) == 0 {
 			continue
 		}
-		// le tariffe di un'altra modalità, risoluzione o audio non valgono
-		// per questa richiesta: escluse, mai usate come ripiego
-		audio, okA := match(r.audio, wantAudio)
-		res, okR := match(r.res, wantRes)
-		mode, okM := match(r.mode, wantMode)
-		if !okA || !okR || !okM {
-			continue
-		}
-		score := audio*9 + res*3 + mode
-		// a parità di punteggio la tariffa più alta: meglio stimare per eccesso
-		if score > bestScore || score == bestScore && r.usd > best.usd {
-			best, bestSKU, bestScore = r, sku, score
+		rates = append(rates, r)
+	}
+	// un default non noto può valere ogni valore: si stima ogni configurazione
+	// possibile e si tiene la più cara
+	audios := []string{wantAudio}
+	if wantAudio == "" {
+		audios = []string{"with", "without"}
+	}
+	resolutions := []string{wantRes}
+	if wantRes == "" {
+		resolutions = m.knownResolutions(rates)
+	}
+	var best *rate
+	for _, a := range audios {
+		for _, res := range resolutions {
+			if r := bestRate(rates, a, res, wantMode); r != nil && (best == nil || r.usd > best.usd) {
+				best = r
+			}
 		}
 	}
-	if bestScore < 0 {
+	if best == nil {
 		if tokens {
 			return nil, "listino a token per " + m.ID + ": stima non disponibile"
 		}
 		return nil, "nessuna tariffa al secondo del listino di " + m.ID + " vale per questa richiesta"
 	}
+	bestSKU := best.sku
 	images := len(req.Refs)
 	if req.Image != "" {
 		images++
@@ -179,6 +186,49 @@ func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
 		return nil, "stima non valida per " + m.ID
 	}
 	return &Estimate{USD: math.Round(total*1e4) / 1e4, Exact: total, Source: src}, ""
+}
+
+// bestRate è la tariffa che vale per una configurazione: escluse quelle di
+// un'altra modalità, risoluzione o audio (mai usate come ripiego), poi la più
+// specifica; a parità di punteggio la più alta. nil se nessuna vale.
+func bestRate(rates []rate, audio, res, mode string) *rate {
+	var best *rate
+	bestScore := -1
+	for i := range rates {
+		r := &rates[i]
+		a, okA := match(r.audio, audio)
+		x, okR := match(r.res, res)
+		md, okM := match(r.mode, mode)
+		if !okA || !okR || !okM {
+			continue
+		}
+		score := a*9 + x*3 + md
+		if score > bestScore || score == bestScore && r.usd > best.usd {
+			best, bestScore = r, score
+		}
+	}
+	return best
+}
+
+// knownResolutions sono le risoluzioni possibili quando la richiesta non ne
+// indica una: quelle del modello e quelle del listino; [""] se nessuna è nota.
+func (m *Model) knownResolutions(rates []rate) []string {
+	var out []string
+	add := func(r string) {
+		if r = strings.ToLower(r); r != "" && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	for _, r := range m.Resolutions {
+		add(r)
+	}
+	for _, r := range rates {
+		add(r.res)
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
 }
 
 // match confronta una dimensione della tariffa con quella richiesta: 2 uguale,
