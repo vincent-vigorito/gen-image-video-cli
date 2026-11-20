@@ -29,14 +29,20 @@ var inputHTTP = &http.Client{
 	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
-			return errors.New("troppi redirect")
+			return errRedirects
 		}
 		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-			return errors.New("redirect verso uno schema diverso da http(s)")
+			return errRedirectScheme
 		}
 		return nil
 	},
 }
+
+var (
+	errRedirects      = errors.New("troppi redirect")
+	errRedirectScheme = errors.New("redirect verso uno schema diverso da http(s)")
+	errTooBig         = errors.New("oltre il limite")
+)
 
 // reti non pubbliche oltre a quelle riconosciute da netip (privati, loopback,
 // link-local, multicast)
@@ -119,38 +125,64 @@ func (t *tempInputs) cleanup() {
 	*t = nil
 }
 
+// downloadError riduce un errore di download a un messaggio a contenuto
+// controllato: gli errori di net/http possono riportare l'URL o il Location
+// interi.
+func downloadError(shown string, err error) error {
+	var np *notPublicError
+	if errors.As(err, &np) {
+		return usageError("download input %s: %v", shown, np)
+	}
+	msg := "connessione non riuscita"
+	var dns *net.DNSError
+	var ne net.Error
+	switch {
+	case errors.Is(err, errRedirects):
+		msg = errRedirects.Error()
+	case errors.Is(err, errRedirectScheme):
+		msg = errRedirectScheme.Error()
+	case errors.As(err, &dns):
+		msg = "host non risolto"
+	case errors.As(err, &ne) && ne.Timeout():
+		msg = "timeout"
+	}
+	return fmt.Errorf("download input %s: %s", shown, msg)
+}
+
 // resolve accetta un path locale o un URL http(s); gli URL vengono scaricati in
 // un file temporaneo privato (0600, nome casuale), entro MaxInputBytes.
 func (t *tempInputs) resolve(p string) (string, error) {
 	if !isURL(p) {
 		return p, nil
 	}
+	local, _, err := t.download(p, provider.MaxInputBytes)
+	if errors.Is(err, errTooBig) {
+		return "", usageError("download input %s: oltre il limite di %d MiB", redactURL(p), provider.MaxInputBytes>>20)
+	}
+	return local, err
+}
+
+// download scarica l'URL p in un file temporaneo privato (0600, nome casuale)
+// leggendo al massimo limit byte (errTooBig oltre); restituisce file e byte.
+func (t *tempInputs) download(p string, limit int64) (string, int64, error) {
 	shown := redactURL(p)
 	resp, err := inputHTTP.Get(p)
 	if err != nil {
-		var np *notPublicError
-		if errors.As(err, &np) {
-			return "", usageError("download input %s: %v", shown, np)
-		}
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err // l'url.Error riporta l'URL intero
-		}
-		return "", fmt.Errorf("download input %s: %w", shown, err)
+		return "", 0, downloadError(shown, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download input %s: HTTP %d", shown, resp.StatusCode)
+		return "", 0, fmt.Errorf("download input %s: HTTP %d", shown, resp.StatusCode)
 	}
-	if resp.ContentLength > provider.MaxInputBytes {
-		return "", usageError("download input %s: %d byte, oltre il limite di %d MiB", shown, resp.ContentLength, provider.MaxInputBytes>>20)
+	if resp.ContentLength > limit {
+		return "", 0, errTooBig
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, provider.MaxInputBytes+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return "", fmt.Errorf("download input %s: %w", shown, err)
+		return "", 0, downloadError(shown, err)
 	}
-	if len(data) > provider.MaxInputBytes {
-		return "", usageError("download input %s: oltre il limite di %d MiB", shown, provider.MaxInputBytes>>20)
+	if int64(len(data)) > limit {
+		return "", 0, errTooBig
 	}
 	ext := extForMime(http.DetectContentType(data))
 	if ext == ".bin" {
@@ -158,18 +190,18 @@ func (t *tempInputs) resolve(p string) (string, error) {
 	}
 	f, err := os.CreateTemp("", "giv-input-*"+ext)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	*t = append(*t, f.Name())
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return "", err
+		return "", 0, err
 	}
 	if err := f.Close(); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	fmt.Fprintf(os.Stderr, "input scaricato: %s (%d byte)\n", f.Name(), len(data))
-	return f.Name(), nil
+	return f.Name(), int64(len(data)), nil
 }
 
 func extForMime(ct string) string {
@@ -205,8 +237,15 @@ func videoInputs(req *provider.VideoRequest) []videoInput {
 // --ref, tipo riconosciuto dai byte, dimensione per file e totale. Gli URL si
 // controllano dopo il download (resolveVideo).
 func checkVideoInputs(req *provider.VideoRequest) error {
+	_, err := localInputsSize(req)
+	return err
+}
+
+// localInputsSize controlla le immagini locali di un video e ne restituisce la
+// dimensione totale.
+func localInputsSize(req *provider.VideoRequest) (int64, error) {
 	if len(req.Refs) > provider.MaxRefs {
-		return usageError("--ref: al massimo %d immagini di riferimento, non %d", provider.MaxRefs, len(req.Refs))
+		return 0, usageError("--ref: al massimo %d immagini di riferimento, non %d", provider.MaxRefs, len(req.Refs))
 	}
 	var total int64
 	for _, in := range videoInputs(req) {
@@ -215,29 +254,50 @@ func checkVideoInputs(req *provider.VideoRequest) error {
 		}
 		n, err := provider.CheckImage(*in.path)
 		if err != nil {
-			return usageError("%s %s: %v", in.flag, *in.path, err)
+			return 0, usageError("%s %s: %v", in.flag, *in.path, err)
 		}
 		total += n
 	}
 	if total > provider.MaxInputTotal {
-		return usageError("immagini in ingresso: %d MiB in tutto, oltre il limite di %d MiB", total>>20, provider.MaxInputTotal>>20)
+		return 0, totalTooBig()
 	}
-	return nil
+	return total, nil
 }
 
-// resolveVideo scarica gli input da URL del video e li ricontrolla.
+func totalTooBig() error {
+	return usageError("immagini in ingresso oltre il limite di %d MiB in tutto", provider.MaxInputTotal>>20)
+}
+
+// resolveVideo scarica gli input da URL del video e li ricontrolla: ogni
+// download si ferma al minimo fra il limite per immagine e i byte che restano
+// del limite totale, file locali compresi.
 func (t *tempInputs) resolveVideo(req *provider.VideoRequest) error {
+	used, err := localInputsSize(req)
+	if err != nil {
+		return err
+	}
 	for _, in := range videoInputs(req) {
 		if *in.path == "" || !isURL(*in.path) {
 			continue
 		}
-		local, err := t.resolve(*in.path)
+		limit := min(int64(provider.MaxInputBytes), int64(provider.MaxInputTotal)-used)
+		if limit <= 0 {
+			return totalTooBig()
+		}
+		local, n, err := t.download(*in.path, limit)
+		if errors.Is(err, errTooBig) {
+			if limit < provider.MaxInputBytes {
+				return totalTooBig()
+			}
+			return usageError("%s %s: oltre il limite di %d MiB per immagine", in.flag, redactURL(*in.path), provider.MaxInputBytes>>20)
+		}
 		if err != nil {
 			return err
 		}
 		if _, err := provider.CheckImage(local); err != nil {
 			return usageError("%s %s: %v", in.flag, redactURL(*in.path), err)
 		}
+		used += n
 		*in.path = local
 	}
 	return checkVideoInputs(req)
