@@ -56,6 +56,38 @@ func cmdPresets(args []string) error {
 	return nil
 }
 
+// applyPresets espande prompt e negative di giv video coi preset scelti per il
+// modello m. Senza preset né --tutela restituisce prompt e negative identici e non
+// legge la libreria. Coi preset e --image la tutela di default è "prodotto";
+// "--tutela no" la toglie. Gli avvisi vanno su stderr; gli errori sono d'uso (codice 2).
+func applyPresets(names []string, protect, prompt, negative, m string, in presets.Inputs) (string, string, error) {
+	off := protect == "no"
+	if off {
+		protect = ""
+	}
+	if len(names) == 0 && protect == "" {
+		return prompt, negative, nil
+	}
+	if protect == "" && !off && in.FirstFrame {
+		protect = "prodotto"
+	}
+	lib, err := loadPresets()
+	if err != nil {
+		return "", "", err
+	}
+	res, err := lib.Expand(presets.Request{
+		Prompt: prompt, Negative: negative, Presets: names,
+		Model: m, Protect: protect, Inputs: &in,
+	})
+	if err != nil {
+		return "", "", usageError("%v", err)
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintln(os.Stderr, "avviso:", w)
+	}
+	return res.Prompt, res.Negative, nil
+}
+
 // presetShow è l'uscita di giv presets show: gli stessi campi che finiranno nel
 // manifest di giv video (prompt_final, presets[]).
 type presetShow struct {

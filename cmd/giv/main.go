@@ -17,6 +17,7 @@ import (
 	"gen-image-video-cli/internal/config"
 	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/output"
+	"gen-image-video-cli/internal/presets"
 	"gen-image-video-cli/internal/provider"
 	"gen-image-video-cli/internal/provider/gemini"
 	"gen-image-video-cli/internal/provider/openaicompat"
@@ -193,6 +194,10 @@ giv video:
   --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
   Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
   xai: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  --preset <nome>    preset di camera o effetto, ripetibile: al massimo uno di camera e uno
+                     di effetto (elenco con giv presets); la frase si aggiunge al prompt
+  --tutela <t>       clausola aggiunta coi preset: prodotto (default con --image),
+                     illustrazione, no
 
 giv presets:
   al massimo un preset di camera e uno di effetto; senza variante per la famiglia del
@@ -543,6 +548,9 @@ func cmdVideo(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "nessuna generazione: stampa parametri e costo stimato")
 	maxCost := fs.Float64("max-cost", 0, "rifiuta se il costo stimato supera questi dollari")
 	strict := fs.Bool("strict", false, "anche i controlli non supportati di rifinitura sono errori")
+	var presetNames stringList
+	fs.Var(&presetNames, "preset", "preset di camera o effetto (ripetibile)")
+	protect := fs.String("tutela", "", "clausola di tutela coi preset: prodotto, illustrazione, no")
 	prompt, err := parsePrompt(fs, args)
 	if err != nil {
 		return err
@@ -556,10 +564,17 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
+	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
+	// il manifest tiene il prompt dell'utente
+	sendPrompt, sendNegative, err := applyPresets(presetNames, *protect, prompt, *negative, m,
+		presets.Inputs{FirstFrame: *image != "", Duration: *duration})
+	if err != nil {
+		return err
+	}
 	// controlli dei flag nuovi: codice 2 prima di chiave, download e chiamate
 	req := provider.VideoRequest{
-		Prompt: prompt, Model: m, Aspect: *aspect,
-		Resolution: *resolution, Negative: *negative,
+		Prompt: sendPrompt, Model: m, Aspect: *aspect,
+		Resolution: *resolution, Negative: sendNegative,
 		Duration: *duration, Seed: *seed, Timeout: *timeout,
 	}
 	if req.Audio, err = parseAudio(*audio); err != nil {
@@ -591,6 +606,7 @@ func cmdVideo(args []string) error {
 		return err
 	}
 	if *dryRun {
+		plan.Prompt = prompt // prompt dell'utente; prompt_final è quello coi preset
 		return output.PrintJSON(plan)
 	}
 	var tmp tempInputs
