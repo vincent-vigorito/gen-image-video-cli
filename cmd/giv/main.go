@@ -18,6 +18,7 @@ import (
 	"gen-image-video-cli/internal/config"
 	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/output"
+	"gen-image-video-cli/internal/presets"
 	"gen-image-video-cli/internal/provider"
 	"gen-image-video-cli/internal/provider/gemini"
 	"gen-image-video-cli/internal/provider/openaicompat"
@@ -182,6 +183,10 @@ giv video:
   --negative "<t>"   negative prompt
   --image <file>     frame iniziale (image-to-video)
   --duration <s>     durata in secondi (valori ammessi dal modello)
+  --preset <nome>    preset di camera o effetto, ripetibile: al massimo uno di camera e uno
+                     di effetto (elenco con giv presets); la frase si aggiunge al prompt
+  --tutela <t>       clausola aggiunta coi preset: prodotto (default con --image),
+                     illustrazione, no
 
 giv presets:
   al massimo un preset di camera e uno di effetto; senza variante per la famiglia del
@@ -409,6 +414,9 @@ func cmdVideo(args []string) error {
 	duration := fs.Int("duration", 0, "durata in secondi (0 = default modello)")
 	out := fs.String("out", "out", "directory di output")
 	name := fs.String("name", "", "slug per i nomi file")
+	var presetNames stringList
+	fs.Var(&presetNames, "preset", "preset di camera o effetto (ripetibile)")
+	protect := fs.String("tutela", "", "clausola di tutela coi preset: prodotto, illustrazione, no")
 	prompt, err := parsePrompt(fs, args)
 	if err != nil {
 		return err
@@ -419,6 +427,13 @@ func cmdVideo(args []string) error {
 		return err
 	}
 	m, err := resolveVideoModel(*model, *prov)
+	if err != nil {
+		return err
+	}
+	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
+	// il manifest tiene il prompt dell'utente
+	sendPrompt, sendNegative, err := applyPresets(presetNames, *protect, prompt, *negative, m,
+		presets.Inputs{FirstFrame: *image != "", Duration: *duration})
 	if err != nil {
 		return err
 	}
@@ -434,8 +449,8 @@ func cmdVideo(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
 	res, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
-		Prompt: prompt, Model: m, Aspect: *aspect,
-		Resolution: *resolution, Negative: *negative, Image: img,
+		Prompt: sendPrompt, Model: m, Aspect: *aspect,
+		Resolution: *resolution, Negative: sendNegative, Image: img,
 		Duration: *duration,
 	})
 	if err != nil {
