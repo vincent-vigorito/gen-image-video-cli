@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"gen-image-video-cli/internal/caps"
 	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/provider"
 )
@@ -179,6 +180,22 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// VideoCaps sono le capacità dei modelli video: per OpenRouter dal catalogo
+// /videos/models (gratuito, letto a ogni chiamata), per xAI dalla tabella di giv.
+func (c *Client) VideoCaps(ctx context.Context) ([]caps.Model, error) {
+	switch {
+	case c.opts.Router:
+		var raw json.RawMessage
+		if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/videos/models", nil, &raw); err != nil {
+			return nil, err
+		}
+		return caps.ParseOpenRouter(raw)
+	case c.opts.Grok:
+		return caps.XAI(), nil
+	}
+	return nil, fmt.Errorf("capacità video non disponibili per %s", c.name)
 }
 
 // --- immagini ---
@@ -369,14 +386,14 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 		body["resolution"] = req.Resolution
 	}
 	if req.Image != "" {
-		u, err := dataURL(req.Image)
+		u, err := imageDataURL(req.Image)
 		if err != nil {
 			return nil, err
 		}
 		body["image"] = map[string]string{"url": u}
 	}
 	if req.LastFrame != "" {
-		u, err := dataURL(req.LastFrame)
+		u, err := imageDataURL(req.LastFrame)
 		if err != nil {
 			return nil, err
 		}
@@ -385,7 +402,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 	if len(req.Refs) > 0 {
 		refs := make([]map[string]string, 0, len(req.Refs))
 		for _, r := range req.Refs {
-			u, err := dataURL(r)
+			u, err := imageDataURL(r)
 			if err != nil {
 				return nil, err
 			}
@@ -580,7 +597,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 
 // imageURLPart è un'immagine nella forma di OpenRouter (frame_images, input_references).
 func imageURLPart(path string) (map[string]any, error) {
-	u, err := dataURL(path)
+	u, err := imageDataURL(path)
 	if err != nil {
 		return nil, err
 	}
@@ -685,6 +702,16 @@ func addFilePart(w *multipart.Writer, field, path string) error {
 	}
 	_, err = part.Write(data)
 	return err
+}
+
+// imageDataURL è un'immagine in ingresso a un video come data URL: tipo
+// riconosciuto dai byte ed entro i limiti di provider.ReadImage.
+func imageDataURL(path string) (string, error) {
+	mime, data, err := provider.ReadImage(path)
+	if err != nil {
+		return "", fmt.Errorf("input %s: %w", path, err)
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
 func dataURL(path string) (string, error) {
