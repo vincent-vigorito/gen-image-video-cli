@@ -20,10 +20,6 @@ import (
 
 const baseURL = "https://generativelanguage.googleapis.com/v1beta"
 
-// pollInterval e' l'attesa fra due controlli dello stato di un job video;
-// i test del package la accorciano.
-var pollInterval = 10 * time.Second
-
 type Client struct {
 	APIKey string
 	HTTP   *http.Client
@@ -253,146 +249,10 @@ func mimeForFile(path string) string {
 	}
 }
 
-// --- video (Veo, job asincrono) ---
+// --- video ---
 
-func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (res *provider.Result, err error) {
-	instance := map[string]any{"prompt": req.Prompt}
-	if req.Image != "" {
-		data, err := os.ReadFile(req.Image)
-		if err != nil {
-			return nil, err
-		}
-		instance["image"] = map[string]any{
-			"bytesBase64Encoded": base64.StdEncoding.EncodeToString(data),
-			"mimeType":           mimeForFile(req.Image),
-		}
-	}
-	params := map[string]any{}
-	if req.Aspect != "" {
-		params["aspectRatio"] = req.Aspect
-	}
-	if req.Resolution != "" {
-		params["resolution"] = req.Resolution
-	}
-	if req.Negative != "" {
-		params["negativePrompt"] = req.Negative
-	}
-	if req.Duration > 0 {
-		params["durationSeconds"] = req.Duration
-	}
-	body := map[string]any{"instances": []any{instance}}
-	if len(params) > 0 {
-		body["parameters"] = params
-	}
-
-	var op struct {
-		Name string `json:"name"`
-	}
-	url := fmt.Sprintf("%s/models/%s:predictLongRunning", baseURL, req.Model)
-	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
-	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, url, body, &op); err != nil {
-		return nil, httpx.Start(err)
-	}
-	if op.Name == "" {
-		return nil, httpx.Start(fmt.Errorf("gemini: nessun operation name nella risposta"))
-	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", op.Name, pollInterval)
-	// da qui ogni errore porta l'id del job
-	defer func() { err = httpx.Job(op.Name, err) }()
-
-	deadline := time.Now().Add(15 * time.Minute)
-	for {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("gemini: timeout dopo 15m")
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(pollInterval):
-		}
-		var st struct {
-			Done  bool `json:"done"`
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-			Response json.RawMessage `json:"response"`
-		}
-		if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, baseURL+"/"+op.Name, nil, &st); err != nil {
-			return nil, err
-		}
-		if !st.Done {
-			fmt.Fprint(os.Stderr, ".")
-			continue
-		}
-		fmt.Fprintln(os.Stderr)
-		if st.Error != nil {
-			return nil, fmt.Errorf("gemini: job fallito: %s", st.Error.Message)
-		}
-		uris, err := videoURIs(st.Response)
-		if err != nil {
-			return nil, err
-		}
-		var media []provider.Media
-		for _, uri := range uris {
-			data, err := c.download(ctx, uri)
-			if err != nil {
-				return nil, err
-			}
-			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
-		}
-		return &provider.Result{Media: media}, nil
-	}
-}
-
-func videoURIs(raw json.RawMessage) ([]string, error) {
-	var resp struct {
-		GenerateVideoResponse struct {
-			GeneratedSamples []struct {
-				Video struct {
-					URI string `json:"uri"`
-				} `json:"video"`
-			} `json:"generatedSamples"`
-			GeneratedVideos []struct {
-				Video struct {
-					URI string `json:"uri"`
-				} `json:"video"`
-			} `json:"generatedVideos"`
-		} `json:"generateVideoResponse"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, err
-	}
-	var uris []string
-	for _, s := range resp.GenerateVideoResponse.GeneratedSamples {
-		if s.Video.URI != "" {
-			uris = append(uris, s.Video.URI)
-		}
-	}
-	for _, s := range resp.GenerateVideoResponse.GeneratedVideos {
-		if s.Video.URI != "" {
-			uris = append(uris, s.Video.URI)
-		}
-	}
-	if len(uris) == 0 {
-		return nil, fmt.Errorf("gemini: job completato ma nessun video nella risposta: %s", string(raw))
-	}
-	return uris, nil
-}
-
-func (c *Client) download(ctx context.Context, uri string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("x-goog-api-key", c.APIKey)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("gemini: download HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-	return io.ReadAll(resp.Body)
+// GenerateVideo rifiuta sempre: Veo sulla Gemini API e' spento dal 22/10/2026 e
+// il sostituto (Gemini Omni) usa un'altra API, non implementata. Nessuna chiamata.
+func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+	return nil, fmt.Errorf("gemini: generazione video non disponibile (Veo spento sulla Gemini API): usa --provider openrouter")
 }
