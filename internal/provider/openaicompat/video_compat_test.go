@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,10 +40,11 @@ func serverCorpo(t *testing.T, createPath, jobJSON string) (*httptest.Server, fu
 
 func pngTemp(t *testing.T) (path, url string) {
 	p := filepath.Join(t.TempDir(), "a.png")
-	if err := os.WriteFile(p, []byte("IMG"), 0o600); err != nil {
+	data := []byte("\x89PNG\r\n\x1a\nIMG")
+	if err := os.WriteFile(p, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return p, "data:image/png;base64,SU1H"
+	return p, "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 // Caso 2: coi soli flag di oggi il corpo inviato resta quello di main.
