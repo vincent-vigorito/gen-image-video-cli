@@ -57,7 +57,9 @@ func TestVideoPresetInviaPromptEspanso(t *testing.T) {
 	if b["prompt"] != sp || !strings.HasPrefix(sp, "a bottle") || sp == "a bottle" {
 		t.Errorf("prompt inviato=%v", b["prompt"])
 	}
-	// il negative parte nel corpo solo con F1-T1 (rai-797); qui si prova che arriva al VideoRequest
+	if !strings.Contains(string(mustJSON(b["provider"])), sn) {
+		t.Errorf("negative %q assente dal corpo: %v", sn, b)
+	}
 }
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
