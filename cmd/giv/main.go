@@ -2,16 +2,12 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -500,9 +496,11 @@ func cmdImage(args []string) error {
 	if err != nil {
 		return err
 	}
+	var tmp tempInputs
+	defer tmp.cleanup()
 	resolved := make([]string, len(inputs))
 	for i, in := range inputs {
-		if resolved[i], err = resolveInput(in); err != nil {
+		if resolved[i], err = tmp.resolve(in); err != nil {
 			return err
 		}
 	}
@@ -579,17 +577,10 @@ func cmdVideo(args []string) error {
 	if *maxCost < 0 {
 		return usageError("--max-cost deve essere un importo non negativo in dollari")
 	}
-	if *lastFrame != "" {
-		if err := checkInputFile("--last-frame", *lastFrame); err != nil {
-			return err
-		}
-	}
-	for _, r := range refs {
-		if err := checkInputFile("--ref", r); err != nil {
-			return err
-		}
-	}
 	req.Image, req.LastFrame, req.Refs = *image, *lastFrame, slices.Clone(refs)
+	if err := checkVideoInputs(&req); err != nil {
+		return err
+	}
 	c, err := newProvider(*prov)
 	if err != nil {
 		return err
@@ -602,20 +593,10 @@ func cmdVideo(args []string) error {
 	if *dryRun {
 		return output.PrintJSON(plan)
 	}
-	if req.Image != "" {
-		if req.Image, err = resolveInput(req.Image); err != nil {
-			return err
-		}
-	}
-	if req.LastFrame != "" {
-		if req.LastFrame, err = resolveInput(req.LastFrame); err != nil {
-			return err
-		}
-	}
-	for i, r := range req.Refs {
-		if req.Refs[i], err = resolveInput(r); err != nil {
-			return err
-		}
+	var tmp tempInputs
+	defer tmp.cleanup()
+	if err := tmp.resolveVideo(&req); err != nil {
+		return err
 	}
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
 	res, err := c.GenerateVideo(context.Background(), req)
@@ -754,7 +735,7 @@ func parseAudio(v string) (*bool, error) {
 		off := false
 		return &off, nil
 	}
-	return nil, usageError("--audio accetta on oppure off, non %q", v)
+	return nil, usageError("--audio accetta on oppure off")
 }
 
 // parseParams legge i --param chiave=valore: il valore vale come JSON se lo è
@@ -764,13 +745,14 @@ func parseParams(list []string) (map[string]any, error) {
 		return nil, nil
 	}
 	out := make(map[string]any, len(list))
-	for _, kv := range list {
+	// negli errori la posizione, non il valore: potrebbe essere riservato
+	for i, kv := range list {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
-			return nil, usageError("--param %q: serve la forma chiave=valore", kv)
+			return nil, usageError("--param n. %d: serve la forma chiave=valore", i+1)
 		}
 		if !validParamKey(k) {
-			return nil, usageError("--param %q: chiave non valida (lettere, cifre e _, inizia con una lettera)", kv)
+			return nil, usageError("--param n. %d: chiave non valida (lettere, cifre e _, inizia con una lettera)", i+1)
 		}
 		if _, dup := out[k]; dup {
 			return nil, usageError("--param %s ripetuto", k)
@@ -801,19 +783,6 @@ func validParamKey(k string) bool {
 	return true
 }
 
-// checkInputFile rifiuta con codice 2 un file locale che non c'è; gli URL
-// http(s) si controllano al download.
-func checkInputFile(flagName, p string) error {
-	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-		return nil
-	}
-	st, err := os.Stat(p)
-	if err != nil || !st.Mode().IsRegular() {
-		return usageError("%s %s: file non trovato", flagName, p)
-	}
-	return nil
-}
-
 type logEntry struct {
 	Ts      string `json:"ts"`
 	Command string `json:"command"`
@@ -827,57 +796,6 @@ func emit(command string, man manifest) error {
 		fmt.Fprintf(os.Stderr, "avviso: registro %s non aggiornato: %v\n", logFile, err)
 	}
 	return output.PrintJSON(man)
-}
-
-var inputHTTP = &http.Client{Timeout: 120 * time.Second}
-
-// resolveInput accetta un path locale o un URL http(s); gli URL vengono scaricati in tmp.
-func resolveInput(p string) (string, error) {
-	if !strings.HasPrefix(p, "http://") && !strings.HasPrefix(p, "https://") {
-		return p, nil
-	}
-	resp, err := inputHTTP.Get(p)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download input %s: HTTP %d", p, resp.StatusCode)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	u, err := url.Parse(p)
-	if err != nil {
-		return "", err
-	}
-	ext := filepath.Ext(u.Path)
-	if ext == "" {
-		ext = extForMime(resp.Header.Get("Content-Type"))
-	}
-	sum := sha256.Sum256([]byte(p))
-	dst := filepath.Join(os.TempDir(), fmt.Sprintf("giv-input-%x%s", sum[:6], ext))
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
-		return "", err
-	}
-	fmt.Fprintf(os.Stderr, "input scaricato: %s (%d byte)\n", dst, len(data))
-	return dst, nil
-}
-
-func extForMime(ct string) string {
-	switch {
-	case strings.Contains(ct, "png"):
-		return ".png"
-	case strings.Contains(ct, "jpeg"):
-		return ".jpg"
-	case strings.Contains(ct, "webp"):
-		return ".webp"
-	case strings.Contains(ct, "gif"):
-		return ".gif"
-	default:
-		return ".bin"
-	}
 }
 
 func cmdLog(args []string) error {
