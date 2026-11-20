@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"slices"
@@ -582,7 +583,7 @@ func cmdVideo(args []string) error {
 	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
 	// il manifest tiene il prompt dell'utente
 	pres, err := videoPresets(presetNames, *protect, prompt, *negative, m,
-		presets.Inputs{FirstFrame: *image != "", Duration: *duration})
+		presets.Inputs{FirstFrame: *image != "", LastFrame: *lastFrame != "", Duration: *duration})
 	if err != nil {
 		return err
 	}
@@ -604,8 +605,15 @@ func cmdVideo(args []string) error {
 	if *timeout <= 0 {
 		return usageError("--timeout deve essere una durata positiva (es. 20m)")
 	}
-	if *maxCost < 0 {
-		return usageError("--max-cost deve essere un importo non negativo in dollari")
+	// --max-cost: tetto solo se il flag c'è (anche 0); mai NaN o infinito
+	var costCap *float64
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "max-cost" {
+			costCap = maxCost
+		}
+	})
+	if costCap != nil && (math.IsNaN(*costCap) || math.IsInf(*costCap, 0) || *costCap < 0) {
+		return usageError("--max-cost deve essere un importo finito e non negativo in dollari")
 	}
 	req.Image, req.LastFrame, req.Refs = *image, *lastFrame, slices.Clone(refs)
 	if err := checkVideoInputs(&req); err != nil {
@@ -616,7 +624,7 @@ func cmdVideo(args []string) error {
 		return err
 	}
 	// capacità e costo prima dei download e della generazione
-	plan, err := checkVideo(c, &req, videoChecks{strict: *strict, maxCost: *maxCost, dryRun: *dryRun})
+	plan, err := checkVideo(c, &req, videoChecks{strict: *strict, maxCost: costCap, dryRun: *dryRun})
 	if err != nil {
 		return err
 	}
@@ -666,7 +674,7 @@ type videoPlan struct {
 
 type videoChecks struct {
 	strict  bool
-	maxCost float64 // 0 = nessun tetto
+	maxCost *float64 // nil = nessun tetto
 	dryRun  bool
 }
 
@@ -704,18 +712,23 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 		}
 	}
 	why := "capacità del modello non note"
+	var est *caps.Estimate
 	if m != nil {
-		var est *caps.Estimate
-		if est, why = m.Estimate(*req); est != nil {
-			plan.CostEstUSD, plan.CostSource = &est.USD, est.Source
-		}
+		est, why = m.Estimate(*req)
 	}
-	if opt.maxCost > 0 {
-		if plan.CostEstUSD == nil {
+	if est != nil && (math.IsNaN(est.Exact) || math.IsInf(est.Exact, 0)) {
+		est, why = nil, "stima non valida"
+	}
+	if est != nil {
+		plan.CostEstUSD, plan.CostSource = &est.USD, est.Source
+	}
+	if opt.maxCost != nil {
+		if est == nil {
 			return nil, usageError("--max-cost: costo non stimabile (%s)", why)
 		}
-		if *plan.CostEstUSD > opt.maxCost {
-			return nil, usageError("costo stimato %.4f $ oltre --max-cost %.4f $ (%s)", *plan.CostEstUSD, opt.maxCost, plan.CostSource)
+		// il tetto vale sul valore non arrotondato
+		if est.Exact > *opt.maxCost {
+			return nil, usageError("costo stimato %.4f $ oltre --max-cost %.4f $ (%s)", est.USD, *opt.maxCost, est.Source)
 		}
 	}
 	if opt.dryRun && plan.CostEstUSD == nil {
@@ -743,15 +756,20 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 	if len(params) > 0 {
 		plan.Params = params
 	}
+	// gli URL firmati compaiono solo con schema e host (log CI)
 	inputs := map[string]any{}
 	if req.Image != "" {
-		inputs["image"] = req.Image
+		inputs["image"] = shownInput(req.Image)
 	}
 	if req.LastFrame != "" {
-		inputs["last_frame"] = req.LastFrame
+		inputs["last_frame"] = shownInput(req.LastFrame)
 	}
 	if len(req.Refs) > 0 {
-		inputs["refs"] = req.Refs
+		refs := make([]string, len(req.Refs))
+		for i, r := range req.Refs {
+			refs[i] = shownInput(r)
+		}
+		inputs["refs"] = refs
 	}
 	if len(inputs) > 0 {
 		plan.Inputs = inputs
