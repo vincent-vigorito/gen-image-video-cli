@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"syscall"
 )
 
 // Limiti delle immagini in ingresso ai video (file locali e download): tengono
@@ -27,13 +28,10 @@ func ImageMime(head []byte) string {
 }
 
 // openImage apre un file regolare (anche dietro un symlink) entro MaxInputBytes.
+// L'apertura è senza blocco (una FIFO o un device non fermano la CLI) e il tipo
+// si controlla sul descrittore aperto, non sul path.
 func openImage(path string) (*os.File, int64, error) {
-	if st, err := os.Stat(path); err != nil {
-		return nil, 0, errors.New("file non trovato o non leggibile")
-	} else if !st.Mode().IsRegular() {
-		return nil, 0, errors.New("non è un file regolare")
-	}
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, 0, errors.New("file non trovato o non leggibile")
 	}
