@@ -107,12 +107,26 @@ var defaultVideoModels = map[string]string{
 	"openrouter": "google/gemini-omni-1.2-flash",
 }
 
+// manifest è l'uscita di image e video e la riga del registro. I campi oltre
+// provider, model, prompt, files e cost_usd sono opzionali: assenti quando non
+// servono, così i manifest e i registri di prima si leggono come prima.
 type manifest struct {
-	Provider string            `json:"provider"`
-	Model    string            `json:"model"`
-	Prompt   string            `json:"prompt"`
-	Files    []output.FileInfo `json:"files"`
-	CostUSD  float64           `json:"cost_usd,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	Provider    string            `json:"provider"`
+	Model       string            `json:"model"`
+	Prompt      string            `json:"prompt"`
+	PromptFinal string            `json:"prompt_final,omitempty"` // prompt inviato, se diverso (preset)
+	Presets     []presets.Applied `json:"presets,omitempty"`
+	Inputs      *manifestInputs   `json:"inputs,omitempty"`
+	Params      map[string]any    `json:"params,omitempty"`
+	Files       []output.FileInfo `json:"files"`
+	JobID       string            `json:"job_id,omitempty"`
+	Status      string            `json:"status,omitempty"` // solo registro: failed, timeout
+	DurationS   float64           `json:"duration_s,omitempty"`
+	CostUSD     float64           `json:"cost_usd,omitempty"`     // riportato dal provider
+	CostEstUSD  float64           `json:"cost_est_usd,omitempty"` // stimato da listino, se il provider non lo riporta
+	CostSource  string            `json:"cost_source,omitempty"`
+	Warnings    []string          `json:"warnings,omitempty"`
 }
 
 func main() {
@@ -159,7 +173,8 @@ Uso:
              [--kind image|video|other] [--caps]   --caps (con --kind video): capacità e $/s
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (job asincrono ~1-5 min)
-  giv log    [-n N|--sum-cost]     registro locale delle generazioni (giv-log.jsonl)
+  giv log    [-n N|--sum-cost [--by provider|model]]
+                                   registro locale delle generazioni (giv-log.jsonl)
   giv presets [--json]             elenca i preset di camera ed effetti
   giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                    [--tutela prodotto|illustrazione] [--strict]
@@ -570,15 +585,15 @@ func cmdVideo(args []string) error {
 	}
 	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
 	// il manifest tiene il prompt dell'utente
-	sendPrompt, sendNegative, err := applyPresets(presetNames, *protect, prompt, *negative, m,
+	pres, err := videoPresets(presetNames, *protect, prompt, *negative, m,
 		presets.Inputs{FirstFrame: *image != "", LastFrame: *lastFrame != "", Duration: *duration})
 	if err != nil {
 		return err
 	}
 	// controlli dei flag nuovi: codice 2 prima di chiave, download e chiamate
 	req := provider.VideoRequest{
-		Prompt: sendPrompt, Model: m, Aspect: *aspect,
-		Resolution: *resolution, Negative: sendNegative,
+		Prompt: pres.Prompt, Model: m, Aspect: *aspect,
+		Resolution: *resolution, Negative: pres.Negative,
 		Duration: *duration, Seed: *seed, Timeout: *timeout,
 	}
 	if req.Audio, err = parseAudio(*audio); err != nil {
@@ -622,12 +637,16 @@ func cmdVideo(args []string) error {
 	}
 	var tmp tempInputs
 	defer tmp.cleanup()
+	inputs := newManifestInputs(req) // come li ha passati l'utente, prima dei download
 	if err := tmp.resolveVideo(&req); err != nil {
 		return err
 	}
+	man := videoManifest(c.Name(), prompt, pres, plan, inputs, req)
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
+	start := time.Now()
 	res, err := c.GenerateVideo(context.Background(), req)
 	if err != nil {
+		logFailedJob(man, err, time.Since(start) >= req.Timeout)
 		return err
 	}
 	slug := *name
@@ -638,7 +657,8 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
-	return emit("video", manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+	man.done(files, res)
+	return emit("video", man)
 }
 
 // videoPlan è l'esito dei controlli prima di spendere, stampato da --dry-run.
@@ -820,27 +840,37 @@ func validParamKey(k string) bool {
 	return true
 }
 
+// logEntry è una riga di giv-log.jsonl: ts, poi il manifest (command compreso).
 type logEntry struct {
-	Ts      string `json:"ts"`
-	Command string `json:"command"`
+	Ts string `json:"ts"`
 	manifest
 }
 
 // emit stampa il manifest su stdout e lo appende al registro locale.
 func emit(command string, man manifest) error {
-	entry := logEntry{Ts: time.Now().Format(time.RFC3339), Command: command, manifest: man}
+	man.Command = command
+	logRun(man)
+	return output.PrintJSON(man)
+}
+
+// logRun appende una riga al registro locale; un errore è solo un avviso.
+func logRun(man manifest) {
+	entry := logEntry{Ts: time.Now().Format(time.RFC3339), manifest: man}
 	if err := output.AppendLog(logFile, entry); err != nil {
 		fmt.Fprintf(os.Stderr, "avviso: registro %s non aggiornato: %v\n", logFile, err)
 	}
-	return output.PrintJSON(man)
 }
 
 func cmdLog(args []string) error {
 	fs := flag.NewFlagSet("log", flag.ExitOnError)
 	n := fs.Int("n", 20, "numero di righe da mostrare")
 	sum := fs.Bool("sum-cost", false, "totale generazioni e costo registrato")
+	by := fs.String("by", "", "con --sum-cost: totali anche per provider o model")
 	asJSON := fs.Bool("json", false, "righe raw JSONL")
 	fs.Parse(args)
+	if *by != "" && *by != "provider" && *by != "model" {
+		return usageError("--by accetta provider oppure model, non %q", *by)
+	}
 	data, err := os.ReadFile(logFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -854,17 +884,8 @@ func cmdLog(args []string) error {
 			lines = append(lines, l)
 		}
 	}
-	if *sum {
-		var total float64
-		for _, l := range lines {
-			var e struct {
-				CostUSD float64 `json:"cost_usd"`
-			}
-			if json.Unmarshal([]byte(l), &e) == nil {
-				total += e.CostUSD
-			}
-		}
-		return output.PrintJSON(map[string]any{"generations": len(lines), "cost_usd": total})
+	if *sum || *by != "" {
+		return output.PrintJSON(sumLog(lines, *by))
 	}
 	if len(lines) > *n {
 		lines = lines[len(lines)-*n:]
@@ -881,12 +902,18 @@ func cmdLog(args []string) error {
 			continue
 		}
 		cost := ""
-		if e.CostUSD > 0 {
+		switch {
+		case e.CostUSD > 0:
 			cost = fmt.Sprintf("  $%.4f", e.CostUSD)
+		case e.CostEstUSD > 0:
+			cost = fmt.Sprintf("  ~$%.4f", e.CostEstUSD) // stimato
 		}
 		file0 := ""
 		if len(e.Files) > 0 {
 			file0 = e.Files[0].Path
+		}
+		if e.Status != "" {
+			file0 = e.Status + " job " + e.JobID
 		}
 		fmt.Printf("%s  %-5s  %s/%s%s  %s\n", e.Ts, e.Command, e.Provider, e.Model, cost, file0)
 	}

@@ -459,7 +459,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 			if err != nil {
 				return nil, err
 			}
-			return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}}, nil
+			return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.RequestID}, nil
 		case "failed", "error", "expired":
 			fmt.Fprintln(os.Stderr)
 			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
@@ -585,7 +585,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 				}
 				media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 			}
-			return &provider.Result{Media: media, CostUSD: st.Usage.Cost}, nil
+			return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
 		case "failed", "cancelled", "error":
 			fmt.Fprintln(os.Stderr)
 			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))

@@ -1,8 +1,10 @@
 package output
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +59,64 @@ func Ext(mime string) string {
 		}
 		return ".bin"
 	}
+}
+
+// MP4Duration legge la durata in secondi (arrotondata al centesimo) dal box
+// moov/mvhd di un file MP4; false se il file non è un MP4 leggibile.
+func MP4Duration(data []byte) (float64, bool) {
+	moov, ok := mp4Box(data, "moov")
+	if !ok {
+		return 0, false
+	}
+	mvhd, ok := mp4Box(moov, "mvhd")
+	if !ok || len(mvhd) < 1 {
+		return 0, false
+	}
+	var scale uint32
+	var dur uint64
+	switch mvhd[0] { // versione: 0 = campi a 32 bit, 1 = date e durata a 64 bit
+	case 0:
+		if len(mvhd) < 20 {
+			return 0, false
+		}
+		scale, dur = binary.BigEndian.Uint32(mvhd[12:]), uint64(binary.BigEndian.Uint32(mvhd[16:]))
+	case 1:
+		if len(mvhd) < 32 {
+			return 0, false
+		}
+		scale, dur = binary.BigEndian.Uint32(mvhd[20:]), binary.BigEndian.Uint64(mvhd[24:])
+	default:
+		return 0, false
+	}
+	if scale == 0 {
+		return 0, false
+	}
+	return math.Round(float64(dur)/float64(scale)*100) / 100, true
+}
+
+// mp4Box restituisce il contenuto del primo box di tipo typ al livello di data.
+func mp4Box(data []byte, typ string) ([]byte, bool) {
+	for len(data) >= 8 {
+		size, hdr := uint64(binary.BigEndian.Uint32(data)), uint64(8)
+		name := string(data[4:8])
+		switch size {
+		case 0: // fino alla fine del file
+			size = uint64(len(data))
+		case 1: // dimensione a 64 bit dopo il tipo
+			if len(data) < 16 {
+				return nil, false
+			}
+			size, hdr = binary.BigEndian.Uint64(data[8:]), 16
+		}
+		if size < hdr || size > uint64(len(data)) {
+			return nil, false
+		}
+		if name == typ {
+			return data[hdr:size], true
+		}
+		data = data[size:]
+	}
+	return nil, false
 }
 
 // Slug deriva un nome file dal prompt (max 40 caratteri).

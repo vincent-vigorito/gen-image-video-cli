@@ -57,35 +57,43 @@ func cmdPresets(args []string) error {
 }
 
 // applyPresets espande prompt e negative di giv video coi preset scelti per il
-// modello m. Senza preset né --tutela restituisce prompt e negative identici e non
-// legge la libreria. Coi preset e --image la tutela di default è "prodotto";
-// "--tutela no" la toglie. Gli avvisi vanno su stderr; gli errori sono d'uso (codice 2).
+// modello m (vedi videoPresets).
 func applyPresets(names []string, protect, prompt, negative, m string, in presets.Inputs) (string, string, error) {
+	res, err := videoPresets(names, protect, prompt, negative, m, in)
+	return res.Prompt, res.Negative, err
+}
+
+// videoPresets espande prompt e negative di giv video coi preset scelti per il
+// modello m; il risultato porta anche preset applicati e avvisi per il manifest.
+// Senza preset né --tutela restituisce prompt e negative identici e non legge la
+// libreria. Coi preset e --image la tutela di default è "prodotto"; "--tutela no"
+// la toglie. Gli avvisi vanno anche su stderr; gli errori sono d'uso (codice 2).
+func videoPresets(names []string, protect, prompt, negative, m string, in presets.Inputs) (presets.Result, error) {
 	off := protect == "no"
 	if off {
 		protect = ""
 	}
 	if len(names) == 0 && protect == "" {
-		return prompt, negative, nil
+		return presets.Result{Prompt: prompt, Negative: negative}, nil
 	}
 	if protect == "" && !off && in.FirstFrame {
 		protect = "prodotto"
 	}
 	lib, err := loadPresets()
 	if err != nil {
-		return "", "", err
+		return presets.Result{}, err
 	}
 	res, err := lib.Expand(presets.Request{
 		Prompt: prompt, Negative: negative, Presets: names,
 		Model: m, Protect: protect, Inputs: &in,
 	})
 	if err != nil {
-		return "", "", usageError("%v", err)
+		return presets.Result{}, usageError("%v", err)
 	}
 	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, "avviso:", w)
 	}
-	return res.Prompt, res.Negative, nil
+	return res, nil
 }
 
 // presetShow è l'uscita di giv presets show: gli stessi campi che finiranno nel
