@@ -568,7 +568,7 @@ func cmdVideo(args []string) error {
 	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
 	// il manifest tiene il prompt dell'utente
 	sendPrompt, sendNegative, err := applyPresets(presetNames, *protect, prompt, *negative, m,
-		presets.Inputs{FirstFrame: *image != "", Duration: *duration})
+		presets.Inputs{FirstFrame: *image != "", LastFrame: *lastFrame != "", Duration: *duration})
 	if err != nil {
 		return err
 	}
