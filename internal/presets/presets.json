@@ -1,0 +1,257 @@
+{
+  "tutele": {
+    "prodotto": "keep the product, its label and its proportions exactly as in the first frame; no new text",
+    "illustrazione": "keep the EXACT flat style, colors and composition; NO text, NO words, NO letters, NO numbers anywhere"
+  },
+  "presets": [
+    {
+      "id": "static",
+      "tipo": "camera",
+      "descrizione": "camera ferma su treppiede: si muove solo la scena",
+      "frase": "static locked-off camera on a tripod, no camera movement, only the subject moves",
+      "varianti": {
+        "kling": "Camera movement: fixed shot, the camera stays completely still; only the subject moves",
+        "veo": "static shot, locked-off tripod camera, no camera movement",
+        "seedance": "fixed lens, the camera does not move; only the subject moves",
+        "wan": "fixed camera shot, the camera remains still, only the subject moves"
+      },
+      "negative": "camera movement, camera shake, zoom",
+      "incompatibile_con": ["handheld", "bullet-time"]
+    },
+    {
+      "id": "dolly-in",
+      "tipo": "camera",
+      "descrizione": "la camera avanza lentamente verso il soggetto",
+      "frase": "slow cinematic dolly in toward the subject, smooth, steady",
+      "varianti": {
+        "kling": "Camera movement: the camera slowly pushes in toward the subject, smooth and steady",
+        "veo": "slow dolly-in shot toward the subject, smooth and steady cinematic camera movement",
+        "seedance": "the lens slowly pushes in toward the subject, smooth and steady",
+        "wan": "push-in shot, the camera slowly moves forward toward the subject, smooth and steady"
+      },
+      "negative": "camera shake, zoom out",
+      "incompatibile_con": ["dolly-out"]
+    },
+    {
+      "id": "dolly-out",
+      "tipo": "camera",
+      "descrizione": "la camera arretra lentamente dal soggetto e rivela l'ambiente",
+      "frase": "slow cinematic dolly out away from the subject, revealing the surroundings, smooth, steady",
+      "varianti": {
+        "kling": "Camera movement: the camera slowly pulls back away from the subject, revealing the surroundings, smooth and steady",
+        "veo": "slow dolly-out shot pulling away from the subject to reveal the surroundings, smooth and steady",
+        "seedance": "the lens slowly pulls back from the subject, revealing the surroundings, smooth and steady",
+        "wan": "pull-back shot, the camera slowly moves backward away from the subject, revealing the surroundings"
+      },
+      "negative": "camera shake, zoom in",
+      "incompatibile_con": ["dolly-in"]
+    },
+    {
+      "id": "orbit",
+      "tipo": "camera",
+      "descrizione": "la camera gira attorno al soggetto, che resta al centro",
+      "frase": "smooth 360-degree orbit around the subject, the camera circles while keeping the subject centered",
+      "varianti": {
+        "kling": "Camera movement: the camera orbits 360 degrees around the subject in a smooth continuous circle, keeping the subject centered",
+        "veo": "smooth orbit shot circling 360 degrees around the subject, the subject stays centered in frame",
+        "seedance": "surround shot, the lens circles 360 degrees around the subject, keeping it centered",
+        "wan": "orbiting shot, the camera rotates 360 degrees around the subject, keeping the subject in the center of the frame"
+      },
+      "negative": "camera shake, cuts, subject leaving the frame",
+      "richiede": {"durata_min": 5}
+    },
+    {
+      "id": "arc-left",
+      "tipo": "camera",
+      "descrizione": "la camera descrive un arco verso sinistra attorno al soggetto",
+      "frase": "slow arc shot, the camera curves to the left around the subject, keeping it centered",
+      "varianti": {
+        "kling": "Camera movement: the camera arcs slowly to the left around the subject, keeping it centered",
+        "veo": "slow arc shot moving left around the subject, the subject stays centered",
+        "seedance": "the lens arcs slowly to the left around the subject, keeping it centered",
+        "wan": "arc shot, the camera moves in a half circle to the left around the subject"
+      },
+      "negative": "camera shake",
+      "incompatibile_con": ["arc-right"]
+    },
+    {
+      "id": "arc-right",
+      "tipo": "camera",
+      "descrizione": "la camera descrive un arco verso destra attorno al soggetto",
+      "frase": "slow arc shot, the camera curves to the right around the subject, keeping it centered",
+      "varianti": {
+        "kling": "Camera movement: the camera arcs slowly to the right around the subject, keeping it centered",
+        "veo": "slow arc shot moving right around the subject, the subject stays centered",
+        "seedance": "the lens arcs slowly to the right around the subject, keeping it centered",
+        "wan": "arc shot, the camera moves in a half circle to the right around the subject"
+      },
+      "negative": "camera shake",
+      "incompatibile_con": ["arc-left"]
+    },
+    {
+      "id": "crane-up",
+      "tipo": "camera",
+      "descrizione": "la camera sale in verticale, come su un braccio gru",
+      "frase": "smooth crane up, the camera rises vertically above the subject, revealing the scene from higher",
+      "varianti": {
+        "kling": "Camera movement: the camera rises smoothly upward on a crane, revealing the scene from above",
+        "veo": "crane shot rising up above the subject, revealing the wider scene",
+        "seedance": "the lens rises smoothly upward like a crane, revealing the scene from above",
+        "wan": "crane up shot, the camera moves upward smoothly, revealing the scene from a higher angle"
+      },
+      "negative": "camera shake",
+      "incompatibile_con": ["crane-down"]
+    },
+    {
+      "id": "crane-down",
+      "tipo": "camera",
+      "descrizione": "la camera scende in verticale verso il soggetto, come su un braccio gru",
+      "frase": "smooth crane down, the camera descends vertically from above toward the subject",
+      "varianti": {
+        "kling": "Camera movement: the camera descends smoothly on a crane from above toward the subject",
+        "veo": "crane shot descending from above down to the subject",
+        "seedance": "the lens descends smoothly like a crane from above toward the subject",
+        "wan": "crane down shot, the camera moves downward smoothly from a high angle toward the subject"
+      },
+      "negative": "camera shake",
+      "incompatibile_con": ["crane-up"]
+    },
+    {
+      "id": "pan",
+      "tipo": "camera",
+      "descrizione": "la camera ruota in orizzontale sul posto, da sinistra a destra",
+      "frase": "slow horizontal pan from left to right, the camera rotates in place, smooth and steady",
+      "varianti": {
+        "kling": "Camera movement: the camera pans slowly from left to right, smooth and steady",
+        "veo": "slow panning shot from left to right, smooth and steady",
+        "seedance": "the lens pans slowly from left to right, smooth and steady",
+        "wan": "pan right shot, the camera rotates slowly from left to right while staying in place"
+      },
+      "negative": "camera shake"
+    },
+    {
+      "id": "tilt-up",
+      "tipo": "camera",
+      "descrizione": "la camera ruota in verticale sul posto, dal basso verso l'alto",
+      "frase": "slow tilt up, the camera pivots in place from the bottom of the subject to the top, smooth",
+      "varianti": {
+        "kling": "Camera movement: the camera tilts slowly upward from the bottom of the subject to the top",
+        "veo": "slow tilt-up shot from the base of the subject to the top, smooth",
+        "seedance": "the lens tilts slowly upward from the bottom of the subject to the top",
+        "wan": "tilt up shot, the camera pivots upward from the bottom of the subject to the top"
+      },
+      "negative": "camera shake"
+    },
+    {
+      "id": "push-in-macro",
+      "tipo": "camera",
+      "descrizione": "avvicinamento lento in macro a un dettaglio del soggetto",
+      "frase": "slow macro push-in toward a detail of the subject, extreme close-up, shallow depth of field, smooth",
+      "varianti": {
+        "kling": "Camera movement: the camera slowly pushes in to an extreme macro close-up of a detail of the subject, shallow depth of field",
+        "veo": "slow macro push-in to an extreme close-up of a detail, shallow depth of field, smooth",
+        "seedance": "the lens slowly pushes in to a macro close-up of a detail of the subject, shallow depth of field",
+        "wan": "macro push-in shot, the camera moves slowly toward a detail of the subject, extreme close-up, shallow depth of field"
+      },
+      "negative": "camera shake, blurry subject, zoom out"
+    },
+    {
+      "id": "crash-zoom",
+      "tipo": "camera",
+      "descrizione": "zoom rapidissimo verso il soggetto, effetto d'impatto",
+      "frase": "sudden fast crash zoom into the subject, dramatic, energetic",
+      "varianti": {
+        "kling": "Camera movement: a sudden fast crash zoom into the subject, dramatic and energetic",
+        "veo": "dramatic crash zoom, a sudden rapid zoom-in on the subject",
+        "seedance": "the lens performs a sudden rapid zoom in on the subject, dramatic impact",
+        "wan": "crash zoom shot, the camera rapidly zooms in on the subject"
+      },
+      "negative": "slow movement, zoom out",
+      "incompatibile_con": ["slow-motion", "bullet-time"]
+    },
+    {
+      "id": "handheld",
+      "tipo": "camera",
+      "descrizione": "camera a mano con leggero tremolio naturale, stile documentario",
+      "frase": "handheld camera, subtle natural shake, documentary style, following the subject",
+      "varianti": {
+        "kling": "Camera movement: handheld camera with subtle natural shake, documentary style, following the subject",
+        "veo": "handheld shot with subtle natural camera shake, documentary feel",
+        "seedance": "handheld lens with slight natural shake, documentary style, following the subject",
+        "wan": "handheld shot, the camera follows the subject with slight natural shake, documentary style"
+      },
+      "negative": "perfectly static camera, tripod",
+      "incompatibile_con": ["static", "timelapse", "bullet-time"]
+    },
+    {
+      "id": "fpv-drone",
+      "tipo": "camera",
+      "descrizione": "volo veloce in prima persona di un drone FPV attraverso la scena",
+      "frase": "fast FPV drone shot flying through the scene, dynamic sweeping motion, low altitude",
+      "varianti": {
+        "kling": "Camera movement: fast FPV drone flight through the scene, dynamic sweeping motion close to the ground",
+        "veo": "fast FPV drone shot flying low through the scene, dynamic sweeping aerial movement",
+        "seedance": "the lens flies through the scene like an FPV drone, fast and dynamic, close to the ground",
+        "wan": "FPV drone shot, the camera flies quickly through the scene at low altitude, dynamic movement"
+      },
+      "negative": "static camera, camera shake",
+      "incompatibile_con": ["bullet-time"]
+    },
+    {
+      "id": "rack-focus",
+      "tipo": "camera",
+      "descrizione": "la messa a fuoco passa dal primo piano allo sfondo, camera ferma",
+      "frase": "rack focus shot, the focus shifts smoothly from the foreground to the background, shallow depth of field, camera still",
+      "varianti": {
+        "kling": "Camera movement: the camera stays still while the focus pulls smoothly from the foreground to the background, shallow depth of field",
+        "veo": "rack focus shot, focus pulls from the foreground to the background, shallow depth of field",
+        "seedance": "the lens stays still and the focus shifts smoothly from the foreground to the background, shallow depth of field",
+        "wan": "rack focus shot, the focus shifts from the foreground to the background, shallow depth of field, camera still"
+      },
+      "negative": "camera movement, everything in focus",
+      "incompatibile_con": ["bullet-time"]
+    },
+    {
+      "id": "slow-motion",
+      "tipo": "effetto",
+      "descrizione": "movimento al rallentatore",
+      "frase": "slow motion, high frame rate look, every movement slowed down and fluid",
+      "varianti": {
+        "kling": "slow-motion shot, all movement is slowed down, fluid and detailed",
+        "veo": "slow motion, 120fps high frame rate look, fluid movement",
+        "seedance": "slow motion, the action is slowed down, fluid and detailed",
+        "wan": "slow-motion shot, the movement is slowed down and fluid"
+      },
+      "negative": "fast motion, time-lapse, jerky motion",
+      "incompatibile_con": ["timelapse", "crash-zoom"]
+    },
+    {
+      "id": "timelapse",
+      "tipo": "effetto",
+      "descrizione": "tempo accelerato: luce, ombre e nuvole scorrono veloci",
+      "frase": "time-lapse, time passes quickly, light, shadows and clouds move fast while the scene stays in place",
+      "varianti": {
+        "kling": "time-lapse effect, time passes rapidly, light and shadows sweep across the scene, clouds move fast",
+        "veo": "time-lapse, hours pass in seconds, fast moving clouds and shifting light",
+        "seedance": "time-lapse, time flows rapidly, light and shadows change quickly, clouds move fast",
+        "wan": "time-lapse shot, time passes quickly, light and shadows change rapidly"
+      },
+      "negative": "slow motion",
+      "incompatibile_con": ["slow-motion", "handheld"]
+    },
+    {
+      "id": "bullet-time",
+      "tipo": "effetto",
+      "descrizione": "istante congelato mentre la camera gira attorno al soggetto",
+      "frase": "bullet time effect, the moment is frozen in mid-action while the camera sweeps around the subject",
+      "varianti": {
+        "kling": "bullet time effect: time freezes mid-action and the camera sweeps around the frozen subject",
+        "veo": "bullet time effect, a frozen moment in mid-air while the camera sweeps around the subject",
+        "seedance": "bullet time, time freezes mid-action while the lens sweeps around the subject",
+        "wan": "bullet time effect, the action freezes while the camera moves around the subject"
+      },
+      "negative": "static camera, motion blur",
+      "incompatibile_con": ["static", "handheld", "crash-zoom", "fpv-drone", "rack-focus"]
+    }
+  ]
+}
