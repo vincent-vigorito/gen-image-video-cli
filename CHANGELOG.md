@@ -6,6 +6,52 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+### Aggiunto
+
+- `giv video`: **`--last-frame`** (ultimo fotogramma), **`--ref`** ripetibile (immagini di
+  riferimento), **`--audio on|off`**, **`--seed`**, **`--param k=v`** ripetibile (parametro
+  passante del modello), **`--timeout`** (tetto di attesa del job, default `15m`). Su
+  **xai** diventano `last_frame`, `reference_images` e `generate_audio`; su
+  **openrouter** `frame_images` con `last_frame`, `input_references`, `generate_audio`,
+  `seed` e i parametri passanti. `--last-frame` e `--ref` accettano anche URL http(s).
+- **Capacità e prezzi prima di spendere**: prima di avviare un video `giv` legge
+  `/videos/models` di OpenRouter (gratuito) o una tabella interna per xai (20/11/2026). Un
+  controllo strutturale non supportato (fotogrammi, riferimenti, durata, risoluzione,
+  aspect, audio, `--param` fuori lista) esce con codice 2 prima di qualsiasi chiamata e
+  indica i modelli dello stesso provider che lo supportano; uno di rifinitura (`--seed`,
+  `--negative`, modello fuori catalogo) dà un avviso.
+- `giv video --dry-run`: nessuna generazione, stampa in JSON parametri, prompt finale,
+  avvisi e **costo stimato** (`cost_est_usd`, `cost_source`). `--max-cost <usd>` rifiuta
+  con codice 2 una stima oltre il tetto o non stimabile; `--strict` rende errori anche i
+  controlli di rifinitura.
+- `giv models --kind image|video|other` filtra per tipo; con `--kind video --caps`
+  (anche `--json`) mostra capacità e prezzo al secondo dei modelli video (xai, openrouter).
+- **Preset di camera ed effetti**: `giv presets [--json]` elenca 15 preset di camera e 3
+  di effetto, `giv presets show <nome> [<nome>]` mostra la frase finale per un modello
+  (`--model`, `--prompt`, `--negative`, `--tutela`, `--strict`), senza chiamate.
+  `giv video --preset <nome>` (al massimo uno di camera e uno di effetto) aggiunge al
+  prompt la variante della famiglia del modello (kling, veo, seedance, wan; altrimenti la
+  frase generica, con avviso); `--tutela prodotto|illustrazione|no` aggiunge una clausola
+  (`prodotto` è il default con `--image`). I file `./giv-presets.json` e
+  `~/.config/giv/presets.json` aggiungono o sostituiscono preset.
+
+### Modificato
+
+- `--negative` su **openrouter**: prima ignorato con avviso, ora inviato dove il modello
+  lo prevede (`negativePrompt`, `negative_prompt`); altrove resta un avviso.
+- Su **xai** con `--image` un avviso dice che `--aspect` è ignorato (il video segue
+  l'immagine).
+- I controlli che il modello non supporta prima venivano inviati e fallivano dal provider
+  (o venivano ignorati): ora escono con codice 2 prima della chiamata. I comandi di oggi
+  mandano lo stesso corpo di richiesta e producono lo stesso manifest.
+
+### Rimosso
+
+- Video **gemini**: tolto il percorso Veo (`predictLongRunning`), spento sulla Gemini API
+  dal 22/10/2026. `giv video --provider gemini` esce subito con codice 2, anche con
+  `--model`, senza chiamate, e indica `--provider openrouter --model
+  google/gemini-omni-1.2-flash` (Veo resta su OpenRouter: `google/veo-3.1`).
+
 ## [0.7.0] - 2026-11-13
 
 ### Aggiunto

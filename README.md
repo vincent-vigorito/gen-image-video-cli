@@ -105,7 +105,8 @@ giv image   [flag] "<prompt>"                 # genera immagini
 giv video   [flag] "<prompt>"                 # genera video (job asincrono, 1-5 min)
 giv log     [-n N] [--sum-cost] [--json]      # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
-giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--tutela prodotto|illustrazione]
+giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
+                 [--tutela prodotto|illustrazione] [--strict]
                                               # frase finale dei preset per quel modello, senza chiamate
 giv version
 ```
@@ -212,12 +213,15 @@ inputs, cost_est_usd, cost_source, warnings}`; serve comunque la chiave del prov
   coppie incompatibili (es. `dolly-in` + `dolly-out`, `slow-motion` + `timelapse`) escono
   con codice 2.
 - La frase cambia con la famiglia del modello, ricavata dal nome (`kling`, `veo`,
-  `seedance`, `wan`); per le altre (es. `grok`, `omni`) vale la frase generica, con avviso.
+  `seedance`, `wan`); per le altre (es. `grok`, `omni`) vale la frase generica, con avviso
+  (con `--strict` di `presets show`, codice 2).
+- Dove il modello ha il negative (kling, veo, wan) i negative dei preset si sommano a
+  `--negative`; altrove si omettono.
 - `--tutela` aggiunge una clausola: `prodotto` (default con `--image`: prodotto, etichetta
   e proporzioni come nel primo fotogramma), `illustrazione` (stile piatto, niente testo),
   `no`.
-- `giv presets show orbit --model kwaivgi/kling-v3.0-pro --prompt "…"` mostra la frase
-  finale, senza chiamate.
+- `giv presets show orbit --model kwaivgi/kling-v3.0-pro --prompt "…" [--negative "…"]`
+  mostra prompt e negative finali, senza chiamate.
 - `./giv-presets.json` e `~/.config/giv/presets.json` aggiungono o sostituiscono preset
   (vince il primo), nello stesso formato della libreria incorporata
   (`internal/presets/presets.json`); un file malformato esce con codice 2.
