@@ -47,6 +47,7 @@ type Media struct {
 type Result struct {
 	Media   []Media
 	CostUSD float64 // 0 = costo non riportato dal provider
+	JobID   string  // id del job asincrono; "" se il provider non ne ha
 }
 
 type Provider interface {

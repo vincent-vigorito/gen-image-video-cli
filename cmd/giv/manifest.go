@@ -100,10 +100,10 @@ func videoManifest(prov, prompt string, pres presets.Result, plan *videoPlan, in
 	return man
 }
 
-// done completa il manifest dopo la generazione: file, durata reale e costo; il
+// done completa il manifest dopo la generazione: file, job, durata reale e costo; il
 // costo riportato dal provider prende il posto della stima.
 func (man *manifest) done(files []output.FileInfo, res *provider.Result) {
-	man.Files = files
+	man.Files, man.JobID = files, res.JobID
 	if res.CostUSD > 0 {
 		man.CostUSD, man.CostEstUSD, man.CostSource = res.CostUSD, 0, ""
 	}
