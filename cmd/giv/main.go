@@ -176,7 +176,13 @@ giv video:
   --resolution <r>   720p, 1080p
   --negative "<t>"   negative prompt
   --image <file>     frame iniziale (image-to-video)
+  --last-frame <file|url>  ultimo fotogramma (xai 1.5, openrouter dove il modello lo prevede)
+  --ref <file|url>   immagine di riferimento, ripetibile (xai reference_images, openrouter input_references)
   --duration <s>     durata in secondi (valori ammessi dal modello)
+  --audio on|off     audio nativo (default del modello)
+  --seed <n>         seed (openrouter dove il modello lo rispetta; xai ignorato con avviso)
+  --param k=v        parametro passante del modello, ripetibile (openrouter; valore JSON o stringa)
+  --timeout <durata> tetto di attesa del job (default 15m)
 
 Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY e GIV_PROVIDER
              da env di processo, ./credentials.env, ./.env o ~/.config/giv/credentials.env
@@ -399,6 +405,13 @@ func cmdVideo(args []string) error {
 	duration := fs.Int("duration", 0, "durata in secondi (0 = default modello)")
 	out := fs.String("out", "out", "directory di output")
 	name := fs.String("name", "", "slug per i nomi file")
+	lastFrame := fs.String("last-frame", "", "ultimo fotogramma (file o URL)")
+	var refs, params stringList
+	fs.Var(&refs, "ref", "immagine di riferimento, file o URL (ripetibile)")
+	audio := fs.String("audio", "", "audio nativo: on o off (default del modello)")
+	seed := fs.Int("seed", 0, "seed (dove il modello lo rispetta)")
+	fs.Var(&params, "param", "parametro passante del modello chiave=valore (ripetibile)")
+	timeout := fs.Duration("timeout", 15*time.Minute, "tetto di attesa del job (es. 20m)")
 	prompt, err := parsePrompt(fs, args)
 	if err != nil {
 		return err
@@ -412,22 +425,57 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
+	// controlli dei flag nuovi: codice 2 prima di chiave, download e chiamate
+	req := provider.VideoRequest{
+		Prompt: prompt, Model: m, Aspect: *aspect,
+		Resolution: *resolution, Negative: *negative,
+		Duration: *duration, Seed: *seed, Timeout: *timeout,
+	}
+	if req.Audio, err = parseAudio(*audio); err != nil {
+		return err
+	}
+	if req.Params, err = parseParams(params); err != nil {
+		return err
+	}
+	if *seed < 0 {
+		return usageError("--seed deve essere un intero non negativo")
+	}
+	if *timeout <= 0 {
+		return usageError("--timeout deve essere una durata positiva (es. 20m)")
+	}
+	if *lastFrame != "" {
+		if err := checkInputFile("--last-frame", *lastFrame); err != nil {
+			return err
+		}
+	}
+	for _, r := range refs {
+		if err := checkInputFile("--ref", r); err != nil {
+			return err
+		}
+	}
 	c, err := newProvider(*prov)
 	if err != nil {
 		return err
 	}
-	img := *image
-	if img != "" {
-		if img, err = resolveInput(img); err != nil {
+	if req.Image = *image; req.Image != "" {
+		if req.Image, err = resolveInput(req.Image); err != nil {
 			return err
 		}
 	}
+	if req.LastFrame = *lastFrame; req.LastFrame != "" {
+		if req.LastFrame, err = resolveInput(req.LastFrame); err != nil {
+			return err
+		}
+	}
+	for _, r := range refs {
+		p, err := resolveInput(r)
+		if err != nil {
+			return err
+		}
+		req.Refs = append(req.Refs, p)
+	}
 	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
-	res, err := c.GenerateVideo(context.Background(), provider.VideoRequest{
-		Prompt: prompt, Model: m, Aspect: *aspect,
-		Resolution: *resolution, Negative: *negative, Image: img,
-		Duration: *duration,
-	})
+	res, err := c.GenerateVideo(context.Background(), req)
 	if err != nil {
 		return err
 	}
@@ -440,6 +488,78 @@ func cmdVideo(args []string) error {
 		return err
 	}
 	return emit("video", manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+}
+
+// parseAudio legge --audio: vuoto = default del modello.
+func parseAudio(v string) (*bool, error) {
+	switch v {
+	case "":
+		return nil, nil
+	case "on":
+		on := true
+		return &on, nil
+	case "off":
+		off := false
+		return &off, nil
+	}
+	return nil, usageError("--audio accetta on oppure off, non %q", v)
+}
+
+// parseParams legge i --param chiave=valore: il valore vale come JSON se lo è
+// (numeri, true/false, oggetti), altrimenti come stringa.
+func parseParams(list []string) (map[string]any, error) {
+	if len(list) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]any, len(list))
+	for _, kv := range list {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, usageError("--param %q: serve la forma chiave=valore", kv)
+		}
+		if !validParamKey(k) {
+			return nil, usageError("--param %q: chiave non valida (lettere, cifre e _, inizia con una lettera)", kv)
+		}
+		if _, dup := out[k]; dup {
+			return nil, usageError("--param %s ripetuto", k)
+		}
+		dec := json.NewDecoder(strings.NewReader(v))
+		dec.UseNumber()
+		var val any
+		if err := dec.Decode(&val); err != nil || dec.More() {
+			val = v
+		}
+		out[k] = val
+	}
+	return out, nil
+}
+
+func validParamKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i, r := range k {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '_'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// checkInputFile rifiuta con codice 2 un file locale che non c'è; gli URL
+// http(s) si controllano al download.
+func checkInputFile(flagName, p string) error {
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+		return nil
+	}
+	st, err := os.Stat(p)
+	if err != nil || !st.Mode().IsRegular() {
+		return usageError("%s %s: file non trovato", flagName, p)
+	}
+	return nil
 }
 
 type logEntry struct {

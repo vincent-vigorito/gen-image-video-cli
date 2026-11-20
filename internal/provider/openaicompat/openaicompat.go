@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -348,6 +349,15 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 	if req.Negative != "" {
 		fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da %s, ignorato\n", c.name)
 	}
+	if req.Seed != 0 {
+		fmt.Fprintf(os.Stderr, "avviso: --seed non supportato da %s, ignorato\n", c.name)
+	}
+	if len(req.Params) > 0 {
+		fmt.Fprintf(os.Stderr, "avviso: --param non supportato da %s, ignorato\n", c.name)
+	}
+	if req.Image != "" && req.Aspect != "" {
+		fmt.Fprintf(os.Stderr, "avviso: con --image %s ignora --aspect (segue l'immagine)\n", c.name)
+	}
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
 	if req.Duration > 0 {
 		body["duration"] = req.Duration
@@ -365,6 +375,27 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 		}
 		body["image"] = map[string]string{"url": u}
 	}
+	if req.LastFrame != "" {
+		u, err := dataURL(req.LastFrame)
+		if err != nil {
+			return nil, err
+		}
+		body["last_frame"] = map[string]string{"url": u}
+	}
+	if len(req.Refs) > 0 {
+		refs := make([]map[string]string, 0, len(req.Refs))
+		for _, r := range req.Refs {
+			u, err := dataURL(r)
+			if err != nil {
+				return nil, err
+			}
+			refs = append(refs, map[string]string{"url": u})
+		}
+		body["reference_images"] = refs
+	}
+	if req.Audio != nil {
+		body["generate_audio"] = *req.Audio
+	}
 
 	var job struct {
 		RequestID string `json:"request_id"`
@@ -380,10 +411,11 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(job.RequestID, err) }()
 
-	deadline := time.Now().Add(15 * time.Minute)
+	timeout := jobTimeout(req.Timeout)
+	deadline := time.Now().Add(timeout)
 	for {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo 15m", c.name)
+			return nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -431,16 +463,56 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 	if req.Aspect != "" {
 		body["aspect_ratio"] = req.Aspect
 	}
-	if req.Image != "" {
-		u, err := dataURL(req.Image)
+	var frames []map[string]any
+	for _, f := range []struct{ path, kind string }{{req.Image, "first_frame"}, {req.LastFrame, "last_frame"}} {
+		if f.path == "" {
+			continue
+		}
+		part, err := imageURLPart(f.path)
 		if err != nil {
 			return nil, err
 		}
-		body["frame_images"] = []map[string]any{{
-			"type":       "image_url",
-			"image_url":  map[string]string{"url": u},
-			"frame_type": "first_frame",
-		}}
+		part["frame_type"] = f.kind
+		frames = append(frames, part)
+	}
+	if len(frames) > 0 {
+		body["frame_images"] = frames
+	}
+	if len(req.Refs) > 0 {
+		refs := make([]map[string]any, 0, len(req.Refs))
+		for _, r := range req.Refs {
+			part, err := imageURLPart(r)
+			if err != nil {
+				return nil, err
+			}
+			refs = append(refs, part)
+		}
+		body["input_references"] = refs
+	}
+	if req.Audio != nil {
+		body["generate_audio"] = *req.Audio
+	}
+	if req.Seed != 0 {
+		body["seed"] = req.Seed
+	}
+	params := req.Params
+	if req.Negative != "" {
+		key := routerNegativeKey(req.Model)
+		switch {
+		case key == "":
+			fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da %s, ignorato\n", req.Model)
+		case hasKey(params, key):
+			fmt.Fprintf(os.Stderr, "avviso: --param %s prevale su --negative\n", key)
+		default:
+			params = maps.Clone(params)
+			if params == nil {
+				params = map[string]any{}
+			}
+			params[key] = req.Negative
+		}
+	}
+	if len(params) > 0 {
+		body["provider"] = map[string]any{"options": routerOptions(req.Model, params)}
 	}
 
 	var job struct {
@@ -459,10 +531,11 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(job.ID, err) }()
 
-	deadline := time.Now().Add(15 * time.Minute)
+	timeout := jobTimeout(req.Timeout)
+	deadline := time.Now().Add(timeout)
 	for {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo 15m", c.name)
+			return nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -503,6 +576,68 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 			fmt.Fprint(os.Stderr, ".")
 		}
 	}
+}
+
+// imageURLPart è un'immagine nella forma di OpenRouter (frame_images, input_references).
+func imageURLPart(path string) (map[string]any, error) {
+	u, err := dataURL(path)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"type": "image_url", "image_url": map[string]string{"url": u}}, nil
+}
+
+// routerNegativeKey è il parametro passante del negative prompt per famiglia di
+// modello (allowed_passthrough_parameters di /videos/models, 20/11/2026); "" se
+// la famiglia non lo prevede.
+func routerNegativeKey(model string) string {
+	switch {
+	case strings.HasPrefix(model, "google/veo"):
+		return "negativePrompt"
+	case strings.HasPrefix(model, "kwaivgi/kling"), strings.HasPrefix(model, "alibaba/wan"):
+		return "negative_prompt"
+	}
+	return ""
+}
+
+// routerOptionSlugs sono i provider di OpenRouter che servono i modelli di un
+// autore; senza voce vale l'autore stesso. OpenRouter inoltra solo le opzioni
+// del provider instradato, le altre non arrivano a nessuno.
+var routerOptionSlugs = map[string][]string{
+	"google":    {"google-vertex"},
+	"bytedance": {"seed", "byteplus"},
+}
+
+// routerOptions mette i parametri passanti in provider.options.<slug>; per
+// google-vertex vanno annidati in "parameters".
+func routerOptions(model string, params map[string]any) map[string]any {
+	author, _, _ := strings.Cut(model, "/")
+	slugs := routerOptionSlugs[author]
+	if slugs == nil {
+		slugs = []string{author}
+	}
+	opts := make(map[string]any, len(slugs))
+	for _, s := range slugs {
+		if s == "google-vertex" {
+			opts[s] = map[string]any{"parameters": params}
+		} else {
+			opts[s] = params
+		}
+	}
+	return opts
+}
+
+func hasKey(m map[string]any, k string) bool {
+	_, ok := m[k]
+	return ok
+}
+
+// jobTimeout è il tetto di attesa di un job video: 15 minuti se non indicato.
+func jobTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 15 * time.Minute
+	}
+	return d
 }
 
 // --- helper ---
