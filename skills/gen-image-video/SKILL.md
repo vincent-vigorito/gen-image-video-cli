@@ -23,7 +23,11 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 
 - **stdout: solo il manifest JSON** `{provider, model, prompt, files:[{path, mime, bytes}], cost_usd?}`.
   Log, avvisi e puntini di polling vanno su stderr. `cost_usd` c'è quando il provider
-  riporta il costo (OpenRouter): usarlo per tracciare il budget.
+  riporta il costo (OpenRouter): usarlo per tracciare il budget. Campi opzionali, assenti
+  quando non servono: `command`, `prompt_final` (inviato coi preset), `presets[]`,
+  `inputs` (`image`/`last_frame`/`refs[]` con `sha256` breve), `params`, `job_id`,
+  `duration_s`, `cost_est_usd` + `cost_source` (stima da listino dove il costo non è
+  riportato, es. xai), `warnings[]` (controlli ignorati).
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
   openai e video gemini, anche con `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
@@ -45,7 +49,7 @@ giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
                                                 # elenca modelli (verifica anche l'auth); --caps con --kind video
 giv image   [flag] "<prompt>"                   # genera immagini
 giv video   [flag] "<prompt>"                   # genera video (job asincrono, 1-5 min)
-giv log     [-n N] [--sum-cost] [--json]        # registro generazioni (giv-log.jsonl nella cwd)
+giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                  [--tutela prodotto|illustrazione] [--strict]   # frase finale, senza chiamate
@@ -180,8 +184,11 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 
 ## Costi
 
-- Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); il totale
-  registrato è `giv log --sum-cost`: usarli per il budget.
+- Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); dove il
+  provider non lo riporta (xai) c'è la stima `cost_est_usd`. Il totale registrato è
+  `giv log --sum-cost` (`cost_usd` riportato, `cost_est_usd` stimato, `failed_jobs` e
+  `failed_cost_est_usd` per i job partiti e poi falliti o scaduti, che possono essere
+  stati addebitati); `--by provider|model` divide i totali. Usarli per il budget.
 - Prima della chiamata: `giv video … --dry-run` dà `cost_est_usd` (listino × durata) e
   `--max-cost` fa da tetto. Il $/s dei modelli video è in `giv models --kind video --caps`
   (openrouter: `pricing_skus` di `/videos/models`; xai: tabella interna). I modelli a token

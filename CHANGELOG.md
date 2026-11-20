@@ -34,6 +34,16 @@ versioning [SemVer](https://semver.org/lang/it/).
   frase generica, con avviso); `--tutela prodotto|illustrazione|no` aggiunge una clausola
   (`prodotto` è il default con `--image`). I file `./giv-presets.json` e
   `~/.config/giv/presets.json` aggiungono o sostituiscono preset.
+- **Manifest esteso**, solo con campi opzionali (i manifest di prima si leggono come
+  prima): `command`, `prompt_final`, `presets[]`, `inputs` (file per ruolo con impronta
+  sha256 breve), `params`, `job_id`, `duration_s` (durata reale del video),
+  `cost_est_usd` e `cost_source` (stima da listino dove il provider non riporta il
+  costo), `warnings[]`.
+- **Registro**: una riga anche per i job video partiti e poi falliti o scaduti
+  (`status`, `job_id`), che possono essere stati addebitati. `giv log --sum-cost`
+  riporta separati il costo riportato (`cost_usd`) e quello stimato (`cost_est_usd`),
+  più `failed_jobs` e `failed_cost_est_usd`; `--by provider|model` aggiunge i totali per
+  gruppo.
 
 ### Modificato
 

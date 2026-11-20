@@ -44,7 +44,12 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
   | 10 | chiave API mancante | impostare la chiave del provider |
 - **manifest completo** — path dei file scritti, **mime reale** restituito dal provider
   (non dedotto dall'estensione), byte, e `cost_usd` quando il provider riporta il costo
-  (OpenRouter, immagini e video): un agente con un budget sa quanto ha speso.
+  (OpenRouter, immagini e video): un agente con un budget sa quanto ha speso. Campi in
+  più, presenti solo quando servono: `command`, `prompt_final` (prompt inviato coi
+  preset), `presets[]`, `inputs` (file per ruolo: `image`, `last_frame`, `refs[]`, con
+  impronta sha256 breve; gli URL ridotti a schema e host), `params`, `job_id`,
+  `duration_s` (durata reale del video), `cost_est_usd` e `cost_source` (stima da listino
+  quando il provider non riporta il costo, es. xai), `warnings[]`.
 - **naming deterministico** — `<out>/<slug>-<timestamp>[-n].<ext>`; `--name` per slug
   stabili, `--out` per la directory.
 - **credenziali senza interazione** — env di processo → `./credentials.env` → `./.env` →
@@ -72,7 +77,11 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
 - **riproducibilità** — `--seed` dove il provider lo supporta (immagini: Gemini,
   OpenRouter; video: OpenRouter sui modelli che lo dichiarano).
 - **registro locale** — ogni generazione è appesa a `giv-log.jsonl` nella directory
-  corrente; `giv log` la storia, `giv log --sum-cost` il totale speso registrato.
+  corrente, e anche ogni **job video partito e poi fallito o scaduto** (`status`
+  `failed`/`timeout`, `job_id`), perché può essere stato addebitato. `giv log` la storia;
+  `giv log --sum-cost` il totale riportato (`cost_usd`) e quello stimato
+  (`cost_est_usd`), più i job falliti (`failed_jobs`, `failed_cost_est_usd`); con
+  `--by provider|model` anche i totali per gruppo.
 - **input da URL** — `--input`, `--image`, `--last-frame` e `--ref` accettano anche URL
   http(s), scaricati da soli.
 - **prezzi interrogabili** — `giv models --provider openrouter --json` include il listino
@@ -103,7 +112,7 @@ giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
                                               # modelli disponibili; --caps (con --kind video): capacità e $/s
 giv image   [flag] "<prompt>"                 # genera immagini
 giv video   [flag] "<prompt>"                 # genera video (job asincrono, 1-5 min)
-giv log     [-n N] [--sum-cost] [--json]      # registro locale delle generazioni
+giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                  [--tutela prodotto|illustrazione] [--strict]
