@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,7 +15,7 @@ import (
 // 0.9.1-A (CLI-884): correzioni a giv story dallo spot di prova. Provider finto.
 
 // flag che rigenera il fotogramma chiave (solo con --scene)
-const regenFlag = "--nuovo-fotogramma"
+const regenFlag = "--new-keyframe"
 
 const keyDecl = `,"fotogramma_chiave":{"prompt":"un gatto fermo","costo_dichiarato_usd":0.14}`
 
@@ -137,7 +139,7 @@ func TestStoryFixFotogrammaRigenerato(t *testing.T) {
 
 // 2: tutela dello storyboard.
 func TestStoryFixTutela(t *testing.T) {
-	const prodotto, illus = "keep the product", "NO text, NO words"
+	const prodotto, illus = "the product, its label", "NO text, NO words"
 	run := func(t *testing.T, board string) string {
 		e := newRunEnv(t, board)
 		if _, se, code := e.run(t); code != 0 || e.posts != 1 {
@@ -159,6 +161,13 @@ func TestStoryFixTutela(t *testing.T) {
 	})
 	t.Run("senza campo come oggi", func(t *testing.T) {
 		b := run(t, sb("", sc("s1", keyDecl)))
+		// senza preset ne' tutela il prompt resta quello dell'autore
+		if !strings.Contains(b, `"prompt":"un gatto"`) || strings.Contains(b, prodotto) || strings.Contains(b, illus) {
+			t.Errorf("corpo: %s", b)
+		}
+	})
+	t.Run("coi preset come oggi", func(t *testing.T) {
+		b := run(t, sb("", sc("s1", keyDecl+`,"preset":["dolly-in"]`)))
 		if !strings.Contains(b, prodotto) || strings.Contains(b, illus) {
 			t.Errorf("corpo: %s", b)
 		}
@@ -176,24 +185,31 @@ func TestStoryFixTutela(t *testing.T) {
 	})
 }
 
-// 3: help.
+// 3: help, col binario vero (il flag package esce con os.Exit).
 func TestStoryFixHelp(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "giv")
+	if o, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, o)
+	}
 	cases := []struct {
 		args []string
 		want []string
 	}{
-		{[]string{"--help"}, []string{"check", "run", "cut"}},
-		{[]string{"check", "--help"}, []string{"check"}},
-		{[]string{"run", "--help"}, []string{"run", "--scene", regenFlag}},
-		{[]string{"cut", "--help"}, []string{"cut"}},
+		{[]string{"story", "--help"}, []string{"check", "run", "cut"}},
+		{[]string{"story", "help"}, []string{"check", "run", "cut"}},
+		{[]string{"story", "check", "--help"}, []string{"check"}},
+		{[]string{"story", "run", "--help"}, []string{"run", "--scene", regenFlag}},
+		{[]string{"story", "cut", "--help"}, []string{"cut"}},
 	}
 	for _, c := range cases {
 		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
-			out, se, code := rawStory(t, c.args...)
-			if code != 0 {
-				t.Fatalf("code=%d\n%s", code, se)
+			cmd := exec.Command(bin, c.args...)
+			var so, se bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &so, &se
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("%v\n%s", err, se.String())
 			}
-			all := out + se
+			all := so.String() + se.String()
 			for _, w := range c.want {
 				if !strings.Contains(all, w) {
 					t.Errorf("manca %q in:\n%s", w, all)
