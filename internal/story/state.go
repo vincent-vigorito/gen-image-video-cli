@@ -2,8 +2,6 @@ package story
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,17 +31,15 @@ const (
 	ChargeKeyframe = "fotogramma"
 )
 
-// State è lo stato di giv story run: per ogni scena cosa è fatto, quale job è
-// partito e quanto è stato speso. Fa fede la contabilità privata dell'utente
-// (PrivateStatePath); il file accanto allo storyboard (StatePath) ne è la copia,
-// letta da giv story cut, e deve coincidere.
+// State è lo stato di giv story run, nel file accanto allo storyboard
+// (StatePath): per ogni scena cosa è fatto, quale job è partito e quanto è
+// stato speso. Il tetto di spesa conta gli addebiti registrati qui: togliendo
+// il file il conto riparte da zero.
 type State struct {
-	Version    int                    `json:"version"`
-	Storyboard string                 `json:"storyboard,omitempty"` // percorso assoluto, link risolti
-	Scenes     map[string]*SceneState `json:"scenes"`
+	Version int                    `json:"version"`
+	Scenes  map[string]*SceneState `json:"scenes"`
 
-	path    string // file accanto allo storyboard
-	private string // contabilità privata; "" per uno stato letto con LoadState
+	path string // file accanto allo storyboard
 }
 
 // SceneState è lo stato di una scena video.
@@ -124,10 +120,6 @@ func (st *State) Scene(id string) *SceneState {
 // Path è il percorso del file di stato accanto allo storyboard.
 func (st *State) Path() string { return st.path }
 
-// PrivatePath è il percorso della contabilità privata ("" se lo stato è stato
-// letto con LoadState).
-func (st *State) PrivatePath() string { return st.private }
-
 // StatePath è il file di stato dello storyboard: spot.json -> spot.stato.json.
 func StatePath(storyboard string) string {
 	return strings.TrimSuffix(storyboard, filepath.Ext(storyboard)) + ".stato.json"
@@ -177,116 +169,20 @@ func readState(path string) (*State, error) {
 	return st, nil
 }
 
-// PrivateStatePath è la contabilità privata dello storyboard: un file per
-// storyboard (percorso assoluto, link risolti) in <config utente>/giv/story,
-// cartella 0700 che chi scrive nella cartella dello storyboard non tocca.
-func PrivateStatePath(storyboard string) (string, error) {
-	real, err := realPath(storyboard)
+// OpenRunState apre lo stato di giv story run per lo storyboard, bloccandolo
+// (una sola esecuzione per storyboard): il file accanto allo storyboard, vuoto
+// se non c'è ancora. unlock toglie il blocco.
+func OpenRunState(storyboard string) (st *State, unlock func(), err error) {
+	path := StatePath(storyboard)
+	release, err := lockFile(strings.TrimSuffix(path, ".json")+".lock", storyboard)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
+	if st, err = LoadState(path); err != nil {
+		release()
+		return nil, nil, err
 	}
-	dir := filepath.Join(base, "giv", "story")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	fi, err := os.Lstat(dir)
-	if err != nil {
-		return "", err
-	}
-	if !fi.IsDir() {
-		return "", fmt.Errorf("%s non è una cartella", dir)
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return "", err
-		}
-	}
-	sum := sha256.Sum256([]byte(real))
-	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".json"), nil
-}
-
-func realPath(p string) (string, error) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
-	}
-	return filepath.EvalSymlinks(abs)
-}
-
-// ErrMismatch: il file di stato accanto allo storyboard non coincide con la
-// contabilità privata, o ha job che questa non conosce.
-var ErrMismatch = errors.New("file di stato diverso dalla contabilità privata")
-
-// OpenRunState apre lo stato di giv story run per lo storyboard: blocca la
-// contabilità privata (una sola esecuzione per storyboard), la legge e la
-// confronta col file accanto allo storyboard, che deve coincidere. Senza
-// contabilità privata (progetto copiato, cartella spostata) adotta il file
-// accanto, spesa compresa, solo se non ha job né richieste in corso: imported
-// lo dice. unlock toglie il blocco.
-func OpenRunState(storyboard string) (st *State, unlock func(), imported bool, err error) {
-	priv, err := PrivateStatePath(storyboard)
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("contabilità privata: %w", err)
-	}
-	real, err := realPath(storyboard)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	release, err := lockFile(strings.TrimSuffix(priv, ".json")+".lock", storyboard)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	defer func() {
-		if err != nil {
-			release()
-		}
-	}()
-	shared := StatePath(storyboard)
-	mirror, err := readState(shared)
-	hasMirror := err == nil
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, nil, false, err
-	}
-	st, err = readState(priv)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		st = newState(priv)
-		if hasMirror && len(mirror.Scenes) > 0 {
-			if err := mirror.importable(); err != nil {
-				return nil, nil, false, fmt.Errorf("%w: %s senza contabilità privata (copiato, importato o di un altro utente):\n%w", ErrMismatch, shared, err)
-			}
-			st.Scenes, imported = mirror.Scenes, true
-		}
-	case err != nil:
-		return nil, nil, false, err
-	case hasMirror && !sameState(st, mirror):
-		return nil, nil, false, fmt.Errorf("%w: %s non coincide con %s (modificato da fuori o non aggiornato all'ultimo salvataggio): toglilo, giv story run lo riscrive dalla contabilità privata",
-			ErrMismatch, shared, priv)
-	}
-	st.Storyboard, st.path, st.private = real, shared, priv
-	return st, release, imported, nil
-}
-
-// importable: un file di stato senza contabilità privata si adotta solo se non
-// ha job né richieste dall'esito incerto, che nessuno saprebbe più contare.
-func (st *State) importable() error {
-	var errs []error
-	for _, id := range sortedKeys(st.Scenes) {
-		if sc := st.Scenes[id]; sc.Job != nil || sc.Status == Incerto {
-			errs = append(errs, fmt.Errorf("scena %s: job o richiesta in corso (%s): recuperalo con giv job fetch dalla cartella in cui è partito, poi togli il file", id, sc.Status))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func sameState(a, b *State) bool {
-	x, err1 := a.marshal()
-	y, err2 := b.marshal()
-	return err1 == nil && err2 == nil && bytes.Equal(x, y)
+	return st, release, nil
 }
 
 func (st *State) validate() error {
@@ -369,25 +265,15 @@ func ValidJobID(id string) bool {
 	return true
 }
 
-// ErrMirror: la contabilità privata è salvata, la copia accanto allo
-// storyboard no (un avviso: la prossima esecuzione chiede di toglierla).
-var ErrMirror = errors.New("copia dello stato non salvata")
-
-// Save scrive in modo atomico la contabilità privata, poi la copia accanto
-// allo storyboard. Un errore sulla contabilità privata vuol dire che nessuna
-// nuova richiesta deve partire; uno sulla sola copia è ErrMirror.
+// Save scrive lo stato in modo atomico e durevole: un errore vuol dire che
+// nessuna nuova richiesta deve partire.
 func (st *State) Save() error {
 	data, err := st.marshal()
 	if err != nil {
 		return err
 	}
-	if st.private != "" {
-		if err := writeAtomic(st.private, data); err != nil {
-			return fmt.Errorf("contabilità privata %s: %w", st.private, err)
-		}
-	}
 	if err := writeAtomic(st.path, data); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrMirror, st.path, err)
+		return fmt.Errorf("file di stato %s: %w", st.path, err)
 	}
 	return nil
 }
@@ -401,7 +287,8 @@ func (st *State) marshal() ([]byte, error) {
 }
 
 // writeAtomic: file temporaneo nella stessa cartella, sync e rename (che
-// sostituisce la voce senza seguire link), leggibile solo dall'utente.
+// sostituisce la voce senza seguire link), poi sync della cartella perché il
+// rename resti anche dopo uno spegnimento; leggibile solo dall'utente.
 func writeAtomic(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
@@ -424,14 +311,22 @@ func writeAtomic(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // ErrLocked: un'altra esecuzione usa lo stesso storyboard.
 var ErrLocked = errors.New("storyboard in uso")
 
 // lockFile impedisce due giv story run sullo stesso storyboard: crea lock in
-// modo esclusivo nella cartella privata; unlock lo toglie.
+// modo esclusivo accanto allo stato; unlock lo toglie.
 func lockFile(lock, storyboard string) (unlock func(), err error) {
 	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if errors.Is(err, os.ErrExist) {

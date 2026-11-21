@@ -210,6 +210,7 @@ type storyChecker struct {
 	s            *story.Storyboard
 	clients      map[string]*storyClient
 	notEstimated []string
+	probeUntil   time.Time // scadenza delle letture della voce (voiceWarning)
 
 	// giv story run: cartella e nome dei file per scena, job pronti a partire
 	out    string
@@ -260,6 +261,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce}
 	if scene.Tipo != story.Video {
 		c.File = scene.File
+		if w := sc.voiceWarning(scene, float64(scene.Durata)); w != "" {
+			c.Warnings = append(c.Warnings, w)
+		}
 		return c, nil
 	}
 	o, err := sc.videoOptions(scene)
@@ -276,6 +280,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	plan := job.plan
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
+	if w := sc.voiceWarning(scene, float64(max(job.req.Duration, scene.Durata))); w != "" {
+		c.Warnings = append(c.Warnings, w)
+	}
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
@@ -423,5 +430,5 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 func cmdStoryCut(args []string) error {
-	return &cliError{code: exitError, msg: "giv story cut non ancora disponibile"}
+	return runStoryCut(args)
 }

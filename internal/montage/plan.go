@@ -51,6 +51,12 @@ type Plan struct {
 	// facoltativo. Args accetta solo .ass e .ssa: un .srt lo converte Montage.
 	Subtitles string
 	Output    string // file finale .mp4
+	// Root è la cartella che deve contenere Output, facoltativa. Con Root la
+	// cartella d'uscita si crea e il file si pubblica solo con operazioni
+	// vincolate a Root (os.Root): un link o una cartella sostituita durante il
+	// montaggio non portano la scrittura fuori. Senza Root il vincolo è la
+	// cartella di Output, aperta una volta al momento della pubblicazione.
+	Root string
 	// Overwrite false: se Output esiste già il montaggio si rifiuta prima di
 	// partire. true: il file esistente viene sostituito solo a montaggio riuscito.
 	Overwrite bool
@@ -191,6 +197,14 @@ func (p Plan) checkStatic(durations bool) error {
 	if err != nil {
 		return invalid("uscita: %v", err)
 	}
+	if p.Root != "" {
+		if err := checkPath(p.Root); err != nil {
+			return invalid("cartella d'uscita: %v", err)
+		}
+		if _, err := relInside(p.Root, p.Output); err != nil {
+			return invalid("uscita %s: %v", p.Output, err)
+		}
+	}
 	for _, in := range p.inputs() {
 		if a, err := filepath.Abs(in); err == nil && a == out {
 			return invalid("l'uscita %s è anche un file d'ingresso", p.Output)
@@ -228,6 +242,24 @@ func checkPath(p string) error {
 		}
 	}
 	return nil
+}
+
+// relInside è il percorso di out relativo a root; errore se, a lettera,
+// esce da root o coincide con root.
+func relInside(root, out string) (string, error) {
+	r, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	o, err := filepath.Abs(out)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(r, o)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("fuori dalla cartella %s", root)
+	}
+	return rel, nil
 }
 
 // fadeIn è la durata della dissolvenza che porta alla clip i (0 se taglio).
