@@ -89,7 +89,7 @@ func TestStoryCheckValido4Scene(t *testing.T) {
 	var r struct {
 		Scene []struct {
 			CostEstUSD *float64 `json:"cost_est_usd"`
-		} `json:"scene"`
+		} `json:"scenes"`
 		Total float64 `json:"cost_total_usd"`
 	}
 	if err := json.Unmarshal([]byte(out), &r); err != nil || len(r.Scene) != 4 {

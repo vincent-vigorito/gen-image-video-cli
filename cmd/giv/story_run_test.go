@@ -145,7 +145,7 @@ type runOut struct {
 		ThisRun string  `json:"this_run"`
 		Takes   int     `json:"takes"`
 		CostUSD float64 `json:"cost_usd"`
-	} `json:"scene"`
+	} `json:"scenes"`
 }
 
 func (e *runEnv) run(t *testing.T, args ...string) (out runOut, errOut string, code int) {
