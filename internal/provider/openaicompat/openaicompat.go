@@ -690,7 +690,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
 	}
 	return nil, nil
 }
@@ -732,7 +732,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
 	case "failed", "cancelled", "error":
 		fmt.Fprintln(os.Stderr)
-		return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
 	}
 	return nil, nil
 }

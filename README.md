@@ -140,6 +140,7 @@ prima o dopo.
 | `video` | tabella sotto |
 | `job fetch` | `--provider` (xai o openrouter, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
+| `story run` | `--scene <id>` rifà una sola scena |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):

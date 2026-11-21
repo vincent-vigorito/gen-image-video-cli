@@ -81,6 +81,8 @@ type storyCheck struct {
 	CostTotalUSD    float64      `json:"cost_total_usd"`              // stime più costi dichiarati
 	NotEstimated    []string     `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
 	CapUSD          *float64     `json:"cap_usd,omitempty"`           // tetto_costo_usd
+
+	exactUSD float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 }
 
 // sceneCheck è una scena controllata: per le scene video il piano di giv video --dry-run.
@@ -140,7 +142,7 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 			return nil, usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
 				path, strings.Join(out.NotEstimated, ", "))
 		}
-		if out.CostTotalUSD > *cap {
+		if out.exactUSD > *cap {
 			return nil, usageError("%s: costo previsto %.4f $ oltre tetto_costo_usd %.4f $", path, out.CostTotalUSD, *cap)
 		}
 	} else if len(out.NotEstimated) > 0 {
@@ -171,12 +173,15 @@ func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, err
 		out.Scene = append(out.Scene, c)
 		if c.CostEstUSD != nil {
 			out.CostEstUSD += *c.CostEstUSD
+			out.exactUSD += sc.exactEstimate(c)
 		}
 		if c.CostDeclaredUSD != nil {
 			out.CostDeclaredUSD += *c.CostDeclaredUSD
+			out.exactUSD += *c.CostDeclaredUSD
 		}
 		if k := c.Keyframe; k != nil && k.CostDeclaredUSD != nil {
 			out.CostDeclaredUSD += *k.CostDeclaredUSD
+			out.exactUSD += *k.CostDeclaredUSD
 		}
 	}
 	if len(rejects) > 0 {
@@ -189,6 +194,15 @@ func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, err
 }
 
 func round4(v float64) float64 { return math.Round(v*1e4) / 1e4 }
+
+// exactEstimate è la stima da listino della scena c non arrotondata (quella
+// del manifest ha quattro decimali).
+func (sc *storyChecker) exactEstimate(c sceneCheck) float64 {
+	if job := sc.jobs[c.ID]; job != nil && job.plan.costExact != nil {
+		return *job.plan.costExact
+	}
+	return *c.CostEstUSD
+}
 
 // storyChecker controlla le scene di uno storyboard: un client e una lettura del
 // catalogo per provider.

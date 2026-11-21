@@ -5,14 +5,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"gen-image-video-cli/internal/httpx"
+	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
 	"gen-image-video-cli/internal/story"
@@ -27,17 +30,8 @@ type frameExtractor interface {
 	LastFrame(ctx context.Context, clip, out string, overwrite bool) error
 }
 
-// storyFrames estrae i fotogrammi di continua_da: diventa il pacchetto di
-// montaggio (ffmpeg) quando c'è.
-var storyFrames frameExtractor = noFrames{}
-
-type noFrames struct{}
-
-func (noFrames) Check() error {
-	return errors.New("continua_da: estrazione dell'ultimo fotogramma non ancora disponibile (serve il montaggio con ffmpeg)")
-}
-
-func (n noFrames) LastFrame(context.Context, string, string, bool) error { return n.Check() }
+// storyFrames estrae i fotogrammi di continua_da con ffmpeg.
+var storyFrames frameExtractor = montage.Tool{}
 
 // cmdStoryRun genera le scene dello storyboard in ordine, una richiesta alla
 // volta, con lo stato per scena accanto allo storyboard: una seconda esecuzione
@@ -101,11 +95,12 @@ type sceneRun struct {
 type storyRunner struct {
 	s       *story.Storyboard
 	st      *story.State
+	root    *os.Root // cartella dello storyboard: file letti e scritti solo qui dentro
 	path    string
 	sc      *storyChecker
 	order   []*story.Scene     // scene video da trattare, in ordine
 	forced  string             // --scene: rifatta anche se fatta
-	est     map[string]float64 // stima (o costo dichiarato) della clip, per scena pianificata
+	est     map[string]float64 // stima non arrotondata (o costo dichiarato) della clip, per scena pianificata
 	planned map[string]bool
 	thisRun map[string]string
 	man     storyRunManifest
@@ -125,20 +120,24 @@ func runStory(ctx context.Context, path, only string) (*storyRunManifest, error)
 			return nil, usageError("--scene %s: scena %s, niente da generare", only, target.Tipo)
 		}
 	}
-	statePath := story.StatePath(path)
-	unlock, err := story.LockState(statePath)
+	st, unlock, imported, err := story.OpenRunState(path)
 	if err != nil {
 		return nil, usageError("%v", err)
 	}
 	defer unlock()
-	st, err := story.LoadState(statePath)
+	root, err := os.OpenRoot(s.Dir)
 	if err != nil {
-		return nil, usageError("%v", err)
+		return nil, err
 	}
-	r := &storyRunner{s: s, st: st, path: path, sc: newStoryChecker(s), forced: only,
+	defer root.Close()
+	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only,
 		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{}}
+	if imported {
+		fmt.Fprintf(os.Stderr, "avviso: %s adottato come stato (nessuna contabilità privata per questo storyboard): spesa e clip come riportate\n", st.Path())
+		r.save() // da qui fa fede la contabilità privata
+	}
 	r.sc.out = filepath.Join(s.Dir, storyClipDir)
-	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: statePath, Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
+	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: st.Path(), Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
 	for i := range s.Scene {
 		if sc := &s.Scene[i]; sc.Tipo == story.Video && (only == "" || sc.ID == only) {
 			r.order = append(r.order, sc)
@@ -156,9 +155,10 @@ func runStory(ctx context.Context, path, only string) (*storyRunManifest, error)
 	return &r.man, nil
 }
 
-// preflight controlla tutto prima del primo avvio: job da recuperare, scene da
-// generare (capacità, preset, stime sul catalogo letto adesso), fotogrammi di
-// continua_da e tetto di spesa. Ogni rifiuto è codice 2 e nessun avvio.
+// preflight controlla tutto prima del primo avvio: job da recuperare, richieste
+// rimaste senza esito, scene da generare (capacità, preset, stime sul catalogo
+// letto adesso), fotogrammi di continua_da e tetto di spesa. Ogni rifiuto è
+// codice 2 e nessun avvio.
 func (r *storyRunner) preflight() error {
 	var rejects []error
 	var launch []*story.Scene
@@ -168,6 +168,10 @@ func (r *storyRunner) preflight() error {
 			if err := r.checkJob(ss.Job); err != nil {
 				rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
 			}
+			continue
+		}
+		if ss != nil && ss.Status == story.Incerto && scene.ID != r.forced {
+			rejects = append(rejects, fmt.Errorf("scena %s: l'ultima richiesta di generazione è rimasta senza esito e può essere stata addebitata (contata nella spesa): controlla sul provider, poi rifalla con --scene %s", scene.ID, scene.ID))
 			continue
 		}
 		if r.toLaunch(scene) {
@@ -224,7 +228,7 @@ func (r *storyRunner) plan(scenes []*story.Scene, all bool) error {
 		r.planned[c.ID] = true
 		switch {
 		case c.CostEstUSD != nil:
-			r.est[c.ID] = *c.CostEstUSD
+			r.est[c.ID] = r.sc.exactEstimate(c)
 		case c.CostDeclaredUSD != nil:
 			r.est[c.ID] = *c.CostDeclaredUSD
 		default:
@@ -236,7 +240,7 @@ func (r *storyRunner) plan(scenes []*story.Scene, all bool) error {
 		}
 		if scene.ContinuaDa != "" {
 			if err := storyFrames.Check(); err != nil {
-				return &cliError{code: exitError, msg: fmt.Sprintf("scena %s: %v", c.ID, err)}
+				return &cliError{code: exitError, msg: fmt.Sprintf("scena %s: continua_da: %v", c.ID, err)}
 			}
 			if err := r.continuaReady(scene, ids); err != nil {
 				return usageError("scena %s: %v", c.ID, err)
@@ -276,7 +280,8 @@ func (r *storyRunner) continuaReady(scene *story.Scene, launching map[string]boo
 }
 
 // checkCap ferma prima di un avvio se la spesa già fatta più la stima delle
-// scene ancora da generare, da from in poi, supera il tetto.
+// scene ancora da generare, da from in poi, supera il tetto. Tutti i valori
+// sono quelli non arrotondati.
 func (r *storyRunner) checkCap(from int) error {
 	cap := r.s.TettoCostoUSD
 	if cap == nil {
@@ -293,7 +298,7 @@ func (r *storyRunner) checkCap(from int) error {
 		}
 	}
 	if spent+next > *cap {
-		return usageError("tetto_costo_usd %.4f $: spesa già fatta %.4f $ più stima delle scene da generare %.4f $ lo supera; nessun nuovo avvio, stato in %s",
+		return usageError("tetto_costo_usd %.4f $: spesa già fatta %.4f $ più stima delle generazioni da fare %.4f $ lo supera; nessun nuovo avvio, stato in %s",
 			*cap, round4(spent), round4(next), r.st.Path())
 	}
 	return nil
@@ -308,6 +313,9 @@ func (r *storyRunner) toLaunch(scene *story.Scene) bool {
 	}
 	if scene.ID == r.forced {
 		return true
+	}
+	if ss != nil && ss.Status == story.Incerto {
+		return false // rifiutata in preflight: solo con --scene
 	}
 	return ss == nil || ss.Clip == nil || !r.exists(ss.Clip.File)
 }
@@ -345,7 +353,7 @@ func (r *storyRunner) scene(ctx context.Context, i int, scene *story.Scene) erro
 		if err != nil || done {
 			return err
 		}
-		// job fallito sul provider: la scena si rigenera, col tetto
+		// job finito male sul provider: la scena si rigenera, col tetto
 	}
 	if !r.toLaunch(scene) {
 		if r.thisRun[scene.ID] == "" {
@@ -358,56 +366,105 @@ func (r *storyRunner) scene(ctx context.Context, i int, scene *story.Scene) erro
 			return err
 		}
 	}
-	if ss != nil && ss.Clip != nil && scene.ID != r.forced {
+	switch {
+	case ss != nil && ss.Status == story.Incerto:
+		fmt.Fprintf(os.Stderr, "scena %s: la richiesta precedente è rimasta senza esito (resta contata nella spesa): nuova richiesta\n", scene.ID)
+	case ss != nil && ss.Clip != nil && scene.ID != r.forced:
 		fmt.Fprintf(os.Stderr, "scena %s: clip %s mancante, la scena si rigenera\n", scene.ID, ss.Clip.File)
 	}
 	if err := r.checkCap(i); err != nil {
 		return err
 	}
-	return r.launch(ctx, scene)
+	return r.launch(ctx, i, scene)
 }
 
-// launch genera fotogramma chiave (se serve) e clip della scena, salvando lo
-// stato a ogni passo: all'avvio del job (partito, con l'id), alla fine (fatto)
-// o all'errore.
-func (r *storyRunner) launch(ctx context.Context, scene *story.Scene) error {
+// launch genera fotogramma chiave (se serve) e clip della scena. Prima di ogni
+// richiesta a pagamento ricontrolla il tetto con la spesa reale e registra la
+// generazione nella contabilità privata (stato incerto): se non si salva, la
+// richiesta non parte. Poi salva lo stato a ogni passo: all'avvio del job
+// (partito, con l'id), alla fine (fatto) o all'errore.
+func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) error {
 	ss := r.st.Scene(scene.ID)
 	job := r.sc.jobs[scene.ID]
 	fail := func(err error) error {
 		ss.Error = err.Error()
-		if ss.Job == nil {
+		if ss.Job == nil && ss.Status != story.Incerto {
 			ss.Status = story.Fallito
 		}
 		r.save()
 		return err
 	}
-	image := ""
+	// copie private degli ingressi: il provider legge solo file letti qui
+	// dentro la cartella dello storyboard e controllati
+	work, err := os.MkdirTemp("", "giv-story-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	var tmp tempInputs // ingressi da URL del fotogramma chiave, scaricati in file privati
+	defer tmp.cleanup()
+
+	req := job.req
+	req.Refs = slices.Clone(job.req.Refs)
+	shown := newManifestInputs(req) // come nello storyboard
 	switch {
 	case scene.FotogrammaChiave != nil:
 		if r.needKeyframe(scene) {
-			if err := r.keyframe(ctx, scene, ss); err != nil {
+			img := r.sc.images[scene.ID]
+			inputs, err := r.privateInputs(img.req.Inputs, work, &tmp)
+			if err != nil {
+				return fail(fmt.Errorf("fotogramma_chiave: %w", err))
+			}
+			ch := story.Charge{Kind: story.ChargeKeyframe, CostDeclaredUSD: scene.FotogrammaChiave.CostoDichiaratoUSD}
+			if err := r.reserve(i, ss, ch); err != nil {
+				return err
+			}
+			if err := r.keyframe(ctx, scene, ss, img, inputs); err != nil {
 				return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 			}
 		}
-		p, err := r.s.CheckFile(ss.Keyframe.File)
+		p, err := r.privateCopy(ss.Keyframe.File, work)
 		if err != nil {
 			return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 		}
-		image = p
+		req.Image = p
+		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs})
 	case scene.ContinuaDa != "":
-		p, err := r.lastFrame(ctx, scene)
+		p, err := r.lastFrame(ctx, scene, work)
 		if err != nil {
 			return fail(err)
 		}
-		image = p
+		req.Image = p
+		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs})
 	}
-	if image != "" {
-		job.req.Image = image
-		if err := checkVideoInputs(&job.req); err != nil {
-			return fail(err)
+	for _, in := range videoInputs(&req) {
+		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) {
+			continue
+		}
+		rel, err := r.s.Rel(*in.path)
+		if err != nil {
+			return fail(fmt.Errorf("%s: %w", in.flag, err))
+		}
+		if *in.path, err = r.privateCopy(rel, work); err != nil {
+			return fail(fmt.Errorf("%s: %w", in.flag, err))
 		}
 	}
+	if err := checkVideoInputs(&req); err != nil {
+		return fail(err)
+	}
+	job.req, job.inputs = req, shown
+	job.save = func(slug string, res *provider.Result) ([]output.FileInfo, error) {
+		return r.saveFiles(slug, res.Media)
+	}
 
+	ch := story.Charge{Kind: story.ChargeClip, CostEstUSD: job.plan.costExact}
+	if ch.CostEstUSD == nil {
+		ch.CostDeclaredUSD = scene.CostoDichiaratoUSD
+	}
+	if err := r.reserve(i, ss, ch); err != nil {
+		return err
+	}
+	k := len(ss.Charges) - 1
 	started := false
 	prev := provider.OnJobStart
 	provider.OnJobStart = func(p string, j provider.Job, req provider.VideoRequest) {
@@ -418,11 +475,7 @@ func (r *storyRunner) launch(ctx context.Context, scene *story.Scene) error {
 		r.man.Started++
 		ss.Status, ss.Error = story.Partito, ""
 		ss.Job = &story.Job{Provider: p, ID: j.ID, PollingURL: j.PollingURL, Model: req.Model, Started: time.Now()}
-		ch := story.Charge{Kind: story.ChargeClip, JobID: j.ID, CostEstUSD: job.plan.CostEstUSD, At: time.Now()}
-		if ch.CostEstUSD == nil {
-			ch.CostDeclaredUSD = scene.CostoDichiaratoUSD
-		}
-		ss.Charges = append(ss.Charges, ch)
+		ss.Charges[k].JobID = j.ID
 		r.save()
 	}
 	defer func() { provider.OnJobStart = prev }()
@@ -430,12 +483,20 @@ func (r *storyRunner) launch(ctx context.Context, scene *story.Scene) error {
 	start := time.Now()
 	man, err := job.run(ctx)
 	if err != nil {
-		if started {
-			if recoverable(err, time.Since(start) >= job.req.Timeout) {
-				ss.Status = story.Partito // la prossima esecuzione lo recupera
-			} else {
-				ss.Status = story.Fallito // la prossima esecuzione prova a recuperarlo, poi rilancia
-			}
+		var se *httpx.StartError
+		switch {
+		case started && errors.Is(err, provider.ErrJobFailed):
+			ss.Status, ss.Job = story.Fallito, nil // finito male: la prossima esecuzione rigenera (la spesa resta contata)
+		case started && recoverable(err, time.Since(start) >= job.req.Timeout):
+			ss.Status = story.Partito // la prossima esecuzione lo recupera
+		case started:
+			ss.Status = story.Fallito // il job resta: la prossima esecuzione prova prima a recuperarlo
+		case errors.As(err, &se):
+			// avvio senza esito: forse addebitato, si rifà solo con --scene
+		default:
+			// richiesta rifiutata o mai partita: niente addebito
+			ss.Charges = slices.Delete(ss.Charges, k, k+1)
+			ss.Status = story.Fallito
 		}
 		return fail(err)
 	}
@@ -443,26 +504,69 @@ func (r *storyRunner) launch(ctx context.Context, scene *story.Scene) error {
 	return r.done(scene, ss, man, "story video")
 }
 
-// keyframe genera il fotogramma chiave della scena e lo registra: le riprese
-// successive lo riusano finché il file c'è.
-func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *story.SceneState) error {
-	img := r.sc.images[scene.ID]
-	man, err := img.run(ctx)
+// reserve ricontrolla il tetto con la spesa fatta fin qui e registra la
+// generazione ch come incerta nella contabilità privata, prima di inviarla:
+// se la contabilità non si salva la richiesta non parte.
+func (r *storyRunner) reserve(i int, ss *story.SceneState, ch story.Charge) error {
+	if err := r.checkCap(i); err != nil {
+		return err
+	}
+	status, msg := ss.Status, ss.Error
+	ch.At = time.Now()
+	ss.Charges = append(ss.Charges, ch)
+	ss.Status, ss.Error = story.Incerto, ""
+	err := r.st.Save()
+	if errors.Is(err, story.ErrMirror) {
+		fmt.Fprintf(os.Stderr, "avviso: %v\n", err)
+		err = nil
+	}
 	if err != nil {
+		ss.Charges = ss.Charges[:len(ss.Charges)-1]
+		ss.Status, ss.Error = status, msg
+		return fmt.Errorf("stato non salvato, nessuna richiesta inviata: %w", err)
+	}
+	return nil
+}
+
+// keyframe genera il fotogramma chiave della scena (una sola richiesta, senza
+// ritentativi) e lo registra: le riprese successive lo riusano finché il file
+// c'è. La generazione è già registrata come ultima di ss.Charges.
+func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *story.SceneState, img *imageJob, inputs []string) error {
+	k := len(ss.Charges) - 1
+	received := false
+	img.req.Inputs = inputs
+	img.save = func(slug string, res *provider.Result) ([]output.FileInfo, error) {
+		received = true
+		ss.Charges[k].CostUSD = res.CostUSD
+		return r.saveFiles(slug, res.Media)
+	}
+	man, err := img.run(httpx.WithoutRetry(ctx))
+	if err != nil {
+		switch {
+		case received:
+			ss.Status = story.Fallito // arrivata e addebitata, file non salvato
+		case uncertainStart(err):
+			// richiesta senza esito: forse addebitata, si rifà solo con --scene
+		default:
+			ss.Charges = slices.Delete(ss.Charges, k, k+1)
+			ss.Status = story.Fallito
+		}
 		return err
 	}
 	r.man.Keyframes++
-	ss.Charges = append(ss.Charges, story.Charge{Kind: story.ChargeKeyframe, CostDeclaredUSD: scene.FotogrammaChiave.CostoDichiaratoUSD,
-		CostUSD: man.CostUSD, At: time.Now()})
 	man.Command = "story image"
 	logRun(man)
+	ss.Status = story.DaFare
+	if ss.Clip != nil {
+		ss.Status = story.Fatto // la clip precedente resta in uso
+	}
 	if len(man.Files) == 0 {
-		r.save()
+		ss.Status = story.Fallito
 		return errors.New("nessuna immagine nella risposta")
 	}
 	rel, err := r.s.Rel(man.Files[0].Path)
 	if err != nil {
-		r.save()
+		ss.Status = story.Fallito
 		return err
 	}
 	ss.Keyframe = &story.Take{File: rel, Done: time.Now()}
@@ -470,32 +574,158 @@ func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *stor
 	return nil
 }
 
-// lastFrame estrae l'ultimo fotogramma della scena di continua_da, primo
-// fotogramma della nuova.
-func (r *storyRunner) lastFrame(ctx context.Context, scene *story.Scene) (string, error) {
-	from := r.s.Scena(scene.ContinuaDa)
-	var clip string
-	var err error
-	if from.Tipo == story.Clip {
-		clip, err = r.s.CheckFile(from.File)
-	} else {
-		clip, err = r.st.ClipFile(r.s, from.ID)
+// uncertainStart: l'errore di una richiesta di generazione non dice se è stata
+// addebitata (5xx, risposta persa, interruzione); un 4xx o una connessione mai
+// aperta dicono di no.
+func uncertainStart(err error) bool {
+	var se *httpx.StartError
+	return errors.As(httpx.Start(err), &se)
+}
+
+// privateInputs copia nella cartella privata work gli ingressi locali di un
+// fotogramma chiave; gli URL li scarica tmp in file privati.
+func (r *storyRunner) privateInputs(inputs []string, work string, tmp *tempInputs) ([]string, error) {
+	out := make([]string, len(inputs))
+	for i, in := range inputs {
+		var err error
+		if isURL(in) {
+			out[i], err = tmp.resolve(in)
+		} else {
+			var rel string
+			if rel, err = r.s.Rel(in); err == nil {
+				out[i], err = r.privateCopy(rel, work)
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("--input %s: %w", shownInput(in), err)
+		}
 	}
+	return out, nil
+}
+
+// privateCopy legge rel (relativo alla cartella dello storyboard) solo dentro
+// la cartella, anche seguendo i link, controlla che sia un'immagine entro i
+// limiti e ne scrive una copia privata in work: il provider legge quella.
+func (r *storyRunner) privateCopy(rel, work string) (string, error) {
+	f, err := r.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", fmt.Errorf("%s: file non leggibile dentro la cartella dello storyboard: %w", rel, err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("%s: non è un file regolare", rel)
+	}
+	if fi.Size() > provider.MaxInputBytes {
+		return "", fmt.Errorf("%s: oltre il limite di %d MiB per immagine", rel, provider.MaxInputBytes>>20)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, provider.MaxInputBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > provider.MaxInputBytes {
+		return "", fmt.Errorf("%s: oltre il limite di %d MiB per immagine", rel, provider.MaxInputBytes>>20)
+	}
+	mime := provider.ImageMime(data)
+	if mime == "" {
+		return "", fmt.Errorf("%s: non è un'immagine png, jpeg, webp o gif", rel)
+	}
+	out, err := os.CreateTemp(work, "in-*"+extForMime(mime))
+	if err != nil {
+		return "", err
+	}
+	if _, err := out.Write(data); err != nil {
+		out.Close()
+		return "", err
+	}
+	return out.Name(), out.Close()
+}
+
+// saveFiles scrive i media generati in clip/ dentro la cartella dello
+// storyboard (una cartella clip che porta fuori, anche con un link, è
+// rifiutata) creando file nuovi: un nome che esiste già, anche come link, non
+// si sovrascrive mai.
+func (r *storyRunner) saveFiles(slug string, media []provider.Media) ([]output.FileInfo, error) {
+	if err := r.root.MkdirAll(storyClipDir, 0o755); err != nil {
+		return nil, err
+	}
+	dir, err := r.root.OpenRoot(storyClipDir)
+	if err != nil {
+		return nil, fmt.Errorf("cartella %s: %w", storyClipDir, err)
+	}
+	defer dir.Close()
+	ts := time.Now().Format("20060102-150405")
+	var files []output.FileInfo
+	for i, m := range media {
+		name := slug + "-" + ts
+		if len(media) > 1 {
+			name = fmt.Sprintf("%s-%d", name, i+1)
+		}
+		name += output.Ext(m.Mime)
+		f, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("%s/%s: %w", storyClipDir, name, err)
+		}
+		_, err = f.Write(m.Data)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s/%s: %w", storyClipDir, name, err)
+		}
+		files = append(files, output.FileInfo{Path: filepath.Join(r.s.Dir, storyClipDir, name), Mime: m.Mime, Bytes: len(m.Data)})
+	}
+	return files, nil
+}
+
+// lastFrame estrae nella cartella privata work l'ultimo fotogramma della scena
+// di continua_da, primo fotogramma della nuova; ffmpeg legge una copia privata
+// della clip, letta dentro la cartella dello storyboard.
+func (r *storyRunner) lastFrame(ctx context.Context, scene *story.Scene, work string) (string, error) {
+	from := r.s.Scena(scene.ContinuaDa)
+	rel := from.File
+	if from.Tipo != story.Clip {
+		ss := r.st.Scenes[from.ID]
+		if ss == nil || ss.Clip == nil {
+			return "", fmt.Errorf("continua_da %s: %w", from.ID, story.ErrNotDone)
+		}
+		rel = ss.Clip.File
+	}
+	clip, err := r.copyClip(rel, work)
 	if err != nil {
 		return "", fmt.Errorf("continua_da %s: %w", from.ID, err)
 	}
-	if err := os.MkdirAll(r.sc.out, 0o755); err != nil {
-		return "", err
-	}
-	out := filepath.Join(r.sc.out, scene.ID+"-primo.png")
-	if err := storyFrames.LastFrame(ctx, clip, out, true); err != nil {
+	out := filepath.Join(work, "primo.png")
+	if err := storyFrames.LastFrame(ctx, clip, out, false); err != nil {
 		return "", fmt.Errorf("continua_da %s: %w", from.ID, err)
 	}
 	return out, nil
 }
 
+// copyClip copia in work la clip rel, letta solo dentro la cartella dello storyboard.
+func (r *storyRunner) copyClip(rel, work string) (string, error) {
+	f, err := r.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", fmt.Errorf("clip %s non leggibile dentro la cartella dello storyboard: %w", rel, err)
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("clip %s: non è un file regolare", rel)
+	}
+	out, err := os.CreateTemp(work, "clip-*"+strings.ToLower(filepath.Ext(rel)))
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(out, f); err != nil {
+		out.Close()
+		return "", err
+	}
+	return out.Name(), out.Close()
+}
+
 // recover scarica il job già partito della scena senza un nuovo avvio. done è
-// false se il provider dice che il job è fallito: la scena va rigenerata.
+// false se il provider dice che il job è finito male: la scena va rigenerata.
+// Ogni altro errore lascia il job, da recuperare alla prossima esecuzione.
 func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) (done bool, err error) {
 	ss := r.st.Scenes[scene.ID]
 	j := ss.Job
@@ -504,23 +734,29 @@ func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) (done boo
 		return false, err
 	}
 	f := c.Provider.(provider.JobFetcher) // controllato in preflight
+	if !slices.ContainsFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == story.ChargeClip && ch.JobID == j.ID }) {
+		// ogni job recuperato conta nella spesa
+		ss.Charges = append(ss.Charges, story.Charge{Kind: story.ChargeClip, JobID: j.ID, CostDeclaredUSD: scene.CostoDichiaratoUSD, At: time.Now()})
+		r.save()
+	}
 	fmt.Fprintf(os.Stderr, "scena %s: recupero del job %s (%s), senza nuovo avvio\n", scene.ID, j.ID, j.Provider)
 	start := time.Now()
 	res, err := f.FetchVideo(ctx, provider.Job{ID: j.ID, PollingURL: j.PollingURL}, storyTimeout)
 	if err != nil {
 		ss.Error = err.Error()
+		if errors.Is(err, provider.ErrJobFailed) {
+			fmt.Fprintf(os.Stderr, "avviso: scena %s: job %s finito male sul provider (%v): la scena si rigenera\n", scene.ID, j.ID, err)
+			ss.Status, ss.Job = story.Fallito, nil
+			r.save()
+			return false, nil
+		}
 		if recoverable(err, time.Since(start) >= storyTimeout) {
 			ss.Status = story.Partito
-			r.save()
-			return false, err
 		}
-		// fallito sul provider: il job non si recupera più, la scena si rigenera
-		fmt.Fprintf(os.Stderr, "avviso: scena %s: job %s non recuperabile (%v): la scena si rigenera\n", scene.ID, j.ID, err)
-		ss.Status, ss.Job = story.Fallito, nil
 		r.save()
-		return false, nil
+		return false, fmt.Errorf("%w (il job resta: si recupera alla prossima esecuzione)", err)
 	}
-	files, err := output.SaveAll(r.sc.out, fmt.Sprintf("%s-r%d", scene.ID, takeNumber(ss)), res.Media)
+	files, err := r.saveFiles(fmt.Sprintf("%s-r%d", scene.ID, takeNumber(ss)), res.Media)
 	if err != nil {
 		ss.Error = err.Error()
 		r.save()
@@ -569,10 +805,11 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	return nil
 }
 
-// save scrive lo stato; un errore è un avviso (il job resta anche in giv-jobs.jsonl).
+// save scrive lo stato; un errore è un avviso: l'ultima generazione registrata
+// prima dell'invio resta nella contabilità privata (il job anche in giv-jobs.jsonl).
 func (r *storyRunner) save() {
 	if err := r.st.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "avviso: stato non salvato in %s: %v\n", r.st.Path(), err)
+		fmt.Fprintf(os.Stderr, "avviso: %v\n", err)
 	}
 }
 
@@ -606,18 +843,19 @@ func (r *storyRunner) summary() {
 			if ss.Keyframe != nil {
 				row.Keyframe = ss.Keyframe.File
 			}
+			var est, cost float64
 			for _, c := range ss.Charges {
 				switch {
 				case c.CostEstUSD != nil:
-					row.CostEstUSD += *c.CostEstUSD
+					est += *c.CostEstUSD
 				case c.CostDeclaredUSD != nil:
-					row.CostEstUSD += *c.CostDeclaredUSD
+					est += *c.CostDeclaredUSD
 				}
-				row.CostUSD += c.CostUSD
+				cost += c.CostUSD
 			}
-			row.CostEstUSD, row.CostUSD = round4(row.CostEstUSD), round4(row.CostUSD)
-			r.man.CostEstUSD += row.CostEstUSD
-			r.man.CostUSD += row.CostUSD
+			row.CostEstUSD, row.CostUSD = round4(est), round4(cost)
+			r.man.CostEstUSD += est
+			r.man.CostUSD += cost
 		}
 		r.man.Scene = append(r.man.Scene, row)
 	}

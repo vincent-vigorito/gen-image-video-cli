@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -73,6 +74,21 @@ type JobFetcher interface {
 	// risultato; ogni errore porta l'id del job.
 	FetchVideo(ctx context.Context, job Job, timeout time.Duration) (*Result, error)
 }
+
+// ErrJobFailed: il provider dice che il job è finito male (stato terminale
+// failed, cancelled, error, expired letto dall'attesa): non c'è più niente da
+// scaricare. Gli altri errori (rete, download, risposta incompleta) lasciano il
+// job recuperabile.
+var ErrJobFailed = errors.New("job finito male sul provider")
+
+// JobFailed segna err come stato terminale di fallimento del job (errors.Is con
+// ErrJobFailed), lasciando il messaggio com'è.
+func JobFailed(err error) error { return jobFailed{err} }
+
+type jobFailed struct{ error }
+
+func (e jobFailed) Unwrap() error      { return e.error }
+func (jobFailed) Is(target error) bool { return target == ErrJobFailed }
 
 // OnJobStart, se impostata, riceve ogni job video appena avviato, prima
 // dell'attesa: il CLI la usa per salvarne lo stato (giv job fetch).
