@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.9.1] - non ancora rilasciata
+## [0.9.1] - 2026-11-21
 
 ### Aggiunto
 
