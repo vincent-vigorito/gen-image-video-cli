@@ -4,6 +4,39 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.9.1] - 2026-11-21
+
+### Aggiunto
+
+- **`giv story run --scene <id> --new-keyframe`**: rigenera a pagamento anche il
+  fotogramma chiave della scena, con la stessa riserva e lo stesso tetto delle altre
+  richieste; il fotogramma precedente resta nello stato fra le riprese precedenti
+  (`previous`, `kind` `fotogramma`) e su disco. Vale solo con `--scene` e per una scena
+  con `fotogramma_chiave`, altrimenti codice 2.
+- **Aiuto di `giv story`**: `giv story help` (anche `--help`, `-h`) e
+  `giv story check|run|cut --help`, su stderr e con codice 0.
+- **Spesa di scene non più nello storyboard**: `giv story check` e `giv story run` la
+  mostrano a parte (`removed_scenes` con `id` e `spent_usd`, `removed_spent_usd`, avviso
+  su stderr e messaggio di rifiuto del tetto) e continua a contare nel tetto; `giv story
+  check` la somma al costo previsto prima di confrontarlo con `tetto_costo_usd`.
+- **Preset per Grok**: varianti `grok` di tutti i 18 preset di camera ed effetti per i
+  modelli `grok-imagine-video-*` di xai, al posto della frase generica.
+
+### Modificato
+
+- Il fotogramma chiave registrato di una scena si riusa a ogni ripresa e **non si
+  rigenera più da solo** quando il suo file manca: la scena esce con codice 2, senza
+  richieste, e indica `--scene <id> --new-keyframe`. Con `--scene` un avviso ricorda il
+  riuso.
+- `tutela` nel blocco `default` e nelle scene dello storyboard è controllata: una
+  clausola della libreria dei preset (`prodotto`, `illustrazione` o quelle dei file
+  dell'utente) oppure `no`; un valore sconosciuto esce con codice 2 prima di qualsiasi
+  generazione. Senza indicazione resta il default di `giv video`.
+- Nel JSON di `giv story check` e `giv story run` il campo delle scene si chiama
+  `scenes`, come in `giv story cut` (prima `scene`).
+- `takes` nel JSON di `giv story run` conta solo le riprese video, non i fotogrammi
+  chiave sostituiti.
+
 ## [0.9.0] - 2026-11-21
 
 ### Aggiunto

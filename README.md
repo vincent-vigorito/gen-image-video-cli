@@ -124,9 +124,10 @@ giv video   [flag] "<prompt>"                 # genera video (job asincrono, 1-5
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                               # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
-giv story run [--scene <id>] <storyboard.json>
+giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
                                               # genera le scene video (a pagamento), riprende da dove si era fermato
 giv story cut <storyboard.json>               # monta con ffmpeg le scene già pronte in un solo video
+giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -241,8 +242,9 @@ inputs, cost_est_usd, cost_source, warnings}`; serve comunque la chiave del prov
   coppie incompatibili (es. `dolly-in` + `dolly-out`, `slow-motion` + `timelapse`) escono
   con codice 2.
 - La frase cambia con la famiglia del modello, ricavata dal nome (`kling`, `veo`,
-  `seedance`, `wan`); per le altre (es. `grok`, `omni`) vale la frase generica, con avviso
-  (con `--strict` di `presets show`, codice 2).
+  `seedance`, `grok`, `wan`; per `grok` le varianti valgono per `grok-imagine-video-*` di
+  xai); per le altre (es. `omni`) vale la frase generica, con avviso (con `--strict` di
+  `presets show`, codice 2).
 - Dove la famiglia ha il negative (kling, veo, wan) i negative dei preset si sommano a
   `--negative`; altrove si omettono. Se il modello non accetta il negative (es.
   `alibaba/wan-3.0`, nessun parametro passante) resta un avviso.
@@ -294,7 +296,12 @@ passa il controllo:
 
 ```bash
 giv story check examples/spot/storyboard.json     # JSON su stdout: scene, stime, totale
+giv story help                                    # aiuto; giv story run --help per un sottocomando
 ```
+
+Per tutti i sottocomandi su stdout va solo il JSON del risultato; avanzamento, avvisi ed
+errori vanno su stderr. `giv story help` (o `giv story --help`) e `giv story <sottocomando>
+--help` stampano l'aiuto su stderr ed escono con 0.
 
 ```json
 {
@@ -344,6 +351,13 @@ montaggio.
   precedente, di cui si usa l'ultimo fotogramma); poi `ultimo_fotogramma`, `usa`,
   `costo_dichiarato_usd` e i campi di `default`, che la scena sovrascrive. Senza `durata`
   vale il default del modello.
+- `tutela` (nel blocco `default` o nella scena video, che lo sovrascrive): la clausola che
+  si aggiunge al prompt coi preset, come `--tutela` di `giv video`: `prodotto`,
+  `illustrazione` (o una clausola dei file di preset dell'utente) oppure `no`. Senza
+  indicazione vale il default di `giv video`: `prodotto` per una scena con preset e un
+  primo fotogramma (`immagine`, `fotogramma_chiave` o `continua_da`). Per una mascotte o
+  un'illustrazione serve `"tutela": "illustrazione"`. Un valore sconosciuto esce con
+  codice 2.
 - `clip`: un `file` video già pronto (ripresa vera, screencast).
 - `immagine`: un `file` immagine fermo, con `durata` obbligatoria (cartelli, chiusure).
 - `avatar` non c'è in giv 0.9.0 e viene rifiutato: la voce va nel campo `voce` di una
@@ -367,12 +381,22 @@ montaggio.
   `cost_total_usd`; le generazioni senza stima né costo dichiarato (compresi i
   fotogrammi chiave) sono in `not_estimated` e non contano come zero. Con
   `tetto_costo_usd` vengono rifiutate.
+- **spesa di scene tolte**: se lo stato di `giv story run` (`<nome>.stato.json`) ha spesa
+  registrata per scene che non sono più scene video dello storyboard (tolte, rinominate o
+  cambiate di tipo), è a parte in `removed_scenes` (`id`, `spent_usd`) e
+  `removed_spent_usd`, con un avviso su stderr: non è fra le scene, ma col tetto conta
+  insieme a `cost_total_usd`.
+
+Il JSON su stdout ha `storyboard`, `titolo`, le `scenes` (per scena il piano come `giv
+video --dry-run`), i costi qui sopra e `cap_usd`.
 
 ### Generazione: `giv story run`
 
 ```bash
 giv story run examples/spot/storyboard.json              # genera le scene video, a pagamento
 giv story run --scene s2 examples/spot/storyboard.json   # rifà solo la scena s2
+giv story run --scene s2 --new-keyframe examples/spot/storyboard.json
+                                                         # rifà s2 con un fotogramma chiave nuovo
 ```
 
 `giv story run` genera **a pagamento** le scene `video` dello storyboard, in ordine e una
@@ -404,18 +428,31 @@ illeggibile o non valido esce con codice 2, senza avvii.
 precedente resta nello stato e in `clip/`. Se la scena ha un job ancora da scaricare, il
 job recuperato vale come nuova ripresa, senza un nuovo avvio.
 
+**Fotogramma chiave.** Una volta generato, il `fotogramma_chiave` di una scena si riusa a
+ogni ripresa (con `--scene` un avviso su stderr lo ricorda) e non si rigenera mai da solo,
+nemmeno se il suo file non c'è più: in quel caso la scena esce con codice 2, senza
+richieste, e il messaggio indica il comando da usare. Per un fotogramma chiave nuovo (a
+pagamento, venuto male o cancellato) `--scene <id> --new-keyframe`: vale solo insieme a
+`--scene` e per una scena con `fotogramma_chiave` (altrimenti codice 2), passa dalla
+stessa riserva e dallo stesso tetto delle altre richieste e il fotogramma precedente resta
+nello stato fra le riprese precedenti (`previous`, con `kind` `fotogramma`). Se la scena
+ha un job già partito, quello si recupera e il fotogramma non si rigenera (avviso).
+
 **Tetto di spesa.** Con `tetto_costo_usd` il conto è cumulativo sullo stato: prima di ogni
 richiesta a pagamento (fotogramma chiave o avvio video) `giv story run` somma la spesa già
 registrata (l'addebito riportato dal provider dove c'è, altrimenti la stima) e le stime
 delle generazioni ancora da fare; oltre il tetto esce con codice 2 senza nuovi avvii. Ogni
-richiesta viene registrata nello stato prima di partire. **Cancellando il file di stato il
-conto riparte da zero** e le scene tornano da generare.
+richiesta viene registrata nello stato prima di partire. La spesa registrata comprende
+anche le scene non più nello storyboard: conta nel tetto, ma è mostrata a parte (avviso su
+stderr, `removed_scenes` e `removed_spent_usd`, e nel messaggio di rifiuto del tetto).
+**Cancellando il file di stato il conto riparte da zero** e le scene tornano da generare.
 
-Il JSON su stdout ha `state`, le `scene` (per scena `status`, `file`, `keyframe`, `takes`,
-`this_run`: generata, recuperata, già fatta o fallita, `cost_est_usd`, `cost_usd`),
-`jobs_started`, `jobs_recovered`, `keyframes` e i totali `cost_est_usd` (stime e costi
-dichiarati), `cost_usd` (addebito riportato dai provider), `spent_usd` (la spesa contata
-per il tetto) e `cap_usd`.
+Il JSON su stdout ha `state`, le `scenes` (per scena `status`, `file`, `keyframe`, `takes`:
+le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `cost_est_usd`,
+`cost_usd`), `jobs_started`, `jobs_recovered`, `keyframes` e i totali `cost_est_usd`
+(stime e costi dichiarati delle scene), `cost_usd` (addebito riportato dai provider),
+`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `removed_scenes` e
+`removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`.
 
 ### Montaggio: `giv story cut`
 

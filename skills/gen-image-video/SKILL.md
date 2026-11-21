@@ -53,8 +53,10 @@ giv video   [flag] "<prompt>"                   # genera video (job asincrono, 1
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
-giv story run [--scene <id>] <storyboard.json>  # genera le scene video, a pagamento; riprende da dove si era fermato
+giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
+                                                # genera le scene video, a pagamento; riprende da dove si era fermato
 giv story cut <storyboard.json>                 # monta con ffmpeg le scene pronte in un solo video, gratis
+giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -173,12 +175,13 @@ proporzioni come nel primo fotogramma). `--last-frame` fissa anche l'inquadratur
   --input mascotte-fronte.png --input mascotte-profilo.png --name s2-key \
   "la mascotte apre la porta del magazzino"
 ./bin/giv video --provider xai --image out/s2-key-<timestamp>.jpg \
-  --ref mascotte-fronte.png --ref mascotte-profilo.png --preset static --duration 5 \
-  --name s2 "<IMAGE_0> apre la porta e saluta"
+  --ref mascotte-fronte.png --ref mascotte-profilo.png --preset static --tutela illustrazione \
+  --duration 5 --name s2 "<IMAGE_0> apre la porta e saluta"
 ```
 
 Una scena per chiamata, riusando le stesse immagini di riferimento; su xai i riferimenti si
-richiamano nel prompt con `<IMAGE_0>`, `<IMAGE_1>`…
+richiamano nel prompt con `<IMAGE_0>`, `<IMAGE_1>`… Con `--image` e un preset la clausola
+di default è `prodotto`: per una mascotte `--tutela illustrazione`.
 
 **Preset di camera ed effetti**:
 
@@ -190,8 +193,8 @@ richiamano nel prompt con `<IMAGE_0>`, `<IMAGE_1>`…
 ```
 
 Al massimo un preset di camera e uno di effetto; le coppie incompatibili escono con codice
-2. Varianti scritte per kling, veo, seedance e wan; su grok e omni vale la frase generica
-(avviso). I negative dei preset wan su `alibaba/wan-3.0` danno un avviso (il modello non
+2. Varianti scritte per kling, veo, seedance, grok (`grok-imagine-video-*` su xai) e wan;
+su omni vale la frase generica (avviso). I negative dei preset wan su `alibaba/wan-3.0` danno un avviso (il modello non
 accetta il negative). Preset propri in `./giv-presets.json` o `~/.config/giv/presets.json`,
 stesso formato di `internal/presets/presets.json`.
 
@@ -210,11 +213,18 @@ stesso formato di `internal/presets/presets.json`.
      generata prima, coi riferimenti di `usa` come ingressi);
    - `clip` per un video già pronto, `immagine` con `durata` per cartelli e chiusura;
    - `voce` sulle scene con la voce fuori campo. Il tipo `avatar` non c'è in giv 0.9.0.
+   - `tutela` nel blocco `default` o nella scena: senza indicazione, una scena con preset
+     e primo fotogramma prende la clausola `prodotto` (etichetta e proporzioni del
+     prodotto). Per una **mascotte** o un'illustrazione mettere `"tutela":
+     "illustrazione"` (stile piatto, colori e composizione, niente testo); `"no"` toglie
+     la clausola. Un valore sconosciuto esce con codice 2.
 3. `giv story check storyboard.json` finché non esce con 0. Con codice 2 l'errore elenca
-   tutti i problemi, uno per riga. Sul JSON stampato guardare `cost_total_usd` (contro il
-   tetto), `not_estimated` (generazioni senza stima: dare un `costo_dichiarato_usd`, per
-   esempio ai modelli a token come Seedance e ai fotogrammi chiave) e i `warnings` di ogni
-   scena (controlli che il modello ignora). Nessuna generazione, nessun costo.
+   tutti i problemi, uno per riga. Sul JSON stampato (stdout solo JSON, avvisi su
+   stderr) guardare `cost_total_usd` (contro il tetto), `not_estimated` (generazioni senza
+   stima: dare un `costo_dichiarato_usd`, per esempio ai modelli a token come Seedance e
+   ai fotogrammi chiave), `removed_scenes`/`removed_spent_usd` (spesa già registrata nello
+   stato per scene tolte dallo storyboard: conta nel tetto) e i `warnings` di ogni scena
+   in `scenes` (controlli che il modello ignora). Nessuna generazione, nessun costo.
 4. Il modello va scelto fra quelli del catalogo letto in quel momento: un modello sparito
    viene rifiutato (`giv models --provider openrouter --kind video --caps`).
 5. Generazione: `giv story run storyboard.json`, a pagamento, solo dopo un check con 0 e
@@ -224,9 +234,18 @@ stesso formato di `internal/presets/presets.json`.
    nel JSON: `incerto` (richiesta senza esito, forse addebitata: controllare sul provider,
    poi `--scene <id>`), `fallito` (job finito male, spesa contata: rifarla solo con
    `--scene <id>`). Per rifare una scena venuta male: `giv story run --scene s2
-   storyboard.json` (la ripresa precedente resta). Il tetto conta tutta la spesa
-   registrata nello stato: cancellare lo stato azzera il conto e fa rigenerare tutto, non
-   farlo per «liberare» il tetto.
+   storyboard.json` (la ripresa precedente resta; il fotogramma chiave già generato si
+   riusa). Il tetto conta tutta la spesa registrata nello stato, anche quella di scene
+   tolte dallo storyboard (a parte in `removed_scenes`): cancellare lo stato azzera il
+   conto e fa rigenerare tutto, non farlo per «liberare» il tetto.
+   **Scena col fotogramma chiave sbagliato** (personaggio diverso, prodotto deformato): la
+   clip nasce da lì, quindi rifare solo la clip non basta. Correggere se serve il
+   `prompt` o gli ingressi (`usa`) del `fotogramma_chiave`, `giv story check`, poi
+   `giv story run --scene s2 --new-keyframe storyboard.json`: rigenera a pagamento il
+   fotogramma e la clip, dentro il tetto; il fotogramma e la clip precedenti restano nello
+   stato e su disco. Il fotogramma chiave non si rigenera mai da solo: se il suo file è
+   stato cancellato la scena esce con codice 2 e chiede `--new-keyframe`. Guardare il
+   nuovo fotogramma (`keyframe` nel JSON) prima del montaggio.
 6. Montaggio: `giv story cut storyboard.json` (serve `ffmpeg`), gratis e senza rete,
    quando ogni scena video ha la sua clip nello stato: codice 2 con «clip mancanti» elenca
    le scene ancora da generare. Nel blocco `montaggio`: `transizione` (`taglio` o `dissolvenza` di
