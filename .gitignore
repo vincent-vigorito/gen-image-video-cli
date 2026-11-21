@@ -19,3 +19,6 @@ giv-log.jsonl
 
 # macOS
 .DS_Store
+
+# stato dei job video avviati (giv job fetch)
+giv-jobs.jsonl

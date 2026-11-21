@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,10 +46,21 @@ type Client struct {
 }
 
 func New(name, baseURL, apiKey string, opts Options) *Client {
-	return &Client{
-		name: name, baseURL: baseURL, apiKey: apiKey, opts: opts,
-		http: &http.Client{Timeout: 300 * time.Second},
+	c := &Client{name: name, baseURL: baseURL, apiKey: apiKey, opts: opts}
+	c.http = &http.Client{Timeout: 300 * time.Second, CheckRedirect: c.checkRedirect}
+	return c
+}
+
+// checkRedirect lascia l'Authorization solo ai salti sull'origine dell'API
+// (schema, host e porta): fuori origine la chiave viene tolta.
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
+	if !c.apiOrigin(req.URL) {
+		req.Header.Del("Authorization")
+	}
+	return nil
 }
 
 func (c *Client) Name() string { return c.name }
@@ -351,18 +364,124 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 // --- video ---
 
 func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
+	var job provider.Job
+	var err error
 	switch {
 	case c.opts.Router:
-		return c.routerVideo(ctx, req)
+		job, err = c.routerStart(ctx, req)
 	case c.opts.Grok:
-		return c.grokVideo(ctx, req)
+		job, err = c.grokStart(ctx, req)
 	default:
 		return nil, fmt.Errorf("generazione video non supportata per %s", c.name)
 	}
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", job.ID, pollInterval)
+	if provider.OnJobStart != nil {
+		provider.OnJobStart(c.name, job, req)
+	}
+	return c.wait(ctx, job, req.Timeout, false)
 }
 
-// grokVideo usa l'API asincrona /videos/generations di x.ai (grok-imagine-video).
-func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res *provider.Result, err error) {
+// FetchVideo riprende l'attesa di un job già partito e ne scarica il risultato,
+// senza un nuovo avvio; il primo controllo dello stato è immediato.
+func (c *Client) FetchVideo(ctx context.Context, job provider.Job, timeout time.Duration) (*provider.Result, error) {
+	if err := c.CheckJob(job); err != nil {
+		return nil, err
+	}
+	if job.PollingURL == "" {
+		job.PollingURL = c.grokPollURL(job.ID)
+	}
+	fmt.Fprintf(os.Stderr, "attesa del job %s (polling ogni %s)\n", job.ID, pollInterval)
+	return c.wait(ctx, job, timeout, true)
+}
+
+// CheckJob rifiuta, senza richieste, un job che non può essere di questo
+// provider: l'indirizzo di attesa (letto anche da file) deve stare sull'origine
+// dell'API, sotto <base>/videos/ e finire con l'id del job.
+func (c *Client) CheckJob(job provider.Job) error {
+	if !c.opts.Router && !c.opts.Grok {
+		return fmt.Errorf("%s non ha job video da recuperare", c.name)
+	}
+	if job.ID == "" {
+		return fmt.Errorf("%s: id del job vuoto", c.name)
+	}
+	if job.PollingURL == "" {
+		if c.opts.Grok {
+			return nil // ricavato dall'id
+		}
+		return fmt.Errorf("%s: manca l'indirizzo di attesa del job %s", c.name, job.ID)
+	}
+	if !c.apiHost(job.PollingURL) {
+		return fmt.Errorf("%s: l'indirizzo di attesa del job %s non è sull'host del provider: rifiutato", c.name, job.ID)
+	}
+	if !c.jobPath(job) {
+		return fmt.Errorf("%s: l'indirizzo di attesa non è quello del job %s: rifiutato", c.name, job.ID)
+	}
+	return nil
+}
+
+// jobPath dice se l'indirizzo di attesa è un percorso di job del provider:
+// sotto <base>/videos/, ultimo segmento uguale all'id, senza segmenti vuoti o
+// punti, senza query né frammento.
+func (c *Client) jobPath(job provider.Job) bool {
+	u, err := url.Parse(job.PollingURL)
+	b, berr := url.Parse(c.baseURL)
+	if err != nil || berr != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(u.EscapedPath(), strings.TrimSuffix(b.EscapedPath(), "/")+"/videos/")
+	if !ok {
+		return false
+	}
+	segs := strings.Split(rest, "/")
+	for _, s := range segs {
+		if s == "" || s == "." || s == ".." {
+			return false
+		}
+	}
+	return segs[len(segs)-1] == url.PathEscape(job.ID)
+}
+
+// apiHost dice se rawURL sta sull'origine dell'API del provider, senza
+// credenziali nell'URL: solo lì si manda la chiave.
+func (c *Client) apiHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && c.apiOrigin(u)
+}
+
+// apiOrigin dice se u ha schema, host e porta (esplicita o di default)
+// dell'API del provider e nessuna credenziale.
+func (c *Client) apiOrigin(u *url.URL) bool {
+	b, err := url.Parse(c.baseURL)
+	if err != nil || u == nil || u.User != nil || u.Host == "" {
+		return false
+	}
+	return u.Scheme == b.Scheme && strings.EqualFold(u.Hostname(), b.Hostname()) && port(u) == port(b)
+}
+
+// port è la porta di u, quella di default dello schema se non indicata.
+func port(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch u.Scheme {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+func (c *Client) grokPollURL(id string) string {
+	return c.baseURL + "/videos/" + url.PathEscape(id)
+}
+
+// grokStart avvia un job con l'API asincrona /videos/generations di x.ai
+// (grok-imagine-video); l'indirizzo di attesa si ricava dall'id.
+func (c *Client) grokStart(ctx context.Context, req provider.VideoRequest) (provider.Job, error) {
 	if req.Negative != "" {
 		fmt.Fprintf(os.Stderr, "avviso: --negative non supportato da %s, ignorato\n", c.name)
 	}
@@ -388,14 +507,14 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 	if req.Image != "" {
 		u, err := imageDataURL(req.Image)
 		if err != nil {
-			return nil, err
+			return provider.Job{}, err
 		}
 		body["image"] = map[string]string{"url": u}
 	}
 	if req.LastFrame != "" {
 		u, err := imageDataURL(req.LastFrame)
 		if err != nil {
-			return nil, err
+			return provider.Job{}, err
 		}
 		body["last_frame"] = map[string]string{"url": u}
 	}
@@ -404,7 +523,7 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 		for _, r := range req.Refs {
 			u, err := imageDataURL(r)
 			if err != nil {
-				return nil, err
+				return provider.Job{}, err
 			}
 			refs = append(refs, map[string]string{"url": u})
 		}
@@ -419,57 +538,17 @@ func (c *Client) grokVideo(ctx context.Context, req provider.VideoRequest) (res 
 	}
 	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
 	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos/generations", body, &job); err != nil {
-		return nil, httpx.Start(err)
+		return provider.Job{}, httpx.Start(err)
 	}
 	if job.RequestID == "" {
-		return nil, httpx.Start(fmt.Errorf("%s: nessun request_id nella risposta", c.name))
+		return provider.Job{}, httpx.Start(fmt.Errorf("%s: nessun request_id nella risposta", c.name))
 	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", job.RequestID, pollInterval)
-	// da qui ogni errore porta l'id del job
-	defer func() { err = httpx.Job(job.RequestID, err) }()
-
-	timeout := jobTimeout(req.Timeout)
-	deadline := time.Now().Add(timeout)
-	for {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(pollInterval):
-		}
-		var st struct {
-			Status string `json:"status"`
-			Video  struct {
-				URL string `json:"url"`
-			} `json:"video"`
-			Error json.RawMessage `json:"error"`
-		}
-		if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, c.baseURL+"/videos/"+job.RequestID, nil, &st); err != nil {
-			return nil, err
-		}
-		switch st.Status {
-		case "done", "completed":
-			fmt.Fprintln(os.Stderr)
-			if st.Video.URL == "" {
-				return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
-			}
-			data, err := c.download(ctx, st.Video.URL)
-			if err != nil {
-				return nil, err
-			}
-			return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.RequestID}, nil
-		case "failed", "error", "expired":
-			fmt.Fprintln(os.Stderr)
-			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
-		default:
-			fmt.Fprint(os.Stderr, ".")
-		}
-	}
+	return provider.Job{ID: job.RequestID, PollingURL: c.grokPollURL(job.RequestID)}, nil
 }
 
-func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (res *provider.Result, err error) {
+// routerStart avvia un job con /videos di OpenRouter; l'indirizzo di attesa
+// arriva nella risposta.
+func (c *Client) routerStart(ctx context.Context, req provider.VideoRequest) (provider.Job, error) {
 	body := map[string]any{"model": req.Model, "prompt": req.Prompt}
 	if req.Duration > 0 {
 		body["duration"] = req.Duration
@@ -487,7 +566,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 		}
 		part, err := imageURLPart(f.path)
 		if err != nil {
-			return nil, err
+			return provider.Job{}, err
 		}
 		part["frame_type"] = f.kind
 		frames = append(frames, part)
@@ -500,7 +579,7 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 		for _, r := range req.Refs {
 			part, err := imageURLPart(r)
 			if err != nil {
-				return nil, err
+				return provider.Job{}, err
 			}
 			refs = append(refs, part)
 		}
@@ -539,60 +618,123 @@ func (c *Client) routerVideo(ctx context.Context, req provider.VideoRequest) (re
 	}
 	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
 	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
-		return nil, httpx.Start(err)
+		return provider.Job{}, httpx.Start(err)
 	}
 	if job.PollingURL == "" {
-		return nil, httpx.Start(fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status))
+		return provider.Job{}, httpx.Start(fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status))
 	}
-	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", job.ID, pollInterval)
+	return provider.Job{ID: job.ID, PollingURL: job.PollingURL}, nil
+}
+
+// wait attende un job già partito fino al tetto e ne scarica il risultato; con
+// immediate il primo controllo è subito (recupero), altrimenti dopo pollInterval.
+func (c *Client) wait(ctx context.Context, job provider.Job, timeout time.Duration, immediate bool) (res *provider.Result, err error) {
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(job.ID, err) }()
+	if !c.apiHost(job.PollingURL) {
+		return nil, fmt.Errorf("%s: l'indirizzo di attesa del job %s non è sull'host del provider: rifiutato", c.name, job.ID)
+	}
+	timeout = jobTimeout(timeout)
+	// il tetto copre attesa, controlli, ritentativi e scaricamento
+	tctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	defer func() {
+		if err != nil && ctx.Err() == nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
+			res, err = nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
+		}
+	}()
+	for first := true; ; first = false {
+		if !first || !immediate {
+			select {
+			case <-tctx.Done():
+				return nil, tctx.Err()
+			case <-time.After(pollInterval):
+			}
+		}
+		if c.opts.Router {
+			res, err = c.routerPoll(tctx, job)
+		} else {
+			res, err = c.grokPoll(tctx, job)
+		}
+		if err != nil || res != nil {
+			return res, err
+		}
+		fmt.Fprint(os.Stderr, ".")
+	}
+}
 
-	timeout := jobTimeout(req.Timeout)
-	deadline := time.Now().Add(timeout)
-	for {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
+// grokPoll controlla una volta lo stato di un job xai: risultato scaricato,
+// errore, oppure nil e nil se il job è ancora in corso.
+func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Result, error) {
+	var st struct {
+		Status string `json:"status"`
+		Video  struct {
+			URL string `json:"url"`
+		} `json:"video"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+		return nil, err
+	}
+	switch st.Status {
+	case "done", "completed":
+		fmt.Fprintln(os.Stderr)
+		if st.Video.URL == "" {
+			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(pollInterval):
-		}
-		var st struct {
-			Status       string          `json:"status"`
-			UnsignedURLs []string        `json:"unsigned_urls"`
-			Error        json.RawMessage `json:"error"`
-			Usage        struct {
-				Cost float64 `json:"cost"`
-			} `json:"usage"`
-		}
-		if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+		// il video sta su una CDN: scaricato senza chiave
+		data, err := c.download(ctx, st.Video.URL)
+		if err != nil {
 			return nil, err
 		}
-		switch st.Status {
-		case "completed":
-			fmt.Fprintln(os.Stderr)
-			if len(st.UnsignedURLs) == 0 {
-				return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
-			}
-			var media []provider.Media
-			for _, u := range st.UnsignedURLs {
-				// le content URL stanno sullo stesso host API e richiedono l'Authorization
-				data, err := c.downloadAuth(ctx, u)
-				if err != nil {
-					return nil, err
-				}
-				media = append(media, provider.Media{Mime: "video/mp4", Data: data})
-			}
-			return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
-		case "failed", "cancelled", "error":
-			fmt.Fprintln(os.Stderr)
-			return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
-		default:
-			fmt.Fprint(os.Stderr, ".")
-		}
+		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}, nil
+	case "failed", "error", "expired":
+		fmt.Fprintln(os.Stderr)
+		return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
 	}
+	return nil, nil
+}
+
+// routerPoll controlla una volta lo stato di un job OpenRouter: risultato
+// scaricato, errore, oppure nil e nil se il job è ancora in corso.
+func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Result, error) {
+	var st struct {
+		Status       string          `json:"status"`
+		UnsignedURLs []string        `json:"unsigned_urls"`
+		Error        json.RawMessage `json:"error"`
+		Usage        struct {
+			Cost float64 `json:"cost"`
+		} `json:"usage"`
+	}
+	if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+		return nil, err
+	}
+	switch st.Status {
+	case "completed":
+		fmt.Fprintln(os.Stderr)
+		if len(st.UnsignedURLs) == 0 {
+			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
+		}
+		var media []provider.Media
+		for _, u := range st.UnsignedURLs {
+			// le content URL stanno sullo stesso host API e richiedono l'Authorization;
+			// un URL su un altro host si scarica senza chiave
+			get := c.download
+			if c.apiHost(u) {
+				get = c.downloadAuth
+			}
+			data, err := get(ctx, u)
+			if err != nil {
+				return nil, err
+			}
+			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
+		}
+		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
+	case "failed", "cancelled", "error":
+		fmt.Fprintln(os.Stderr)
+		return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+	}
+	return nil, nil
 }
 
 // imageURLPart è un'immagine nella forma di OpenRouter (frame_images, input_references).

@@ -56,3 +56,24 @@ type Provider interface {
 	GenerateImage(ctx context.Context, req ImageRequest) (*Result, error)
 	GenerateVideo(ctx context.Context, req VideoRequest) (*Result, error)
 }
+
+// Job è un job video già partito: quanto serve per riprenderne l'attesa e
+// scaricarne il risultato senza un nuovo avvio.
+type Job struct {
+	ID         string
+	PollingURL string // indirizzo di attesa (OpenRouter lo dà all'avvio, xai lo ricava dall'id)
+}
+
+// JobFetcher è un provider che sa recuperare un job video già partito.
+type JobFetcher interface {
+	// CheckJob rifiuta, senza richieste, un job che non può essere di questo
+	// provider (indirizzo di attesa su un altro host, id vuoto, provider senza job).
+	CheckJob(job Job) error
+	// FetchVideo attende il job (fino a timeout, 0 = 15 minuti) e ne scarica il
+	// risultato; ogni errore porta l'id del job.
+	FetchVideo(ctx context.Context, job Job, timeout time.Duration) (*Result, error)
+}
+
+// OnJobStart, se impostata, riceve ogni job video appena avviato, prima
+// dell'attesa: il CLI la usa per salvarne lo stato (giv job fetch).
+var OnJobStart func(prov string, job Job, req VideoRequest)
