@@ -33,6 +33,7 @@ type runEnv struct {
 	polls    int32
 	pollCode int     // se != 0, il polling risponde con questo stato HTTP
 	pollTo   string  // se != "", il polling risponde 302 verso questo indirizzo
+	pollFail bool    // il job risulta fallito sul provider
 	drop     bool    // l'avvio video chiude la connessione dopo aver letto il corpo
 	failCode int     // stato HTTP dell'avvio rifiutato (default 400)
 	failAt   int32   // dal POST numero N in poi l'avvio fallisce (0 = mai)
@@ -84,6 +85,10 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 			atomic.AddInt32(&e.polls, 1)
 			if e.pollTo != "" {
 				http.Redirect(w, r, e.pollTo, http.StatusFound)
+				return
+			}
+			if e.pollFail {
+				fmt.Fprint(w, `{"status":"failed","error":"boom"}`)
 				return
 			}
 			if e.pollCode != 0 {
@@ -571,5 +576,59 @@ func TestStoryRunPolling302FuoriOrigine(t *testing.T) {
 	_, se, code = jobFetch(t, "--provider", "openrouter", "--out", "o", "job-7")
 	if code == 0 || other != 0 || e.posts != 0 {
 		t.Fatalf("job fetch: code=%d other=%d\n%s", code, other, se)
+	}
+}
+
+// job fallito in modo definitivo: scena finito_male, spesa riservata tenuta,
+// nessuna rigenerazione (nemmeno alla run successiva); con --scene si rifa'.
+func TestStoryRunJobFallitoAlRecuperoNonSiRigenera(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.pendingState(t, "s1", "job-9", "")
+	e.pollFail = true
+	if _, se, code := e.run(t); code == 0 || e.posts != 0 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+	ss := e.sceneState(t, "s1")
+	if ss["status"] != "finito_male" || ss["job"] != nil || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
+		t.Fatalf("stato: %v", ss)
+	}
+	_, se, code := e.run(t)
+	if code != 2 || e.posts != 0 {
+		t.Fatalf("run dopo: code=%d posts=%d\n%s", code, e.posts, se)
+	}
+	e.pollFail = false
+	out, se, code := e.run(t, "--scene", "s1")
+	if code != 0 || e.posts != 1 || out.Started != 1 {
+		t.Fatalf("--scene: code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+func TestStoryRunJobFallitoDopoAvvioNonSiRigenera(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.pollFail = true
+	if _, se, code := e.run(t); code == 0 || e.posts != 1 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+	ss := e.sceneState(t, "s1")
+	if ss["status"] != "finito_male" || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
+		t.Fatalf("stato: %v", ss)
+	}
+	_, se, code := e.run(t)
+	if code != 2 || e.posts != 1 {
+		t.Fatalf("run dopo: code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+// file di stato presente ma vuoto di senso (null, [], {}): codice 2, nessun avvio.
+func TestStoryRunStatoPresenteSenzaSenso(t *testing.T) {
+	for _, st := range []string{"null", "[]", "{}", `{"scenes":{}}`, `{"version":1}`} {
+		t.Run(st, func(t *testing.T) {
+			e := newRunEnv(t, sb("", sc("s1", "")))
+			e.writeState(t, st)
+			_, se, code := e.run(t)
+			if code != 2 || e.posts != 0 {
+				t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+			}
+		})
 	}
 }
