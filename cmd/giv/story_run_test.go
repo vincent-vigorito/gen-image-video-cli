@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"gen-image-video-cli/internal/story"
 	"image"
 	"image/png"
 	"io"
@@ -24,17 +25,18 @@ import (
 // provider (10 s): le storie hanno poche scene.
 
 type runEnv struct {
-	dir     string
-	board   string
-	posts   int32
-	images  int32 // richieste POST /images (fotogramma chiave)
-	bodies  []string
-	mu      sync.Mutex
-	polls   int32
-	failAt  int32   // dal POST numero N in poi l'avvio fallisce (0 = mai)
-	cost    float64 // usage.cost riportato a fine job
-	srv     *httptest.Server
-	catalog []byte
+	dir      string
+	board    string
+	posts    int32
+	images   int32 // richieste POST /images (fotogramma chiave)
+	bodies   []string
+	mu       sync.Mutex
+	polls    int32
+	failCode int     // stato HTTP dell'avvio rifiutato (default 400)
+	failAt   int32   // dal POST numero N in poi l'avvio fallisce (0 = mai)
+	cost     float64 // usage.cost riportato a fine job
+	srv      *httptest.Server
+	catalog  []byte
 }
 
 func newRunEnv(t *testing.T, boardJSON string) *runEnv {
@@ -55,7 +57,11 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 			e.mu.Unlock()
 			n := atomic.AddInt32(&e.posts, 1)
 			if e.failAt > 0 && n >= e.failAt {
-				http.Error(w, `{"error":"rifiutato"}`, http.StatusBadRequest)
+				code := e.failCode
+				if code == 0 {
+					code = http.StatusBadRequest
+				}
+				http.Error(w, `{"error":"rifiutato"}`, code)
 				return
 			}
 			fmt.Fprintf(w, `{"id":"job-%d","polling_url":%q,"status":"pending"}`, n, e.srv.URL+"/poll")
@@ -79,6 +85,7 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 	baseURLs["openrouter"] = e.srv.URL
 	t.Cleanup(func() { baseURLs["openrouter"] = old })
 	t.Setenv("OPENROUTER_API_KEY", "fake")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // contabilita' privata di story run
 	e.dir = t.TempDir()
 	t.Chdir(e.dir)
 	e.board = filepath.Join(e.dir, "spot.json")
@@ -93,6 +100,18 @@ func (e *runEnv) statePath() string { return filepath.Join(e.dir, "spot.stato.js
 func (e *runEnv) writeState(t *testing.T, s string) {
 	t.Helper()
 	if err := os.WriteFile(e.statePath(), []byte(s), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writePrivate scrive lo stesso stato anche nella contabilita' privata, che fa fede.
+func (e *runEnv) writePrivate(t *testing.T, s string) {
+	t.Helper()
+	p, err := story.PrivateStatePath(e.board)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -224,7 +243,9 @@ func TestStoryRunUnAvvioPerScena(t *testing.T) {
 // 4: job partito e non scaricato: si recupera con il solo polling.
 func TestStoryRunRecuperaJobPartito(t *testing.T) {
 	e := newRunEnv(t, sb("", sc("s1", "")))
-	e.writeState(t, fmt.Sprintf(`{"version":1,"scenes":{"s1":{"status":"partito","job":{"provider":"openrouter","id":"job-9","polling_url":%q,"model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":"job-9","cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}}}`, e.srv.URL+"/poll"))
+	st := fmt.Sprintf(`{"version":1,"scenes":{"s1":{"status":"partito","job":{"provider":"openrouter","id":"job-9","polling_url":%q,"model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":"job-9","cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}}}`, e.srv.URL+"/poll")
+	e.writeState(t, st)
+	e.writePrivate(t, st)
 	out, se, code := e.run(t)
 	if code != 0 || e.posts != 0 || out.Recovered != 1 || e.polls == 0 {
 		t.Fatalf("code=%d posts=%d recovered=%d polls=%d\n%s", code, e.posts, out.Recovered, e.polls, se)
@@ -326,13 +347,15 @@ func TestStoryRunFotogrammaChiaveRiusato(t *testing.T) {
 }
 
 type fakeFrames struct {
-	png  []byte
-	clip string
+	png     []byte
+	clip    string
+	content []byte
 }
 
 func (f *fakeFrames) Check() error { return nil }
 func (f *fakeFrames) LastFrame(_ context.Context, clip, out string, _ bool) error {
 	f.clip = clip
+	f.content, _ = os.ReadFile(clip)
 	return os.WriteFile(out, f.png, 0o644)
 }
 
@@ -359,7 +382,64 @@ func TestStoryRunContinuaDaPartoDallUltimoFotogramma(t *testing.T) {
 	if !strings.Contains(e.bodies[1], "first_frame") || !strings.Contains(e.bodies[1], base64.StdEncoding.EncodeToString(f.png)) {
 		t.Errorf("s2 non parte dall'ultimo fotogramma di s1: %.300s", e.bodies[1])
 	}
-	if !strings.Contains(filepath.ToSlash(f.clip), "clip/s1-r1-") {
-		t.Errorf("fotogramma estratto dalla clip sbagliata: %s", f.clip)
+	if string(f.content) != "MP4DATA" {
+		t.Errorf("fotogramma estratto dalla clip sbagliata (%s): %q", f.clip, f.content)
+	}
+}
+
+// stato con altro testo dopo l'oggetto JSON: codice 2, nessun avvio.
+func TestStoryRunStatoConCodaJSON(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	st := `{"version":1,"scenes":{}} {"x":1}`
+	e.writeState(t, st)
+	e.writePrivate(t, st)
+	_, se, code := e.run(t)
+	if code != 2 || e.posts != 0 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+// costo reale del fotogramma chiave (0.14) sopra il dichiarato (0.01): il tetto
+// ferma la scena prima dell'avvio del video.
+func TestStoryRunFotogrammaCostoRealeFermaIlVideo(t *testing.T) {
+	key := `,"fotogramma_chiave":{"prompt":"un gatto fermo","costo_dichiarato_usd":0.01}`
+	e := newRunEnv(t, sb(`,"tetto_costo_usd":0.6`, sc("s1", key)))
+	_, se, code := e.run(t)
+	if code != 2 || e.images != 1 || e.posts != 0 {
+		t.Fatalf("code=%d images=%d posts=%d\n%s", code, e.images, e.posts, se)
+	}
+}
+
+// avvio rifiutato con 4xx: nessun addebito, la scena si rilancia.
+func TestStoryRunAvvio4xxSiRilancia(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.failAt = 1
+	if _, se, code := e.run(t); code == 0 || e.posts != 1 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+	e.failAt = 0
+	out, se, code := e.run(t)
+	if code != 0 || e.posts != 2 || out.Started != 1 {
+		t.Fatalf("rilancio: code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+// avvio con 5xx: esito incerto (potrebbe essere partito e addebitato): il run
+// successivo si rifiuta con codice 2 senza avvii, finche' non si usa --scene.
+func TestStoryRunAvvio5xxStatoIncerto(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.failAt, e.failCode = 1, 500
+	if _, se, code := e.run(t); code == 0 {
+		t.Fatalf("atteso errore\n%s", se)
+	}
+	before := e.posts
+	e.failAt = 0
+	_, se, code := e.run(t)
+	if code != 2 || e.posts != before {
+		t.Fatalf("senza --scene: code=%d posts=%d (prima %d)\n%s", code, e.posts, before, se)
+	}
+	out, se, code := e.run(t, "--scene", "s1")
+	if code != 0 || e.posts != before+1 || out.Started != 1 {
+		t.Fatalf("--scene: code=%d posts=%d\n%s", code, e.posts, se)
 	}
 }
