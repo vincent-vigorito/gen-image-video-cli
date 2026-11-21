@@ -21,7 +21,7 @@ func fetchServer(t *testing.T, poll func(n int32, w http.ResponseWriter, srvURL 
 		switch {
 		case r.Method == http.MethodPost:
 			atomic.AddInt32(&posts, 1)
-		case r.URL.Path == "/poll":
+		case r.URL.Path == "/videos/job-42":
 			poll(atomic.AddInt32(&n, 1), w, srv.URL)
 		case r.URL.Path == "/content":
 			w.Write([]byte("MP4DATA"))
@@ -37,7 +37,7 @@ func TestFetchVideoCompletatoZeroAvvii(t *testing.T) {
 		fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":0.5}}`, u+"/content")
 	})
 	c := New("openrouter", srv.URL, "k", Options{Router: true})
-	res, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: srv.URL + "/poll"}, time.Minute)
+	res, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: srv.URL + "/videos/job-42"}, time.Minute)
 	if err != nil || len(res.Media) != 1 || string(res.Media[0].Data) != "MP4DATA" || res.JobID != "job-42" || res.CostUSD != 0.5 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
@@ -56,7 +56,7 @@ func TestFetchVideoInCorsoAttendePoiScarica(t *testing.T) {
 		fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q]}`, u+"/content")
 	})
 	c := New("openrouter", srv.URL, "k", Options{Router: true})
-	res, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: srv.URL + "/poll"}, time.Minute)
+	res, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: srv.URL + "/videos/job-42"}, time.Minute)
 	if err != nil || string(res.Media[0].Data) != "MP4DATA" || *posts != 0 {
 		t.Fatalf("res=%+v err=%v posts=%d", res, err, *posts)
 	}
@@ -68,7 +68,7 @@ func TestFetchVideoFallitoPortaId(t *testing.T) {
 		fmt.Fprint(w, `{"status":"failed","error":"boom"}`)
 	})
 	c := New("openrouter", srv.URL, "k", Options{Router: true})
-	_, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: srv.URL + "/poll"}, time.Minute)
+	_, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: srv.URL + "/videos/job-42"}, time.Minute)
 	if err == nil || !strings.Contains(err.Error(), "job-42") {
 		t.Fatalf("atteso errore con l'id, ottenuto %v", err)
 	}
