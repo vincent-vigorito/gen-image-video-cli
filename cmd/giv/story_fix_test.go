@@ -311,3 +311,30 @@ func TestStoryFixAvvisoSuStderr(t *testing.T) {
 	}
 	unicoJSON(t, out)
 }
+
+// fotogramma registrato ma file sparito: niente rigenerazione da sola (codice 2,
+// nessun avvio); con --new-keyframe si rigenera.
+func TestStoryFixFotogrammaSparito(t *testing.T) {
+	e := newRunEnv(t, sb(`,"tetto_costo_usd":5`, sc("s1", keyDecl)))
+	if _, se, code := e.run(t); code != 0 {
+		t.Fatalf("prima: code=%d\n%s", code, se)
+	}
+	kf, _ := e.sceneState(t, "s1")["keyframe"].(map[string]any)
+	if err := os.Remove(filepath.Join(e.dir, kf["file"].(string))); err != nil {
+		t.Fatal(err)
+	}
+	// anche la clip e' sparita: senza --scene la scena si rifarebbe
+	clip, _ := e.sceneState(t, "s1")["clip"].(map[string]any)
+	if err := os.Remove(filepath.Join(e.dir, clip["file"].(string))); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{}, {"--scene", "s1"}} {
+		_, se, code := e.run(t, args...)
+		if code != 2 || e.images != 1 || e.posts != 1 || !strings.Contains(se, "--new-keyframe") {
+			t.Fatalf("%v: code=%d images=%d posts=%d\n%s", args, code, e.images, e.posts, se)
+		}
+	}
+	if _, se, code := e.run(t, "--scene", "s1", regenFlag); code != 0 || e.images != 2 || e.posts != 2 {
+		t.Fatalf("rigenera: code=%d images=%d posts=%d\n%s", code, e.images, e.posts, se)
+	}
+}
