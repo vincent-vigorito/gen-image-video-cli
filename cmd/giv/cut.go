@@ -116,6 +116,7 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 		trans = montage.Transition{Kind: montage.Fade, Duration: cutFadeSeconds}
 	}
 	var missing []string
+	var st *story.State // stato di giv story run, letto alla prima scena video
 	for i := range s.Scene {
 		sc := &s.Scene[i]
 		c := montage.Clip{Duration: float64(sc.Durata), Transition: trans}
@@ -125,9 +126,15 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 		case story.Immagine:
 			c.Path, c.Image = s.Path(sc.File), true
 		case story.Video:
-			clip, err := sceneClip(s, path, sc)
+			if st == nil {
+				var err error
+				if st, err = story.LoadState(story.StatePath(path)); err != nil {
+					return p, usageError("%s: %v", path, err)
+				}
+			}
+			clip, err := st.ClipFile(s, sc.ID)
 			if err != nil {
-				missing = append(missing, fmt.Sprintf("scena %s: %v", sc.ID, err))
+				missing = append(missing, sceneMissing(st, sc.ID, err))
 				continue
 			}
 			c.Path = clip
@@ -302,9 +309,13 @@ func (chk *storyChecker) voiceWarning(sc *story.Scene, sceneSeconds float64) str
 	return ""
 }
 
-// sceneClip è la clip di una scena video generata da giv story run.
-// Provvisorio fino al merge di CLI-876: il file di stato di story run
-// (story.LoadState, ClipFile) non c'è ancora, quindi la scena risulta da generare.
-func sceneClip(s *story.Storyboard, path string, sc *story.Scene) (string, error) {
-	return "", errors.New("clip non ancora generata")
+// sceneMissing descrive una scena video senza clip da montare: l'errore di
+// ClipFile (che nomina la scena) e lo stato registrato da giv story run, se ce
+// n'è uno; l'errore del provider resta nello stato, non si ristampa.
+func sceneMissing(st *story.State, id string, err error) string {
+	msg := err.Error()
+	if sc := st.Scenes[id]; sc != nil && sc.Status != "" && sc.Status != story.Fatto {
+		msg += " (stato: " + strings.ReplaceAll(sc.Status, "_", " ") + ")"
+	}
+	return msg
 }
