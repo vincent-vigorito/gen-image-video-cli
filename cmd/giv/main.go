@@ -184,7 +184,8 @@ Uso:
   giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                    [--tutela prodotto|illustrazione] [--strict]
                                    frase finale dei preset per quel modello (nessuna chiamata)
-  giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito; run: --scene <id>)
+  giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
+                                   run: --scene <id> [--new-keyframe]; aiuto: giv story help)
   giv version                      stampa la versione
 
 Flag comuni:

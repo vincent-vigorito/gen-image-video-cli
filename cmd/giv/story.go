@@ -28,6 +28,9 @@ func cmdStory(args []string) error {
 		return usageError("uso: giv story check|run|cut <storyboard.json>")
 	}
 	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Fprint(os.Stderr, storyHelp)
+		return nil
 	case "check":
 		return cmdStoryCheck(args[1:])
 	case "run":
@@ -38,9 +41,74 @@ func cmdStory(args []string) error {
 	return usageError("giv story %s: sottocomando sconosciuto (check, run o cut)", args[0])
 }
 
+// storyHelp è l'aiuto di giv story (giv story --help), su stderr come quello di giv.
+const storyHelp = `giv story — video a più scene da uno storyboard JSON (formato nel README, sezione Storyboard)
+
+Uso:
+  giv story check <storyboard.json>   controlla lo storyboard e ne stima il costo: nessuna
+                                      generazione, gratuito
+  giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
+                                      genera a pagamento le scene video mancanti; stato e
+                                      spesa in <nome>.stato.json accanto allo storyboard
+  giv story cut <storyboard.json>     monta con ffmpeg le scene già pronte in un solo video
+  giv story <sottocomando> --help     aiuto e flag del sottocomando
+
+Flag di giv story run (anche dopo il file):
+  --scene <id>       rifà solo questa scena video, anche fatta, incerta o fallita
+  --new-keyframe     con --scene: rigenera anche il fotogramma chiave della scena
+
+Uscita: su stdout solo il JSON del risultato; avanzamento, avvisi ed errori su stderr.
+Uno storyboard, uno stato o un tetto di spesa non validi escono con codice 2, senza generazioni.
+`
+
+// storySubHelp è l'aiuto dei sottocomandi (giv story <sottocomando> --help).
+var storySubHelp = map[string]string{
+	"check": `uso: giv story check <storyboard.json>
+
+Controlla lo storyboard senza generare niente: forma, file, riferimenti fra scene, modelli
+sul catalogo letto adesso, capacità, preset e tutela. Somma stime da listino e costi
+dichiarati e, con tetto_costo_usd, li confronta col tetto insieme alla spesa già registrata
+nello stato (<nome>.stato.json) per scene non più nello storyboard (removed_scenes).
+Ogni problema trovato esce con codice 2, uno per riga.
+
+Flag:
+  -h, --help   questo aiuto
+`,
+	"run": `uso: giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
+
+Genera a pagamento le scene video dello storyboard, in ordine e una richiesta alla volta:
+prima l'eventuale fotogramma chiave, poi la clip, in clip/ accanto allo storyboard. Stato e
+spesa sono in <nome>.stato.json: una nuova esecuzione recupera i job già partiti senza
+rilanciarli e genera solo le scene mancanti. Con tetto_costo_usd, prima di ogni richiesta
+a pagamento la spesa registrata (anche di scene non più nello storyboard) più le stime
+ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii.
+
+Flag (anche dopo il file):
+  --scene <id>       rifà solo questa scena video, anche fatta, incerta o fallita: la
+                     ripresa precedente resta nello stato e in clip/; il fotogramma
+                     chiave già generato si riusa (se il suo file manca, codice 2:
+                     serve --new-keyframe)
+  --new-keyframe     solo con --scene, per una scena con fotogramma_chiave: rigenera
+                     anche il fotogramma chiave, con la stessa riserva e lo stesso tetto
+                     delle altre richieste; il precedente resta fra le riprese precedenti
+  -h, --help         questo aiuto
+`,
+	"cut": `uso: giv story cut <storyboard.json>
+
+Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
+clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce,
+musica e sottotitoli del blocco montaggio. Nessuna generazione e nessuna rete; il file
+d'uscita (montaggio.uscita, altrimenti <nome>.mp4) si riscrive a ogni montaggio.
+
+Flag:
+  -h, --help   questo aiuto
+`,
+}
+
 // storyArg legge l'unico argomento di un sottocomando: il file dello storyboard.
 func storyArg(name string, args []string) (string, error) {
 	fl := flag.NewFlagSet("story "+name, flag.ExitOnError)
+	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp[name]) }
 	if err := fl.Parse(args); err != nil {
 		return "", err
 	}
@@ -73,16 +141,53 @@ func storyError(path string, err error) error {
 
 // storyCheck è l'uscita di giv story check.
 type storyCheck struct {
-	Storyboard      string       `json:"storyboard"`
-	Titolo          string       `json:"titolo,omitempty"`
-	Scene           []sceneCheck `json:"scene"`
-	CostEstUSD      float64      `json:"cost_est_usd"`                // somma delle stime da listino
-	CostDeclaredUSD float64      `json:"cost_declared_usd,omitempty"` // somma dei costi dichiarati dall'autore
-	CostTotalUSD    float64      `json:"cost_total_usd"`              // stime più costi dichiarati
-	NotEstimated    []string     `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
-	CapUSD          *float64     `json:"cap_usd,omitempty"`           // tetto_costo_usd
+	Storyboard      string         `json:"storyboard"`
+	Titolo          string         `json:"titolo,omitempty"`
+	Scenes          []sceneCheck   `json:"scenes"`
+	CostEstUSD      float64        `json:"cost_est_usd"`                // somma delle stime da listino
+	CostDeclaredUSD float64        `json:"cost_declared_usd,omitempty"` // somma dei costi dichiarati dall'autore
+	CostTotalUSD    float64        `json:"cost_total_usd"`              // stime più costi dichiarati
+	NotEstimated    []string       `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
+	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"` // spesa nello stato di scene non più nello storyboard: conta nel tetto
+	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
+	CapUSD          *float64       `json:"cap_usd,omitempty"` // tetto_costo_usd
 
-	exactUSD float64 // totale con le stime non arrotondate: è quello che conta per il tetto
+	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
+	removedExact float64 // RemovedSpentUSD non arrotondata
+}
+
+// removedScene è la spesa registrata nello stato per una scena che non è più
+// una scena video dello storyboard (tolta, rinominata o cambiata di tipo):
+// conta ancora nel tetto, ma non è fra le scene.
+type removedScene struct {
+	ID       string  `json:"id"`
+	SpentUSD float64 `json:"spent_usd"`
+}
+
+// removedSpend elenca, per id, le scene dello stato con generazioni registrate
+// che non sono più scene video dello storyboard e ne somma la spesa non arrotondata.
+func removedSpend(s *story.Storyboard, st *story.State) ([]removedScene, float64) {
+	var out []removedScene
+	var total float64
+	for _, id := range sortedKeys(st.Scenes) {
+		ss := st.Scenes[id]
+		if sc := s.Scena(id); (sc != nil && sc.Tipo == story.Video) || len(ss.Charges) == 0 {
+			continue
+		}
+		v := ss.Spent()
+		out = append(out, removedScene{ID: id, SpentUSD: round4(v)})
+		total += v
+	}
+	return out, total
+}
+
+// removedText descrive la spesa delle scene non più nello storyboard, per avvisi e rifiuti.
+func removedText(rs []removedScene, v float64) string {
+	ids := make([]string, len(rs))
+	for i, r := range rs {
+		ids[i] = r.ID
+	}
+	return fmt.Sprintf("%.4f $ per scene non più nello storyboard (%s)", round4(v), strings.Join(ids, ", "))
 }
 
 // sceneCheck è una scena controllata: per le scene video il piano di giv video --dry-run.
@@ -132,17 +237,32 @@ func cmdStoryCheck(args []string) error {
 
 // checkStory controlla ogni scena sul modello e sul catalogo letto adesso, somma
 // i costi e applica il tetto. Nessuna generazione: solo file locali e cataloghi.
+// La spesa registrata nello stato per scene non più nello storyboard è a parte
+// e conta nel tetto.
 func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
+	st, err := story.LoadState(story.StatePath(path))
+	if err != nil {
+		return nil, usageError("%v", err)
+	}
 	out, err := newStoryChecker(s).plan(path, nil)
 	if err != nil {
 		return nil, err
+	}
+	out.RemovedScenes, out.removedExact = removedSpend(s, st)
+	out.RemovedSpentUSD = round4(out.removedExact)
+	if len(out.RemovedScenes) > 0 {
+		fmt.Fprintf(os.Stderr, "spesa già registrata nello stato: %s; conta nel tetto\n", removedText(out.RemovedScenes, out.removedExact))
 	}
 	if cap := s.TettoCostoUSD; cap != nil {
 		if len(out.NotEstimated) > 0 {
 			return nil, usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
 				path, strings.Join(out.NotEstimated, ", "))
 		}
-		if out.exactUSD > *cap {
+		if out.exactUSD+out.removedExact > *cap {
+			if len(out.RemovedScenes) > 0 {
+				return nil, usageError("%s: costo previsto %.4f $ più spesa già registrata di %s oltre tetto_costo_usd %.4f $",
+					path, out.CostTotalUSD, removedText(out.RemovedScenes, out.removedExact), *cap)
+			}
 			return nil, usageError("%s: costo previsto %.4f $ oltre tetto_costo_usd %.4f $", path, out.CostTotalUSD, *cap)
 		}
 	} else if len(out.NotEstimated) > 0 {
@@ -156,6 +276,9 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, error) {
 	s := sc.s
 	out := &storyCheck{Storyboard: path, Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
+	if err := checkTutela("default.tutela", s.Default.Tutela); err != nil {
+		return nil, storyError(path, err)
+	}
 	var rejects []error
 	for i := range s.Scene {
 		scene := &s.Scene[i]
@@ -170,7 +293,7 @@ func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, err
 			rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
 			continue
 		}
-		out.Scene = append(out.Scene, c)
+		out.Scenes = append(out.Scenes, c)
 		if c.CostEstUSD != nil {
 			out.CostEstUSD += *c.CostEstUSD
 			out.exactUSD += sc.exactEstimate(c)
@@ -310,6 +433,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 // nel catalogo letto adesso.
 func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 	s, d, g := sc.s, sc.s.Default, scene.Generazione
+	if err := checkTutela("tutela", g.Tutela); err != nil {
+		return videoOptions{}, err
+	}
 	pick := func(v ...string) string {
 		for _, x := range v {
 			if x != "" {
@@ -418,6 +544,25 @@ func (sc *storyChecker) keyframe(scene *story.Scene, o videoOptions) (*keyframeC
 		k.Inputs = append(k.Inputs, shownInput(in))
 	}
 	return k, nil
+}
+
+// checkTutela controlla la tutela di uno storyboard (campo name): una clausola
+// della libreria dei preset (prodotto, illustrazione e quelle dei file
+// dell'utente) oppure no; vuota = come giv video (prodotto coi preset e un
+// primo fotogramma).
+func checkTutela(name, t string) error {
+	if t == "" || t == "no" {
+		return nil
+	}
+	lib, err := loadPresets()
+	if err != nil {
+		return err
+	}
+	valid := lib.Protections()
+	if !slices.Contains(valid, t) {
+		return usageError("%s %q sconosciuta (valide: %s, no)", name, t, strings.Join(valid, ", "))
+	}
+	return nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {
