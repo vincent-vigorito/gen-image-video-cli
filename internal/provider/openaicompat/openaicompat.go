@@ -52,15 +52,28 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 }
 
 // checkRedirect lascia l'Authorization solo ai salti sull'origine dell'API
-// (schema, host e porta): fuori origine la chiave viene tolta.
+// (schema, host e porta): fuori origine la chiave viene tolta. Le GET di attesa
+// dei job (contesto di pollOnly) fuori origine non si seguono: la loro risposta
+// decide se il job è finito male, e deve venire dal provider.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
 	if !c.apiOrigin(req.URL) {
+		if req.Context().Value(pollKey{}) != nil {
+			return http.ErrUseLastResponse // il 3xx diventa un errore HTTP: il job resta
+		}
 		req.Header.Del("Authorization")
 	}
 	return nil
+}
+
+type pollKey struct{}
+
+// pollOnly segna le richieste di attesa di un job: redirect solo sull'origine
+// dell'API (i download dei risultati restano liberi, senza chiave).
+func pollOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pollKey{}, true)
 }
 
 func (c *Client) Name() string { return c.name }
@@ -673,7 +686,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		} `json:"video"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -690,7 +703,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
 	}
 	return nil, nil
 }
@@ -706,7 +719,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 			Cost float64 `json:"cost"`
 		} `json:"usage"`
 	}
-	if err := c.doJSONWith(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -732,7 +745,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
 	case "failed", "cancelled", "error":
 		fmt.Fprintln(os.Stderr)
-		return nil, fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
 	}
 	return nil, nil
 }

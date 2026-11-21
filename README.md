@@ -142,6 +142,7 @@ prima o dopo.
 | `video` | tabella sotto |
 | `job fetch` | `--provider` (xai o openrouter, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
+| `story run` | `--scene <id>` rifà una sola scena; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
 | `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
