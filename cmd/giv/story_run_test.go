@@ -33,7 +33,7 @@ type runEnv struct {
 	polls    int32
 	pollCode int     // se != 0, il polling risponde con questo stato HTTP
 	pollTo   string  // se != "", il polling risponde 302 verso questo indirizzo
-	pollOnly string // con pollFail: solo il job con questo id
+	pollOnly string  // con pollFail: solo il job con questo id
 	pollFail bool    // il job risulta fallito sul provider
 	drop     bool    // l'avvio video chiude la connessione dopo aver letto il corpo
 	failCode int     // stato HTTP dell'avvio rifiutato (default 400)
