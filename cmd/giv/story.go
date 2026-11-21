@@ -81,6 +81,8 @@ type storyCheck struct {
 	CostTotalUSD    float64      `json:"cost_total_usd"`              // stime più costi dichiarati
 	NotEstimated    []string     `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
 	CapUSD          *float64     `json:"cap_usd,omitempty"`           // tetto_costo_usd
+
+	exactUSD float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 }
 
 // sceneCheck è una scena controllata: per le scene video il piano di giv video --dry-run.
@@ -131,11 +133,35 @@ func cmdStoryCheck(args []string) error {
 // checkStory controlla ogni scena sul modello e sul catalogo letto adesso, somma
 // i costi e applica il tetto. Nessuna generazione: solo file locali e cataloghi.
 func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
+	out, err := newStoryChecker(s).plan(path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if cap := s.TettoCostoUSD; cap != nil {
+		if len(out.NotEstimated) > 0 {
+			return nil, usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
+				path, strings.Join(out.NotEstimated, ", "))
+		}
+		if out.exactUSD > *cap {
+			return nil, usageError("%s: costo previsto %.4f $ oltre tetto_costo_usd %.4f $", path, out.CostTotalUSD, *cap)
+		}
+	} else if len(out.NotEstimated) > 0 {
+		fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(out.NotEstimated, ", "))
+	}
+	return out, nil
+}
+
+// plan controlla le scene indicate (nil = tutte), nell'ordine dello storyboard,
+// e ne somma i costi, senza tetto; i job video preparati restano in sc.jobs.
+func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, error) {
+	s := sc.s
 	out := &storyCheck{Storyboard: path, Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
-	sc := &storyChecker{s: s, clients: map[string]*storyClient{}}
 	var rejects []error
 	for i := range s.Scene {
 		scene := &s.Scene[i]
+		if ids != nil && !ids[scene.ID] {
+			continue
+		}
 		c, err := sc.scene(scene)
 		if err != nil {
 			if code, _ := exitCode(err); code != exitUsage {
@@ -147,12 +173,15 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		out.Scene = append(out.Scene, c)
 		if c.CostEstUSD != nil {
 			out.CostEstUSD += *c.CostEstUSD
+			out.exactUSD += sc.exactEstimate(c)
 		}
 		if c.CostDeclaredUSD != nil {
 			out.CostDeclaredUSD += *c.CostDeclaredUSD
+			out.exactUSD += *c.CostDeclaredUSD
 		}
 		if k := c.Keyframe; k != nil && k.CostDeclaredUSD != nil {
 			out.CostDeclaredUSD += *k.CostDeclaredUSD
+			out.exactUSD += *k.CostDeclaredUSD
 		}
 	}
 	if len(rejects) > 0 {
@@ -161,21 +190,19 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 	out.NotEstimated = sc.notEstimated
 	out.CostEstUSD, out.CostDeclaredUSD = round4(out.CostEstUSD), round4(out.CostDeclaredUSD)
 	out.CostTotalUSD = round4(out.CostEstUSD + out.CostDeclaredUSD)
-	if cap := s.TettoCostoUSD; cap != nil {
-		if len(out.NotEstimated) > 0 {
-			return nil, usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
-				path, strings.Join(out.NotEstimated, ", "))
-		}
-		if out.CostTotalUSD > *cap {
-			return nil, usageError("%s: costo previsto %.4f $ oltre tetto_costo_usd %.4f $", path, out.CostTotalUSD, *cap)
-		}
-	} else if len(out.NotEstimated) > 0 {
-		fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(out.NotEstimated, ", "))
-	}
 	return out, nil
 }
 
 func round4(v float64) float64 { return math.Round(v*1e4) / 1e4 }
+
+// exactEstimate è la stima da listino della scena c non arrotondata (quella
+// del manifest ha quattro decimali).
+func (sc *storyChecker) exactEstimate(c sceneCheck) float64 {
+	if job := sc.jobs[c.ID]; job != nil && job.plan.costExact != nil {
+		return *job.plan.costExact
+	}
+	return *c.CostEstUSD
+}
 
 // storyChecker controlla le scene di uno storyboard: un client e una lettura del
 // catalogo per provider.
@@ -184,6 +211,17 @@ type storyChecker struct {
 	clients      map[string]*storyClient
 	notEstimated []string
 	probeUntil   time.Time // scadenza delle letture della voce (voiceWarning)
+
+	// giv story run: cartella e nome dei file per scena, job pronti a partire
+	out    string
+	names  map[string]string
+	jobs   map[string]*videoJob
+	images map[string]*imageJob // fotogrammi chiave
+}
+
+func newStoryChecker(s *story.Storyboard) *storyChecker {
+	return &storyChecker{s: s, clients: map[string]*storyClient{}, names: map[string]string{},
+		jobs: map[string]*videoJob{}, images: map[string]*imageJob{}}
 }
 
 // storyClient è un provider col catalogo video letto una volta sola.
@@ -232,11 +270,13 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	if err != nil {
 		return c, err
 	}
+	o.Out, o.Name = sc.out, sc.names[scene.ID]
 	fmt.Fprintf(os.Stderr, "scena %s: %s/%s\n", scene.ID, o.Provider, o.Model)
 	job, err := prepareVideo(o)
 	if err != nil {
 		return c, err
 	}
+	sc.jobs[scene.ID] = job
 	plan := job.plan
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
@@ -367,10 +407,12 @@ func (sc *storyChecker) keyframe(scene *story.Scene, o videoOptions) (*keyframeC
 	if prov == "" {
 		prov = o.Provider
 	}
-	job, err := prepareImage(imageOptions{Provider: prov, Model: fk.Modello, Prompt: fk.Prompt, Aspect: o.Aspect, N: 1, Inputs: inputs})
+	job, err := prepareImage(imageOptions{Provider: prov, Model: fk.Modello, Prompt: fk.Prompt, Aspect: o.Aspect, N: 1, Inputs: inputs,
+		Out: sc.out, Name: sc.names[scene.ID] + "-fotogramma"})
 	if err != nil {
 		return nil, err
 	}
+	sc.images[scene.ID] = job
 	k := &keyframeCheck{Provider: prov, Model: job.req.Model, Prompt: fk.Prompt, CostDeclaredUSD: fk.CostoDichiaratoUSD}
 	for _, in := range inputs {
 		k.Inputs = append(k.Inputs, shownInput(in))
@@ -385,10 +427,6 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
-}
-
-func cmdStoryRun(args []string) error {
-	return &cliError{code: exitError, msg: "giv story run non ancora disponibile"}
 }
 
 func cmdStoryCut(args []string) error {

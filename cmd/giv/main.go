@@ -184,7 +184,7 @@ Uso:
   giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                    [--tutela prodotto|illustrazione] [--strict]
                                    frase finale dei preset per quel modello (nessuna chiamata)
-  giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito)
+  giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito; run: --scene <id>)
   giv version                      stampa la versione
 
 Flag comuni:
@@ -601,6 +601,8 @@ type videoPlan struct {
 	CostEstUSD  *float64       `json:"cost_est_usd"`
 	CostSource  string         `json:"cost_source,omitempty"`
 	Warnings    []string       `json:"warnings,omitempty"`
+
+	costExact *float64 // stima non arrotondata, per i tetti (giv story run)
 }
 
 type videoChecks struct {
@@ -651,7 +653,7 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 		est, why = nil, "stima non valida"
 	}
 	if est != nil {
-		plan.CostEstUSD, plan.CostSource = &est.USD, est.Source
+		plan.CostEstUSD, plan.CostSource, plan.costExact = &est.USD, est.Source, &est.Exact
 	}
 	if opt.maxCost != nil {
 		if est == nil {

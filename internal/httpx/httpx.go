@@ -29,9 +29,22 @@ type RetryFunc func(ctx context.Context, fn func() error) error
 // attesa massima fra due tentativi, anche con un Retry-After più lungo
 const maxWait = 2 * time.Minute
 
-// Retry esegue fn ritentando fino a 2 volte (backoff 2s, 4s) sui soli 5xx.
+// Retry esegue fn ritentando fino a 2 volte (backoff 2s, 4s) sui soli 5xx; con
+// un contesto di WithoutRetry una volta sola.
 func Retry(ctx context.Context, fn func() error) error {
+	if ctx.Value(noRetryKey{}) != nil {
+		return fn()
+	}
 	return retry(ctx, fn, 2, func(err error) bool { return status(err) >= 500 })
+}
+
+type noRetryKey struct{}
+
+// WithoutRetry: le richieste fatte con il contesto restituito non si ripetono
+// sui 5xx (Retry diventa NoRetry). Per le generazioni a pagamento in cui un
+// secondo invio potrebbe far pagare due volte (fotogrammi di giv story run).
+func WithoutRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRetryKey{}, true)
 }
 
 // RetryPoll è per le GET di attesa dei job video: ritenta fino a 5 volte (backoff

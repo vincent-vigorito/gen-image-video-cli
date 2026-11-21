@@ -47,6 +47,22 @@ type videoJob struct {
 	pres      presets.Result
 	plan      *videoPlan // controlli e stima (prompt dell'utente in Prompt)
 	out, name string
+
+	// giv story run: ingressi come compaiono nel manifest (req ha le copie
+	// private) e salvataggio dei file al posto di output.SaveAll
+	inputs *manifestInputs
+	save   saveFunc
+}
+
+// saveFunc salva i media del risultato col nome slug (vede anche l'addebito,
+// prima di scrivere); nil = output.SaveAll nella cartella out.
+type saveFunc func(slug string, res *provider.Result) ([]output.FileInfo, error)
+
+func saveMedia(save saveFunc, dir, slug string, res *provider.Result) ([]output.FileInfo, error) {
+	if save != nil {
+		return save(slug, res)
+	}
+	return output.SaveAll(dir, slug, res.Media)
 }
 
 // prepareVideo controlla o senza spendere: provider, modello, preset, flag, ingressi,
@@ -122,6 +138,9 @@ func (j *videoJob) run(ctx context.Context) (manifest, error) {
 	var tmp tempInputs
 	defer tmp.cleanup()
 	inputs := newManifestInputs(req) // come li ha passati l'utente, prima dei download
+	if j.inputs != nil {
+		inputs = j.inputs
+	}
 	if err := tmp.resolveVideo(&req); err != nil {
 		return manifest{}, err
 	}
@@ -137,7 +156,7 @@ func (j *videoJob) run(ctx context.Context) (manifest, error) {
 	if slug == "" {
 		slug = output.Slug(j.prompt)
 	}
-	files, err := output.SaveAll(j.out, slug, res.Media)
+	files, err := saveMedia(j.save, j.out, slug, res)
 	if err != nil {
 		return manifest{}, err
 	}
@@ -159,6 +178,7 @@ type imageJob struct {
 	provider  string // come indicato dall'utente
 	req       provider.ImageRequest
 	out, name string
+	save      saveFunc // giv story run; nil = output.SaveAll
 }
 
 // prepareImage controlla provider, chiave e modello, senza spendere.
@@ -197,7 +217,7 @@ func (j *imageJob) run(ctx context.Context) (manifest, error) {
 	if slug == "" {
 		slug = output.Slug(req.Prompt)
 	}
-	files, err := output.SaveAll(j.out, slug, res.Media)
+	files, err := saveMedia(j.save, j.out, slug, res)
 	if err != nil {
 		return manifest{}, err
 	}
