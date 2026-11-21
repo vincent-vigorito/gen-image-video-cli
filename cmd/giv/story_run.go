@@ -39,24 +39,29 @@ var storyFrames frameExtractor = montage.Tool{}
 func cmdStoryRun(args []string) error {
 	fl := flag.NewFlagSet("story run", flag.ExitOnError)
 	only := fl.String("scene", "", "rifà solo questa scena (id); la ripresa precedente resta")
+	newKeyframe := fl.Bool("new-keyframe", false, "con --scene: rigenera anche il fotogramma chiave")
+	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["run"]) }
 	if err := fl.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
 	// flag anche dopo il file
 	rest := fl.Args()
 	if len(rest) == 0 {
-		return usageError("uso: giv story run [--scene <id>] <storyboard.json>")
+		return usageError("uso: giv story run [--scene <id> [--new-keyframe]] <storyboard.json>")
 	}
 	path := rest[0]
 	if err := fl.Parse(rest[1:]); err != nil {
 		return usageError("%v", err)
 	}
 	if fl.NArg() > 0 {
-		return usageError("uso: giv story run [--scene <id>] <storyboard.json>")
+		return usageError("uso: giv story run [--scene <id> [--new-keyframe]] <storyboard.json>")
+	}
+	if *newKeyframe && *only == "" {
+		return usageError("--new-keyframe vale solo insieme a --scene <id>")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	man, err := runStory(ctx, path, *only)
+	man, err := runStory(ctx, path, *only, *newKeyframe)
 	if man != nil {
 		// scene fallite sul provider: manifest delle altre, poi l'errore con l'elenco
 		if perr := output.PrintJSON(man); err == nil {
@@ -72,14 +77,17 @@ type storyRunManifest struct {
 	Storyboard string     `json:"storyboard"`
 	State      string     `json:"state"`
 	Titolo     string     `json:"titolo,omitempty"`
-	Scene      []sceneRun `json:"scene"`
+	Scenes     []sceneRun `json:"scenes"`
 	Started    int        `json:"jobs_started"`   // job video avviati in questa esecuzione
 	Recovered  int        `json:"jobs_recovered"` // job già partiti, scaricati senza nuovo avvio
 	Keyframes  int        `json:"keyframes"`      // fotogrammi chiave generati in questa esecuzione
-	CostEstUSD float64    `json:"cost_est_usd"`   // stime (o costi dichiarati) di tutte le generazioni
+	CostEstUSD float64    `json:"cost_est_usd"`   // stime (o costi dichiarati) delle generazioni delle scene
 	CostUSD    float64    `json:"cost_usd"`       // addebito riportato dai provider
-	SpentUSD   float64    `json:"spent_usd"`      // per il tetto: addebito dove c'è, altrimenti stima
-	CapUSD     *float64   `json:"cap_usd,omitempty"`
+	SpentUSD   float64    `json:"spent_usd"`      // per il tetto: addebito dove c'è, altrimenti stima (anche delle scene tolte)
+	// spesa nello stato di scene non più nello storyboard: in spent_usd, non fra le scene
+	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"`
+	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
+	CapUSD          *float64       `json:"cap_usd,omitempty"`
 }
 
 type sceneRun struct {
@@ -103,6 +111,7 @@ type storyRunner struct {
 	sc      *storyChecker
 	order   []*story.Scene     // scene video da trattare, in ordine
 	forced  string             // --scene: rifatta anche se fatta
+	renew   string             // --new-keyframe: scena di cui rigenerare il fotogramma chiave (vuoto dopo averlo generato)
 	est     map[string]float64 // stima non arrotondata (o costo dichiarato) della clip, per scena pianificata
 	planned map[string]bool
 	thisRun map[string]string
@@ -110,7 +119,7 @@ type storyRunner struct {
 	man     storyRunManifest
 }
 
-func runStory(ctx context.Context, path, only string) (*storyRunManifest, error) {
+func runStory(ctx context.Context, path, only string, newKeyframe bool) (*storyRunManifest, error) {
 	s, err := loadStory(path)
 	if err != nil {
 		return nil, err
@@ -122,6 +131,9 @@ func runStory(ctx context.Context, path, only string) (*storyRunManifest, error)
 		}
 		if target.Tipo != story.Video {
 			return nil, usageError("--scene %s: scena %s, niente da generare", only, target.Tipo)
+		}
+		if newKeyframe && target.FotogrammaChiave == nil {
+			return nil, usageError("--new-keyframe: la scena %s non ha fotogramma_chiave", only)
 		}
 	}
 	st, unlock, err := story.OpenRunState(path)
@@ -136,6 +148,12 @@ func runStory(ctx context.Context, path, only string) (*storyRunManifest, error)
 	defer root.Close()
 	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only,
 		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{}}
+	if newKeyframe {
+		r.renew = only
+	}
+	if rs, v := removedSpend(s, st); len(rs) > 0 {
+		fmt.Fprintf(os.Stderr, "spesa già registrata nello stato: %s; conta nel tetto\n", removedText(rs, v))
+	}
 	r.sc.out = filepath.Join(s.Dir, storyClipDir)
 	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: st.Path(), Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
 	for i := range s.Scene {
@@ -292,7 +310,7 @@ func (r *storyRunner) plan(scenes []*story.Scene, all bool) error {
 	}
 	cap := r.s.TettoCostoUSD
 	var missing []string
-	for _, c := range out.Scene {
+	for _, c := range out.Scenes {
 		r.planned[c.ID] = true
 		switch {
 		case c.CostEstUSD != nil:
@@ -370,8 +388,12 @@ func (r *storyRunner) checkCap(from int) error {
 		}
 	}
 	if spent+next > *cap {
-		return usageError("tetto_costo_usd %.4f $: spesa già fatta %.4f $ più stima delle generazioni da fare %.4f $ lo supera; nessun nuovo avvio, stato in %s",
-			*cap, round4(spent), round4(next), r.st.Path())
+		removed := ""
+		if rs, v := removedSpend(r.s, r.st); len(rs) > 0 {
+			removed = " (di cui " + removedText(rs, v) + ")"
+		}
+		return usageError("tetto_costo_usd %.4f $: spesa già fatta %.4f $%s più stima delle generazioni da fare %.4f $ lo supera; nessun nuovo avvio, stato in %s",
+			*cap, round4(spent), removed, round4(next), r.st.Path())
 	}
 	return nil
 }
@@ -396,6 +418,9 @@ func (r *storyRunner) needKeyframe(scene *story.Scene) bool {
 	if scene.FotogrammaChiave == nil {
 		return false
 	}
+	if scene.ID == r.renew {
+		return true
+	}
 	ss := r.st.Scenes[scene.ID]
 	return ss == nil || ss.Keyframe == nil || !r.exists(ss.Keyframe.File)
 }
@@ -409,11 +434,7 @@ func takeNumber(ss *story.SceneState) int {
 	if ss == nil {
 		return 1
 	}
-	n := len(ss.Previous) + 1
-	if ss.Clip != nil {
-		n++
-	}
-	return n
+	return ss.ClipTakes() + 1
 }
 
 // scene genera la scena se serve. Il suo job, se ce n'era uno, è già stato
@@ -421,6 +442,9 @@ func takeNumber(ss *story.SceneState) int {
 func (r *storyRunner) scene(ctx context.Context, i int, scene *story.Scene) error {
 	ss := r.st.Scenes[scene.ID]
 	if t := r.thisRun[scene.ID]; t == "recuperata" || t == "fallita" {
+		if scene.ID == r.renew {
+			fmt.Fprintf(os.Stderr, "scena %s: c'era un job già partito (%s in questa esecuzione): fotogramma chiave non rigenerato; per rifarla con uno nuovo: --scene %s --new-keyframe\n", scene.ID, t, scene.ID)
+		}
 		return nil
 	}
 	if !r.toLaunch(scene) {
@@ -495,6 +519,8 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 			if err := r.keyframe(ctx, scene, ss, img, inputs); err != nil {
 				return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 			}
+		} else if scene.ID == r.forced {
+			fmt.Fprintf(os.Stderr, "scena %s: riuso il fotogramma chiave %s (per rigenerarlo: --new-keyframe)\n", scene.ID, ss.Keyframe.File)
 		}
 		p, err := r.privateCopy(ss.Keyframe.File, work)
 		if err != nil {
@@ -596,9 +622,10 @@ func (r *storyRunner) reserve(i int, ss *story.SceneState, ch story.Charge) erro
 
 // keyframe genera il fotogramma chiave della scena (una sola richiesta, senza
 // ritentativi) e lo registra: le riprese successive lo riusano finché il file
-// c'è. La generazione è già registrata come ultima di ss.Charges: se la
-// risposta arriva (addebitata) ma il file non si salva, o l'esito non si sa, la
-// riserva resta e la scena è incerta (si rifà solo con --scene).
+// c'è; con --new-keyframe il precedente passa fra le riprese precedenti. La
+// generazione è già registrata come ultima di ss.Charges: se la risposta
+// arriva (addebitata) ma il file non si salva, o l'esito non si sa, la riserva
+// resta e la scena è incerta (si rifà solo con --scene).
 func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *story.SceneState, img *imageJob, inputs []string) error {
 	k := len(ss.Charges) - 1
 	received := false
@@ -633,6 +660,14 @@ func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *stor
 	ss.Status = story.DaFare
 	if ss.Clip != nil {
 		ss.Status = story.Fatto // la clip precedente resta in uso
+	}
+	if scene.ID == r.renew {
+		if ss.Keyframe != nil {
+			old := *ss.Keyframe
+			old.Kind = story.ChargeKeyframe
+			ss.Previous = append(ss.Previous, old)
+		}
+		r.renew = "" // generato: il tetto non lo conta più fra le richieste da fare
 	}
 	ss.Keyframe = &story.Take{File: rel, Done: time.Now()}
 	r.save()
@@ -891,7 +926,7 @@ func (r *storyRunner) summary() {
 		row := sceneRun{ID: scene.ID, Tipo: scene.Tipo}
 		if scene.Tipo != story.Video {
 			row.File = scene.File
-			r.man.Scene = append(r.man.Scene, row)
+			r.man.Scenes = append(r.man.Scenes, row)
 			continue
 		}
 		row.ThisRun = r.thisRun[scene.ID]
@@ -899,7 +934,7 @@ func (r *storyRunner) summary() {
 			row.Status = ss.Status
 			if ss.Clip != nil {
 				row.File = ss.Clip.File
-				row.Takes = len(ss.Previous) + 1
+				row.Takes = ss.ClipTakes()
 			}
 			if ss.Keyframe != nil {
 				row.Keyframe = ss.Keyframe.File
@@ -918,8 +953,11 @@ func (r *storyRunner) summary() {
 			r.man.CostEstUSD += est
 			r.man.CostUSD += cost
 		}
-		r.man.Scene = append(r.man.Scene, row)
+		r.man.Scenes = append(r.man.Scenes, row)
 	}
 	r.man.CostEstUSD, r.man.CostUSD = round4(r.man.CostEstUSD), round4(r.man.CostUSD)
 	r.man.SpentUSD = round4(r.st.Spent())
+	var removed float64
+	r.man.RemovedScenes, removed = removedSpend(r.s, r.st)
+	r.man.RemovedSpentUSD = round4(removed)
 }
