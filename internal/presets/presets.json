@@ -13,6 +13,7 @@
         "kling": "Camera movement: fixed shot, the camera stays completely still; only the subject moves",
         "veo": "static shot, locked-off tripod camera, no camera movement",
         "seedance": "fixed lens, the camera does not move; only the subject moves",
+        "grok": "static locked-off camera, the camera stays completely still for the whole shot, only the subject moves",
         "wan": "fixed camera shot, the camera remains still, only the subject moves"
       },
       "negative": "camera movement, camera shake, zoom",
@@ -27,6 +28,7 @@
         "kling": "Camera movement: the camera slowly pushes in toward the subject, smooth and steady",
         "veo": "slow dolly-in shot toward the subject, smooth and steady cinematic camera movement",
         "seedance": "the lens slowly pushes in toward the subject, smooth and steady",
+        "grok": "the camera slowly dollies in toward the subject in one smooth, steady cinematic move",
         "wan": "push-in shot, the camera slowly moves forward toward the subject, smooth and steady"
       },
       "negative": "camera shake, zoom out",
@@ -41,6 +43,7 @@
         "kling": "Camera movement: the camera slowly pulls back away from the subject, revealing the surroundings, smooth and steady",
         "veo": "slow dolly-out shot pulling away from the subject to reveal the surroundings, smooth and steady",
         "seedance": "the lens slowly pulls back from the subject, revealing the surroundings, smooth and steady",
+        "grok": "the camera slowly dollies back away from the subject, gradually revealing the surroundings, smooth and steady",
         "wan": "pull-back shot, the camera slowly moves backward away from the subject, revealing the surroundings"
       },
       "negative": "camera shake, zoom in",
@@ -55,6 +58,7 @@
         "kling": "Camera movement: the camera orbits 360 degrees around the subject in a smooth continuous circle, keeping the subject centered",
         "veo": "smooth orbit shot circling 360 degrees around the subject, the subject stays centered in frame",
         "seedance": "surround shot, the lens circles 360 degrees around the subject, keeping it centered",
+        "grok": "the camera orbits a full 360 degrees around the subject in one smooth continuous circle, the subject stays centered in frame",
         "wan": "orbiting shot, the camera rotates 360 degrees around the subject, keeping the subject in the center of the frame"
       },
       "negative": "camera shake, cuts, subject leaving the frame",
@@ -69,6 +73,7 @@
         "kling": "Camera movement: the camera arcs slowly to the left around the subject, keeping it centered",
         "veo": "slow arc shot moving left around the subject, the subject stays centered",
         "seedance": "the lens arcs slowly to the left around the subject, keeping it centered",
+        "grok": "the camera slowly arcs to the left around the subject in a smooth curve, the subject stays centered",
         "wan": "arc shot, the camera moves in a half circle to the left around the subject"
       },
       "negative": "camera shake",
@@ -83,6 +88,7 @@
         "kling": "Camera movement: the camera arcs slowly to the right around the subject, keeping it centered",
         "veo": "slow arc shot moving right around the subject, the subject stays centered",
         "seedance": "the lens arcs slowly to the right around the subject, keeping it centered",
+        "grok": "the camera slowly arcs to the right around the subject in a smooth curve, the subject stays centered",
         "wan": "arc shot, the camera moves in a half circle to the right around the subject"
       },
       "negative": "camera shake",
@@ -97,6 +103,7 @@
         "kling": "Camera movement: the camera rises smoothly upward on a crane, revealing the scene from above",
         "veo": "crane shot rising up above the subject, revealing the wider scene",
         "seedance": "the lens rises smoothly upward like a crane, revealing the scene from above",
+        "grok": "the camera smoothly cranes up, rising vertically above the subject to reveal the scene from higher up",
         "wan": "crane up shot, the camera moves upward smoothly, revealing the scene from a higher angle"
       },
       "negative": "camera shake",
@@ -111,6 +118,7 @@
         "kling": "Camera movement: the camera descends smoothly on a crane from above toward the subject",
         "veo": "crane shot descending from above down to the subject",
         "seedance": "the lens descends smoothly like a crane from above toward the subject",
+        "grok": "the camera smoothly cranes down, descending vertically from above toward the subject",
         "wan": "crane down shot, the camera moves downward smoothly from a high angle toward the subject"
       },
       "negative": "camera shake",
@@ -125,6 +133,7 @@
         "kling": "Camera movement: the camera pans slowly from left to right, smooth and steady",
         "veo": "slow panning shot from left to right, smooth and steady",
         "seedance": "the lens pans slowly from left to right, smooth and steady",
+        "grok": "the camera slowly pans from left to right while staying in place, smooth and steady",
         "wan": "pan right shot, the camera rotates slowly from left to right while staying in place"
       },
       "negative": "camera shake"
@@ -138,6 +147,7 @@
         "kling": "Camera movement: the camera tilts slowly upward from the bottom of the subject to the top",
         "veo": "slow tilt-up shot from the base of the subject to the top, smooth",
         "seedance": "the lens tilts slowly upward from the bottom of the subject to the top",
+        "grok": "the camera slowly tilts up in place, from the bottom of the subject to the top, smooth and steady",
         "wan": "tilt up shot, the camera pivots upward from the bottom of the subject to the top"
       },
       "negative": "camera shake"
@@ -151,6 +161,7 @@
         "kling": "Camera movement: the camera slowly pushes in to an extreme macro close-up of a detail of the subject, shallow depth of field",
         "veo": "slow macro push-in to an extreme close-up of a detail, shallow depth of field, smooth",
         "seedance": "the lens slowly pushes in to a macro close-up of a detail of the subject, shallow depth of field",
+        "grok": "the camera slowly pushes in to an extreme macro close-up of a detail of the subject, shallow depth of field, smooth",
         "wan": "macro push-in shot, the camera moves slowly toward a detail of the subject, extreme close-up, shallow depth of field"
       },
       "negative": "camera shake, blurry subject, zoom out"
@@ -164,6 +175,7 @@
         "kling": "Camera movement: a sudden fast crash zoom into the subject, dramatic and energetic",
         "veo": "dramatic crash zoom, a sudden rapid zoom-in on the subject",
         "seedance": "the lens performs a sudden rapid zoom in on the subject, dramatic impact",
+        "grok": "the camera does a sudden fast crash zoom into the subject, dramatic and energetic",
         "wan": "crash zoom shot, the camera rapidly zooms in on the subject"
       },
       "negative": "slow movement, zoom out",
@@ -178,6 +190,7 @@
         "kling": "Camera movement: handheld camera with subtle natural shake, documentary style, following the subject",
         "veo": "handheld shot with subtle natural camera shake, documentary feel",
         "seedance": "handheld lens with slight natural shake, documentary style, following the subject",
+        "grok": "handheld camera following the subject with subtle natural shake, documentary style",
         "wan": "handheld shot, the camera follows the subject with slight natural shake, documentary style"
       },
       "negative": "perfectly static camera, tripod",
@@ -192,6 +205,7 @@
         "kling": "Camera movement: fast FPV drone flight through the scene, dynamic sweeping motion close to the ground",
         "veo": "fast FPV drone shot flying low through the scene, dynamic sweeping aerial movement",
         "seedance": "the lens flies through the scene like an FPV drone, fast and dynamic, close to the ground",
+        "grok": "fast FPV drone shot, the camera flies low through the scene with dynamic sweeping motion",
         "wan": "FPV drone shot, the camera flies quickly through the scene at low altitude, dynamic movement"
       },
       "negative": "static camera, camera shake",
@@ -206,6 +220,7 @@
         "kling": "Camera movement: the camera stays still while the focus pulls smoothly from the foreground to the background, shallow depth of field",
         "veo": "rack focus shot, focus pulls from the foreground to the background, shallow depth of field",
         "seedance": "the lens stays still and the focus shifts smoothly from the foreground to the background, shallow depth of field",
+        "grok": "the camera stays still while the focus shifts smoothly from the foreground to the background, shallow depth of field",
         "wan": "rack focus shot, the focus shifts from the foreground to the background, shallow depth of field, camera still"
       },
       "negative": "camera movement, everything in focus",
@@ -220,6 +235,7 @@
         "kling": "slow-motion shot, all movement is slowed down, fluid and detailed",
         "veo": "slow motion, 120fps high frame rate look, fluid movement",
         "seedance": "slow motion, the action is slowed down, fluid and detailed",
+        "grok": "slow motion, every movement is slowed down, fluid and detailed, high frame rate look",
         "wan": "slow-motion shot, the movement is slowed down and fluid"
       },
       "negative": "fast motion, time-lapse, jerky motion",
@@ -234,6 +250,7 @@
         "kling": "time-lapse effect, time passes rapidly, light and shadows sweep across the scene, clouds move fast",
         "veo": "time-lapse, hours pass in seconds, fast moving clouds and shifting light",
         "seedance": "time-lapse, time flows rapidly, light and shadows change quickly, clouds move fast",
+        "grok": "time-lapse, hours pass in seconds, light and shadows sweep across the scene and clouds race by while the scene stays in place",
         "wan": "time-lapse shot, time passes quickly, light and shadows change rapidly"
       },
       "negative": "slow motion",
@@ -248,6 +265,7 @@
         "kling": "bullet time effect: time freezes mid-action and the camera sweeps around the frozen subject",
         "veo": "bullet time effect, a frozen moment in mid-air while the camera sweeps around the subject",
         "seedance": "bullet time, time freezes mid-action while the lens sweeps around the subject",
+        "grok": "bullet time, the action freezes in mid-air while the camera sweeps smoothly around the frozen subject",
         "wan": "bullet time effect, the action freezes while the camera moves around the subject"
       },
       "negative": "static camera, motion blur",
