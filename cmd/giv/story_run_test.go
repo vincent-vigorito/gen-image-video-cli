@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"gen-image-video-cli/internal/story"
 	"image"
 	"image/png"
 	"io"
@@ -32,6 +31,9 @@ type runEnv struct {
 	bodies   []string
 	mu       sync.Mutex
 	polls    int32
+	pollCode int     // se != 0, il polling risponde con questo stato HTTP
+	pollTo   string  // se != "", il polling risponde 302 verso questo indirizzo
+	drop     bool    // l'avvio video chiude la connessione dopo aver letto il corpo
 	failCode int     // stato HTTP dell'avvio rifiutato (default 400)
 	failAt   int32   // dal POST numero N in poi l'avvio fallisce (0 = mai)
 	cost     float64 // usage.cost riportato a fine job
@@ -56,6 +58,13 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 			e.bodies = append(e.bodies, string(b))
 			e.mu.Unlock()
 			n := atomic.AddInt32(&e.posts, 1)
+			if e.drop {
+				if hj, ok := w.(http.Hijacker); ok {
+					conn, _, _ := hj.Hijack()
+					conn.Close()
+					return
+				}
+			}
 			if e.failAt > 0 && n >= e.failAt {
 				code := e.failCode
 				if code == 0 {
@@ -64,15 +73,23 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 				http.Error(w, `{"error":"rifiutato"}`, code)
 				return
 			}
-			fmt.Fprintf(w, `{"id":"job-%d","polling_url":%q,"status":"pending"}`, n, e.srv.URL+"/poll")
+			fmt.Fprintf(w, `{"id":"job-%d","polling_url":%q,"status":"pending"}`, n, e.srv.URL+"/videos/job-"+fmt.Sprint(n))
 		case r.Method == http.MethodPost && r.URL.Path == "/images":
 			io.Copy(io.Discard, r.Body)
 			atomic.AddInt32(&e.images, 1)
 			var b bytes.Buffer
 			png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 4)))
 			fmt.Fprintf(w, `{"data":[{"b64_json":%q,"media_type":"image/png"}],"usage":{"cost":0.14}}`, base64.StdEncoding.EncodeToString(b.Bytes()))
-		case r.URL.Path == "/poll":
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/videos/job-"):
 			atomic.AddInt32(&e.polls, 1)
+			if e.pollTo != "" {
+				http.Redirect(w, r, e.pollTo, http.StatusFound)
+				return
+			}
+			if e.pollCode != 0 {
+				http.Error(w, "boh", e.pollCode)
+				return
+			}
 			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":%v}}`, e.srv.URL+"/content", e.cost)
 		case r.URL.Path == "/content":
 			w.Write([]byte("MP4DATA"))
@@ -85,7 +102,6 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 	baseURLs["openrouter"] = e.srv.URL
 	t.Cleanup(func() { baseURLs["openrouter"] = old })
 	t.Setenv("OPENROUTER_API_KEY", "fake")
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // contabilita' privata di story run
 	e.dir = t.TempDir()
 	t.Chdir(e.dir)
 	e.board = filepath.Join(e.dir, "spot.json")
@@ -100,18 +116,6 @@ func (e *runEnv) statePath() string { return filepath.Join(e.dir, "spot.stato.js
 func (e *runEnv) writeState(t *testing.T, s string) {
 	t.Helper()
 	if err := os.WriteFile(e.statePath(), []byte(s), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// writePrivate scrive lo stesso stato anche nella contabilita' privata, che fa fede.
-func (e *runEnv) writePrivate(t *testing.T, s string) {
-	t.Helper()
-	p, err := story.PrivateStatePath(e.board)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -243,9 +247,8 @@ func TestStoryRunUnAvvioPerScena(t *testing.T) {
 // 4: job partito e non scaricato: si recupera con il solo polling.
 func TestStoryRunRecuperaJobPartito(t *testing.T) {
 	e := newRunEnv(t, sb("", sc("s1", "")))
-	st := fmt.Sprintf(`{"version":1,"scenes":{"s1":{"status":"partito","job":{"provider":"openrouter","id":"job-9","polling_url":%q,"model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":"job-9","cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}}}`, e.srv.URL+"/poll")
+	st := fmt.Sprintf(`{"version":1,"scenes":{"s1":{"status":"partito","job":{"provider":"openrouter","id":"job-9","polling_url":%q,"model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":"job-9","cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}}}`, e.srv.URL+"/videos/job-9")
 	e.writeState(t, st)
-	e.writePrivate(t, st)
 	out, se, code := e.run(t)
 	if code != 0 || e.posts != 0 || out.Recovered != 1 || e.polls == 0 {
 		t.Fatalf("code=%d posts=%d recovered=%d polls=%d\n%s", code, e.posts, out.Recovered, e.polls, se)
@@ -392,7 +395,6 @@ func TestStoryRunStatoConCodaJSON(t *testing.T) {
 	e := newRunEnv(t, sb("", sc("s1", "")))
 	st := `{"version":1,"scenes":{}} {"x":1}`
 	e.writeState(t, st)
-	e.writePrivate(t, st)
 	_, se, code := e.run(t)
 	if code != 2 || e.posts != 0 {
 		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
@@ -441,5 +443,133 @@ func TestStoryRunAvvio5xxStatoIncerto(t *testing.T) {
 	out, se, code := e.run(t, "--scene", "s1")
 	if code != 0 || e.posts != before+1 || out.Started != 1 {
 		t.Fatalf("--scene: code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+func (e *runEnv) pendingState(t *testing.T, scene, id string, extra string) {
+	t.Helper()
+	e.writeState(t, fmt.Sprintf(`{"version":1,"scenes":{%q:{"status":"partito","job":{"provider":"openrouter","id":%q,"polling_url":%q,"model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":%q,"cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}%s}}`,
+		scene, id, e.srv.URL+"/videos/"+id, id, extra))
+}
+
+// job pendente di un'altra scena: recuperato (solo GET) prima del POST di
+// --scene X; se il recupero fallisce, nessun POST.
+func TestStoryRunSceneRecuperaPrimaIlGiaPartito(t *testing.T) {
+	t.Run("recuperato", func(t *testing.T) {
+		e := newRunEnv(t, sb("", sc("s1", ""), sc("s2", "")))
+		e.pendingState(t, "s1", "job-9", "")
+		out, se, code := e.run(t, "--scene", "s2")
+		if code != 0 || e.polls == 0 || e.posts != 1 || out.Recovered != 1 {
+			t.Fatalf("code=%d polls=%d posts=%d recovered=%d\n%s", code, e.polls, e.posts, out.Recovered, se)
+		}
+		if got := e.sceneState(t, "s1")["status"]; got != "fatto" {
+			t.Errorf("s1=%v", got)
+		}
+	})
+	t.Run("errore di recupero", func(t *testing.T) {
+		e := newRunEnv(t, sb("", sc("s1", ""), sc("s2", "")))
+		e.pendingState(t, "s1", "job-9", "")
+		e.pollCode = 500
+		_, se, code := e.run(t, "--scene", "s2")
+		if code == 0 || e.posts != 0 {
+			t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+		}
+	})
+}
+
+// run completo: il job pendente di una scena successiva si recupera prima di
+// lanciare le precedenti e il suo costo reale entra nel tetto.
+func TestStoryRunCompletoRecuperaPrimaESommaCostoReale(t *testing.T) {
+	e := newRunEnv(t, sb(`,"tetto_costo_usd":1.05`, sc("s1", ""), sc("s2", "")))
+	e.cost = 0.9
+	e.pendingState(t, "s2", "job-9", "")
+	_, se, code := e.run(t)
+	if code != 2 || e.posts != 0 || e.polls == 0 {
+		t.Fatalf("code=%d posts=%d polls=%d\n%s", code, e.posts, e.polls, se)
+	}
+	if got := e.sceneState(t, "s2")["status"]; got != "fatto" {
+		t.Errorf("s2=%v", got)
+	}
+}
+
+// --scene X con il job di X: si recupera, nessun nuovo avvio.
+func TestStoryRunSceneConJobDiXRecuperato(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.pendingState(t, "s1", "job-9", "")
+	out, se, code := e.run(t, "--scene", "s1")
+	if code != 0 || e.posts != 0 || out.Recovered != 1 || out.Started != 0 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+// fotogramma arrivato ma salvataggio fallito (clip/ porta fuori dalla cartella):
+// stato incerto con l'addebito reale; il run dopo, senza --scene, codice 2 e
+// nessuna richiesta.
+func TestStoryRunFotogrammaNonSalvatoIncerto(t *testing.T) {
+	key := `,"fotogramma_chiave":{"prompt":"un gatto fermo","costo_dichiarato_usd":0.14}`
+	e := newRunEnv(t, sb("", sc("s1", key)))
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(e.dir, "clip")); err != nil {
+		t.Skip("link non disponibili:", err)
+	}
+	if _, se, code := e.run(t); code == 0 || e.images != 1 || e.posts != 0 {
+		t.Fatalf("code=%d images=%d posts=%d\n%s", code, e.images, e.posts, se)
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Errorf("scritto fuori dalla cartella: %v", ents)
+	}
+	ss := e.sceneState(t, "s1")
+	if ss["status"] != "incerto" || !strings.Contains(fmt.Sprint(ss["charges"]), "0.14") {
+		t.Errorf("stato: %v", ss)
+	}
+	_, se, code := e.run(t)
+	if code != 2 || e.images != 1 || e.posts != 0 {
+		t.Fatalf("run dopo: code=%d images=%d posts=%d\n%s", code, e.images, e.posts, se)
+	}
+}
+
+// avvio senza risposta (connessione chiusa dopo l'invio): resta riservato e non
+// si rilancia da solo.
+func TestStoryRunAvvioSenzaRispostaNonSiRilancia(t *testing.T) {
+	e := newRunEnv(t, sb(`,"tetto_costo_usd":2`, sc("s1", "")))
+	e.drop = true
+	if _, se, code := e.run(t); code == 0 {
+		t.Fatalf("atteso errore\n%s", se)
+	}
+	before := e.posts
+	ss := e.sceneState(t, "s1")
+	if ss["status"] != "incerto" || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
+		t.Errorf("stato: %v", ss)
+	}
+	e.drop = false
+	_, se, code := e.run(t)
+	if code != 2 || e.posts != before {
+		t.Fatalf("code=%d posts=%d (prima %d)\n%s", code, e.posts, before, se)
+	}
+}
+
+// polling con 302 fuori origine: errore, il job resta (non e' "fallito"),
+// nessun nuovo avvio e il redirect non viene seguito.
+func TestStoryRunPolling302FuoriOrigine(t *testing.T) {
+	var other int32
+	osrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&other, 1)
+	}))
+	t.Cleanup(osrv.Close)
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.pollTo = osrv.URL + "/videos/job-9"
+	e.pendingState(t, "s1", "job-9", "")
+	_, se, code := e.run(t)
+	if code == 0 || e.posts != 0 || other != 0 {
+		t.Fatalf("story run: code=%d posts=%d other=%d\n%s", code, e.posts, other, se)
+	}
+	if ss := e.sceneState(t, "s1"); ss["job"] == nil {
+		t.Errorf("il job e' stato scartato: %v", ss)
+	}
+	// giv job fetch: stessa regola
+	saveJob(t, "openrouter", "job-7", e.srv.URL+"/videos/job-7")
+	_, se, code = jobFetch(t, "--provider", "openrouter", "--out", "o", "job-7")
+	if code == 0 || other != 0 || e.posts != 0 {
+		t.Fatalf("job fetch: code=%d other=%d\n%s", code, other, se)
 	}
 }
