@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -305,35 +306,54 @@ func stagingDir(prefix string) (string, error) {
 	return os.MkdirTemp("", prefix)
 }
 
-// publish copia il file preparato nella cartella privata al nome finale, senza
-// riaprire per nome file che altri possono sostituire. Senza overwrite il nome
+// publish copia il file preparato nella cartella privata al nome finale, con
+// sole operazioni vincolate a una radice aperta una volta (os.Root): root, o
+// la cartella di out se root è vuota. Nessun passo segue un link o una
+// cartella sostituita che porti fuori dalla radice. Senza overwrite il nome
 // finale si crea con O_EXCL, che fallisce se esiste (anche come link
 // simbolico): un file comparso nel frattempo non viene mai sostituito. Con
 // overwrite si scrive in un temporaneo nuovo accanto (O_EXCL, tenuto aperto),
 // i permessi si cambiano dal descrittore e la rinomina sostituisce la voce
 // della cartella senza seguire link.
-func publish(src, out string, overwrite bool) error {
+func publish(src, root, out string, overwrite bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+	if root == "" {
+		root = filepath.Dir(out)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return err
+		}
+	}
+	rel, err := relInside(root, out)
+	if err != nil {
+		return fmt.Errorf("%w: uscita %s: %v", ErrInvalid, out, err)
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
 		return err
 	}
+	defer r.Close()
+	if dir := filepath.Dir(rel); dir != "." {
+		if err := r.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("cartella d'uscita di %s: %w", out, err)
+		}
+	}
 	var f *os.File
+	name := rel
 	if overwrite {
-		f, err = os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+".part-*")
+		f, name, err = createTemp(r, rel)
 	} else {
-		f, err = os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		f, err = r.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("%w: %s (chiedi la sovrascrittura per sostituirlo)", ErrExists, out)
 		}
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("scrittura di %s: %w", out, err)
 	}
-	name := f.Name()
 	_, err = io.Copy(f, in)
 	if err == nil && overwrite {
 		err = f.Chmod(0o644)
@@ -342,13 +362,27 @@ func publish(src, out string, overwrite bool) error {
 		err = cerr
 	}
 	if err == nil && overwrite {
-		err = os.Rename(name, out)
+		err = r.Rename(name, rel)
 	}
 	if err != nil {
-		os.Remove(name)
+		r.Remove(name)
 		return fmt.Errorf("scrittura di %s: %w", out, err)
 	}
 	return nil
+}
+
+// createTemp crea nella radice, accanto a rel, un temporaneo nuovo (O_EXCL,
+// 0600) per la pubblicazione con sovrascrittura.
+func createTemp(r *os.Root, rel string) (*os.File, string, error) {
+	dir, base := filepath.Split(rel)
+	for range 10 {
+		name := filepath.Join(dir, "."+base+".part-"+strconv.FormatUint(rand.Uint64(), 36))
+		f, err := r.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if !errors.Is(err, fs.ErrExist) {
+			return f, name, err
+		}
+	}
+	return nil, "", fmt.Errorf("temporaneo accanto a %s: nomi esauriti", rel)
 }
 
 // probeErr distingue un file illeggibile (errore del piano) da tetto di tempo
@@ -401,7 +435,7 @@ func (t Tool) LastFrame(ctx context.Context, clip, out string, overwrite bool) e
 	if st, err := os.Stat(staged); err != nil || st.Size() == 0 {
 		return fmt.Errorf("ultimo fotogramma di %s: nessun fotogramma video", clip)
 	}
-	return publish(staged, out, overwrite)
+	return publish(staged, "", out, overwrite)
 }
 
 // Montage esegue il piano: controlla file e tracce, completa le durate mancanti
@@ -509,7 +543,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 
 	final := p.Output
 	staged := p
-	staged.Output, staged.Overwrite = filepath.Join(work, "montato.mp4"), false
+	staged.Output, staged.Overwrite, staged.Root = filepath.Join(work, "montato.mp4"), false, ""
 	args, err := Args(staged)
 	if err != nil {
 		return nil, err
@@ -521,7 +555,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("montato illeggibile: %w", err)
 	}
-	if err := publish(staged.Output, final, p.Overwrite); err != nil {
+	if err := publish(staged.Output, p.Root, final, p.Overwrite); err != nil {
 		return nil, err
 	}
 	res.Output, res.Duration, res.Info = final, total, info
