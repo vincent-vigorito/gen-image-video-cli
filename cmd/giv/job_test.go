@@ -44,7 +44,7 @@ func jobEnv(t *testing.T, status string) (srv *httptest.Server, reqs *int32, pos
 			atomic.AddInt32(posts, 1)
 		}
 		switch r.URL.Path {
-		case "/poll":
+		case "/videos/job-1", "/videos/job-2":
 			if status == "completed" {
 				fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":0.25}}`, "http://"+r.Host+"/content")
 			} else {
@@ -72,7 +72,7 @@ func saveJob(t *testing.T, prov, id, poll string) {
 
 func TestJobFetchCompletatoZeroAvvii(t *testing.T) {
 	srv, _, posts := jobEnv(t, "completed")
-	saveJob(t, "openrouter", "job-1", srv.URL+"/poll")
+	saveJob(t, "openrouter", "job-1", srv.URL+"/videos/job-1")
 	out, se, code := jobFetch(t, "--provider", "openrouter", "--out", "o", "job-1")
 	if code != 0 {
 		t.Fatalf("code=%d %s", code, se)
@@ -90,7 +90,7 @@ func TestJobFetchCompletatoZeroAvvii(t *testing.T) {
 
 func TestJobFetchFallitoPortaId(t *testing.T) {
 	srv, _, _ := jobEnv(t, "failed")
-	saveJob(t, "openrouter", "job-2", srv.URL+"/poll")
+	saveJob(t, "openrouter", "job-2", srv.URL+"/videos/job-2")
 	_, se, code := jobFetch(t, "--provider", "openrouter", "--out", "o", "job-2")
 	if code == 0 || !strings.Contains(se, "job-2") {
 		t.Fatalf("code=%d %s", code, se)
@@ -118,5 +118,19 @@ func TestJobFetchRifiuti(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(reqs); n != 0 {
 		t.Errorf("richieste=%d, attese 0", n)
+	}
+}
+
+func TestJobFetchFileStatoSymlinkRifiutato(t *testing.T) {
+	_, reqs, _ := jobEnv(t, "completed")
+	if err := os.WriteFile("vero.jsonl", []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("vero.jsonl", jobsFile); err != nil {
+		t.Skip(err)
+	}
+	_, se, code := jobFetch(t, "--provider", "openrouter", "job-1")
+	if code != 2 || *reqs != 0 {
+		t.Fatalf("code=%d richieste=%d %s", code, *reqs, se)
 	}
 }

@@ -1,0 +1,31 @@
+{
+  "titolo": "Spot di prova: crema alle erbe, 18 secondi",
+  "formato": { "aspect": "16:9", "risoluzione": "720p", "fps": 24 },
+  "default": { "provider": "openrouter", "modello": "alibaba/wan-3.0", "audio": "off" },
+  "tetto_costo_usd": 3,
+  "riferimenti": { "prodotto": ["img/prodotto.png"] },
+  "scene": [
+    {
+      "id": "s1", "tipo": "video", "durata": 5,
+      "immagine": "img/prodotto.png", "preset": ["dolly-in"],
+      "prompt": "il vasetto di crema su un piano di legno chiaro, luce del mattino da una finestra",
+      "voce": "voce/s1.wav"
+    },
+    {
+      "id": "s2", "tipo": "video", "durata": 5,
+      "continua_da": "s1", "preset": ["orbit"],
+      "prompt": "la camera gira attorno al vasetto, foglie di salvia fresche sul tavolo",
+      "voce": "voce/s2.wav"
+    },
+    {
+      "id": "s3", "tipo": "video", "durata": 5,
+      "usa": ["prodotto"], "preset": ["static"],
+      "prompt": "una mano apre il vasetto e mostra la crema bianca e morbida"
+    },
+    {
+      "id": "chiusura", "tipo": "immagine", "durata": 3,
+      "file": "img/logo.png", "voce": "voce/chiusura.wav"
+    }
+  ],
+  "montaggio": { "transizione": "dissolvenza", "uscita": "spot.mp4" }
+}
