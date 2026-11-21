@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,7 @@ import (
 
 // F2-T2b: M1 redirect, M2 indirizzo di attesa, B1 tetto di tempo.
 
-func TestFetchRedirectFuoriOriginePerdeAuthorization(t *testing.T) {
+func TestFetchRedirectPollingFuoriOrigineRifiutatoDownloadSenzaBearer(t *testing.T) {
 	fastPoll(t)
 	var otherAuth, otherHits int32
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +37,8 @@ func TestFetchRedirectFuoriOriginePerdeAuthorization(t *testing.T) {
 		switch r.URL.Path {
 		case "/videos/job-42": // attesa: redirect fuori origine
 			http.Redirect(w, r, other.URL+"/x", http.StatusFound)
+		case "/videos/job-44": // attesa ok, scaricamento con redirect fuori origine
+			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q]}`, api.URL+"/content")
 		case "/videos/job-43": // attesa: redirect sulla stessa origine
 			http.Redirect(w, r, "/videos/same", http.StatusFound)
 		case "/videos/same":
@@ -50,11 +53,23 @@ func TestFetchRedirectFuoriOriginePerdeAuthorization(t *testing.T) {
 	defer api.Close()
 	c := New("openrouter", api.URL, "k", Options{Router: true})
 
-	if _, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: api.URL + "/videos/job-42"}, time.Minute); err != nil {
+	// polling: redirect fuori origine = errore 3xx, nessuna richiesta esterna
+	_, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-42", PollingURL: api.URL + "/videos/job-42"}, time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("redirect del polling fuori origine: atteso errore 3xx, err=%v", err)
+	}
+	if errors.Is(err, provider.ErrJobFailed) {
+		t.Errorf("il redirect non e' un job fallito: %v", err)
+	}
+	if n := atomic.LoadInt32(&otherHits); n != 0 {
+		t.Fatalf("il polling ha seguito il redirect fuori origine (%d richieste)", n)
+	}
+	// scaricamento: il redirect esterno si segue, senza Authorization
+	if _, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-44", PollingURL: api.URL + "/videos/job-44"}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if atomic.LoadInt32(&otherHits) == 0 {
-		t.Fatal("il redirect fuori origine non è stato seguito: test inutile")
+		t.Fatal("il redirect del download non e' stato seguito: test inutile")
 	}
 	if n := atomic.LoadInt32(&otherAuth); n != 0 {
 		t.Errorf("Authorization arrivata fuori origine %d volte", n)
