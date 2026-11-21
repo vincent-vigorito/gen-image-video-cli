@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 	"strings"
@@ -43,5 +44,28 @@ func TestHelpFlagsMatchReadme(t *testing.T) {
 		if !h[f] {
 			t.Errorf("flag nel README ma non nell'help: %s", f)
 		}
+	}
+}
+
+// F2-T5: l'esempio dell'ultimo capitolo del README passa giv story check
+// (catalogo finto, nessun avvio).
+func TestEsempioSpotStoryCheck(t *testing.T) {
+	n := capsServer(t)
+	out, se, code, starts := storyRun(t, "../../examples/spot/storyboard.json", n)
+	if code != 0 || starts != 0 {
+		t.Fatalf("code=%d avvii=%d %s", code, starts, se)
+	}
+	var p struct {
+		Scenes       []json.RawMessage `json:"scene"`
+		CostEstUSD   float64           `json:"cost_est_usd"`
+		CostTotalUSD float64           `json:"cost_total_usd"`
+		CapUSD       float64           `json:"cap_usd"`
+		NotEstimated []json.RawMessage `json:"not_estimated"`
+	}
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if len(p.Scenes) != 4 || p.CostEstUSD != 1.5 || p.CostTotalUSD != 1.5 || p.CapUSD != 3 || len(p.NotEstimated) != 0 {
+		t.Errorf("piano inatteso: %s", out)
 	}
 }
