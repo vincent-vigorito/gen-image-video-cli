@@ -183,6 +183,7 @@ type storyChecker struct {
 	s            *story.Storyboard
 	clients      map[string]*storyClient
 	notEstimated []string
+	probeUntil   time.Time // scadenza delle letture della voce (voiceWarning)
 }
 
 // storyClient è un provider col catalogo video letto una volta sola.
@@ -222,7 +223,7 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce}
 	if scene.Tipo != story.Video {
 		c.File = scene.File
-		if w := voiceWarning(sc.s, scene, float64(scene.Durata)); w != "" {
+		if w := sc.voiceWarning(scene, float64(scene.Durata)); w != "" {
 			c.Warnings = append(c.Warnings, w)
 		}
 		return c, nil
@@ -239,7 +240,7 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	plan := job.plan
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
-	if w := voiceWarning(sc.s, scene, float64(max(job.req.Duration, scene.Durata))); w != "" {
+	if w := sc.voiceWarning(scene, float64(max(job.req.Duration, scene.Durata))); w != "" {
 		c.Warnings = append(c.Warnings, w)
 	}
 	switch {

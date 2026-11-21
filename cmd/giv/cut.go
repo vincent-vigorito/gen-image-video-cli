@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
@@ -60,11 +61,17 @@ func runStoryCut(args []string) error {
 	if err := tool.Check(); err != nil {
 		return &cliError{code: exitError, msg: err.Error()}
 	}
-	if err := keepAudio(tool, plan.Clips); err != nil {
+	// una sola scadenza per le letture delle clip e per il montaggio
+	ctx, cancel := context.WithTimeout(context.Background(), montage.DefaultTimeout)
+	defer cancel()
+	if err := keepAudio(ctx, tool, plan.Clips); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
 		return usageError("%s: %v", path, err)
 	}
 	fmt.Fprintf(os.Stderr, "montaggio di %d scene in %s\n", len(plan.Clips), plan.Output)
-	res, err := tool.Montage(context.Background(), plan)
+	res, err := tool.Montage(ctx, plan)
 	if err != nil {
 		if errors.Is(err, montage.ErrInvalid) {
 			return usageError("%s: %v", path, err)
@@ -152,7 +159,9 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 	if out == "" {
 		out = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ".mp4"
 	}
-	p.Output = s.Path(out)
+	p.Output, p.Root = s.Path(out), s.Dir
+	// controllo anticipato, per un errore d'uso prima del montaggio; la
+	// pubblicazione resta comunque vincolata a Root
 	if err := insideDir(s.Dir, filepath.Dir(p.Output)); err != nil {
 		return p, usageError("%s: montaggio.uscita: %v", path, err)
 	}
@@ -163,13 +172,13 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 
 // keepAudio tiene l'audio delle clip che ne hanno uno (riprese vere, video
 // generati con audio on); le altre scene sono mute sotto voce e musica.
-func keepAudio(tool montage.Tool, clips []montage.Clip) error {
+func keepAudio(ctx context.Context, tool montage.Tool, clips []montage.Clip) error {
 	for i := range clips {
 		c := &clips[i]
 		if c.Image {
 			continue
 		}
-		info, err := tool.Probe(context.Background(), c.Path)
+		info, err := tool.Probe(ctx, c.Path)
 		if err != nil {
 			return fmt.Errorf("scena n. %d: %v", i+1, err)
 		}
@@ -253,17 +262,31 @@ func insideDir(root, dir string) error {
 }
 
 // voiceWarning confronta la durata della voce con quella della scena (0 =
-// ignota, nessun confronto); restituisce l'avviso o "".
-func voiceWarning(s *story.Storyboard, sc *story.Scene, sceneSeconds float64) string {
+// ignota, nessun confronto); restituisce l'avviso o "". Le letture con
+// ffprobe di tutto lo story check stanno entro montage.ProbeTimeout, dalla
+// prima.
+func (chk *storyChecker) voiceWarning(sc *story.Scene, sceneSeconds float64) string {
 	if sc.Voce == "" {
 		return ""
 	}
+	s := chk.s
 	tool := montage.Tool{}
 	if err := tool.Check(); err != nil {
 		return "durata della voce non controllata: ffprobe non trovato"
 	}
-	ctx := context.Background()
+	if chk.probeUntil.IsZero() {
+		chk.probeUntil = time.Now().Add(montage.ProbeTimeout)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), chk.probeUntil)
+	defer cancel()
+	late := "durata della voce non controllata: letture oltre il tempo massimo di " + montage.ProbeTimeout.String()
+	if ctx.Err() != nil {
+		return late
+	}
 	voice, err := tool.Probe(ctx, s.Path(sc.Voce))
+	if ctx.Err() != nil {
+		return late
+	}
 	if err != nil || voice.Audio == nil {
 		return fmt.Sprintf("voce %s illeggibile come audio: giv story cut la rifiuterà", sc.Voce)
 	}
