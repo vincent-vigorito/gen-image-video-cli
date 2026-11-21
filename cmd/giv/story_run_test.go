@@ -33,6 +33,7 @@ type runEnv struct {
 	polls    int32
 	pollCode int     // se != 0, il polling risponde con questo stato HTTP
 	pollTo   string  // se != "", il polling risponde 302 verso questo indirizzo
+	pollOnly string // con pollFail: solo il job con questo id
 	pollFail bool    // il job risulta fallito sul provider
 	drop     bool    // l'avvio video chiude la connessione dopo aver letto il corpo
 	failCode int     // stato HTTP dell'avvio rifiutato (default 400)
@@ -87,7 +88,7 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 				http.Redirect(w, r, e.pollTo, http.StatusFound)
 				return
 			}
-			if e.pollFail {
+			if e.pollFail && strings.HasSuffix(r.URL.Path, e.pollOnly) {
 				fmt.Fprint(w, `{"status":"failed","error":"boom"}`)
 				return
 			}
@@ -579,7 +580,7 @@ func TestStoryRunPolling302FuoriOrigine(t *testing.T) {
 	}
 }
 
-// job fallito in modo definitivo: scena finito_male, spesa riservata tenuta,
+// job fallito in modo definitivo: scena fallita, spesa riservata tenuta,
 // nessuna rigenerazione (nemmeno alla run successiva); con --scene si rifa'.
 func TestStoryRunJobFallitoAlRecuperoNonSiRigenera(t *testing.T) {
 	e := newRunEnv(t, sb("", sc("s1", "")))
@@ -589,11 +590,11 @@ func TestStoryRunJobFallitoAlRecuperoNonSiRigenera(t *testing.T) {
 		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
 	}
 	ss := e.sceneState(t, "s1")
-	if ss["status"] != "finito_male" || ss["job"] != nil || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
+	if ss["status"] != "fallito" || ss["job"] != nil || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
 		t.Fatalf("stato: %v", ss)
 	}
 	_, se, code := e.run(t)
-	if code != 2 || e.posts != 0 {
+	if code != 1 || e.posts != 0 {
 		t.Fatalf("run dopo: code=%d posts=%d\n%s", code, e.posts, se)
 	}
 	e.pollFail = false
@@ -610,12 +611,33 @@ func TestStoryRunJobFallitoDopoAvvioNonSiRigenera(t *testing.T) {
 		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
 	}
 	ss := e.sceneState(t, "s1")
-	if ss["status"] != "finito_male" || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
+	if ss["status"] != "fallito" || !strings.Contains(fmt.Sprint(ss["charges"]), "0.5") {
 		t.Fatalf("stato: %v", ss)
 	}
 	_, se, code := e.run(t)
-	if code != 2 || e.posts != 1 {
+	if code != 1 || e.posts != 1 {
 		t.Fatalf("run dopo: code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+// le altre scene proseguono; a fine run codice 1 che elenca la scena fallita e
+// come rifarla.
+func TestStoryRunSceneFallitaLeAltreProseguono(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", ""), sc("s2", "")))
+	e.pendingState(t, "s1", "job-9", "")
+	e.pollFail, e.pollOnly = true, "job-9"
+	_, se, code := e.run(t)
+	if code != 1 || e.posts != 1 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+	if !strings.Contains(se, "s1") || !strings.Contains(se, "--scene s1") {
+		t.Errorf("errore senza scena fallita e rimedio: %s", se)
+	}
+	if got := e.sceneState(t, "s2")["status"]; got != "fatto" {
+		t.Errorf("s2=%v", got)
+	}
+	if got := e.sceneState(t, "s1")["status"]; got != "fallito" {
+		t.Errorf("s1=%v", got)
 	}
 }
 
