@@ -66,6 +66,9 @@ func cmdJobFetch(args []string) error {
 	if errors.Is(err, jobs.ErrNotFound) {
 		return usageError("nessun job %s di %s in %s: lancia giv job fetch dalla directory in cui è partito il job", id, *prov, jobsFile)
 	}
+	if errors.Is(err, jobs.ErrNotRegular) {
+		return usageError("%v", err)
+	}
 	if err != nil {
 		return err
 	}
