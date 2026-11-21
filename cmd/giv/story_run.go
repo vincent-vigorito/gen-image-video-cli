@@ -57,10 +57,13 @@ func cmdStoryRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	man, err := runStory(ctx, path, *only)
-	if err != nil {
-		return err
+	if man != nil {
+		// scene fallite sul provider: manifest delle altre, poi l'errore con l'elenco
+		if perr := output.PrintJSON(man); err == nil {
+			err = perr
+		}
 	}
-	return output.PrintJSON(man)
+	return err
 }
 
 // storyRunManifest è l'uscita di giv story run: per scena stima e addebito affiancati.
@@ -103,6 +106,7 @@ type storyRunner struct {
 	est     map[string]float64 // stima non arrotondata (o costo dichiarato) della clip, per scena pianificata
 	planned map[string]bool
 	thisRun map[string]string
+	failed  []string // scene fallite sul provider (in questa esecuzione o prima): non si rigenerano da sole
 	man     storyRunManifest
 }
 
@@ -143,28 +147,49 @@ func runStory(ctx context.Context, path, only string) (*storyRunManifest, error)
 		return nil, err
 	}
 	// i job già partiti, di tutte le scene, si recuperano prima di ogni nuovo
-	// avvio: il tetto conta così il loro addebito reale. Un job finito male sul
-	// provider non si rigenera da solo: l'esecuzione si ferma, serve --scene.
-	var failed []error
+	// avvio: il tetto conta così il loro addebito reale. Una scena il cui job
+	// finisce male sul provider è fallita: non si rigenera da sola (nemmeno con
+	// --scene in questa esecuzione) e le altre proseguono.
 	for _, scene := range r.pending() {
-		err := r.recover(ctx, scene)
-		switch {
-		case errors.Is(err, provider.ErrJobFailed):
-			failed = append(failed, fmt.Errorf("scena %s: %w: spesa contata, rifalla con --scene %s", scene.ID, err, scene.ID))
-		case err != nil:
-			return nil, fmt.Errorf("scena %s: %w", scene.ID, err)
+		if err := r.recover(ctx, scene); err != nil && !r.failedNow(scene.ID) {
+			return nil, r.stopped(fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
 	}
-	if len(failed) > 0 {
-		return nil, errors.Join(failed...)
-	}
 	for i, scene := range r.order {
-		if err := r.scene(ctx, i, scene); err != nil {
-			return nil, fmt.Errorf("scena %s: %w", scene.ID, err)
+		if err := r.scene(ctx, i, scene); err != nil && !r.failedNow(scene.ID) {
+			return nil, r.stopped(fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
 	}
 	r.summary()
-	return &r.man, nil
+	return &r.man, r.stopped(nil)
+}
+
+// failedNow: la scena è fallita sul provider (job finito male o senza video):
+// entra nell'elenco di fine esecuzione invece di fermarla.
+func (r *storyRunner) failedNow(id string) bool {
+	ss := r.st.Scenes[id]
+	if ss == nil || ss.Status != story.Fallito {
+		return false
+	}
+	if r.thisRun[id] != "fallita" {
+		r.thisRun[id] = "fallita"
+		r.failed = append(r.failed, id)
+	}
+	return true
+}
+
+// stopped è l'errore di fine esecuzione: le scene fallite, con il comando per
+// rifarle, e l'eventuale errore che ha fermato l'esecuzione.
+func (r *storyRunner) stopped(err error) error {
+	var errs []error
+	for _, id := range r.failed {
+		redo := fmt.Sprintf("per rifarla: giv story run --scene %s %s", id, r.path)
+		if sc := r.s.Scena(id); sc == nil || sc.Tipo != story.Video {
+			redo = "non è più una scena video dello storyboard"
+		}
+		errs = append(errs, fmt.Errorf("scena %s fallita sul provider (spesa contata): %s; %s", id, r.st.Scenes[id].Error, redo))
+	}
+	return errors.Join(append(errs, err)...)
 }
 
 // preflight controlla tutto prima del primo avvio: job da recuperare, richieste
@@ -186,10 +211,6 @@ func (r *storyRunner) preflight() error {
 		}
 		if ss != nil && ss.Status == story.Incerto && scene.ID != r.forced {
 			rejects = append(rejects, fmt.Errorf("scena %s: l'ultima richiesta di generazione è rimasta senza esito o senza file salvato e può essere stata addebitata (contata nella spesa): controlla sul provider, poi rifalla con --scene %s", scene.ID, scene.ID))
-			continue
-		}
-		if ss != nil && ss.Status == story.FinitoMale && scene.ID != r.forced {
-			rejects = append(rejects, fmt.Errorf("scena %s: l'ultimo job è finito male sul provider (contato nella spesa): rifalla con --scene %s", scene.ID, scene.ID))
 			continue
 		}
 		if r.toLaunch(scene) {
@@ -320,8 +341,12 @@ func (r *storyRunner) continuaReady(scene *story.Scene, launching map[string]boo
 	if launching[from.ID] {
 		return nil
 	}
-	if ss := r.st.Scenes[from.ID]; ss != nil && (ss.Clip != nil || ss.Job != nil) {
+	ss := r.st.Scenes[from.ID]
+	if ss != nil && (ss.Clip != nil || ss.Job != nil) {
 		return nil
+	}
+	if ss != nil && ss.Status == story.Fallito {
+		return fmt.Errorf("continua_da %s: la scena %s è fallita sul provider: rifalla con --scene %s", from.ID, from.ID, from.ID)
 	}
 	return fmt.Errorf("continua_da %s: la scena %s non ha ancora una clip (lancia giv story run senza --scene)", from.ID, from.ID)
 }
@@ -361,8 +386,8 @@ func (r *storyRunner) toLaunch(scene *story.Scene) bool {
 	if scene.ID == r.forced {
 		return true
 	}
-	if ss != nil && (ss.Status == story.Incerto || ss.Status == story.FinitoMale) {
-		return false // rifiutata in preflight: solo con --scene
+	if ss != nil && (ss.Status == story.Incerto || ss.Status == story.Fallito) {
+		return false // solo con --scene: incerta rifiutata in preflight, fallita elencata a fine esecuzione
 	}
 	return ss == nil || ss.Clip == nil || !r.exists(ss.Clip.File)
 }
@@ -395,10 +420,13 @@ func takeNumber(ss *story.SceneState) int {
 // recuperato: la ripresa recuperata vale come nuova (anche con --scene).
 func (r *storyRunner) scene(ctx context.Context, i int, scene *story.Scene) error {
 	ss := r.st.Scenes[scene.ID]
-	if r.thisRun[scene.ID] == "recuperata" {
+	if t := r.thisRun[scene.ID]; t == "recuperata" || t == "fallita" {
 		return nil
 	}
 	if !r.toLaunch(scene) {
+		if r.failedNow(scene.ID) {
+			return nil
+		}
 		if r.thisRun[scene.ID] == "" {
 			r.thisRun[scene.ID] = "già fatta"
 		}
@@ -412,8 +440,8 @@ func (r *storyRunner) scene(ctx context.Context, i int, scene *story.Scene) erro
 	switch {
 	case ss != nil && ss.Status == story.Incerto:
 		fmt.Fprintf(os.Stderr, "scena %s: la richiesta precedente è rimasta senza esito (resta contata nella spesa): nuova richiesta\n", scene.ID)
-	case ss != nil && ss.Status == story.FinitoMale:
-		fmt.Fprintf(os.Stderr, "scena %s: il job precedente è finito male sul provider (resta contato nella spesa): nuova richiesta\n", scene.ID)
+	case ss != nil && ss.Status == story.Fallito:
+		fmt.Fprintf(os.Stderr, "scena %s: il job precedente è fallito sul provider (resta contato nella spesa): nuova richiesta\n", scene.ID)
 	case ss != nil && ss.Clip != nil && scene.ID != r.forced:
 		fmt.Fprintf(os.Stderr, "scena %s: clip %s mancante, la scena si rigenera\n", scene.ID, ss.Clip.File)
 	}
@@ -433,8 +461,8 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 	job := r.sc.jobs[scene.ID]
 	fail := func(err error) error {
 		ss.Error = err.Error()
-		if ss.Job == nil && ss.Status != story.Incerto && ss.Status != story.FinitoMale {
-			ss.Status = story.Fallito
+		if ss.Status == "" {
+			ss.Status = idle(ss) // niente inviato: la scena resta da fare
 		}
 		r.save()
 		return err
@@ -525,23 +553,21 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 	}
 	defer func() { provider.OnJobStart = prev }()
 
-	start := time.Now()
 	man, err := job.run(ctx)
 	if err != nil {
 		var se *httpx.StartError
 		switch {
 		case started && errors.Is(err, provider.ErrJobFailed):
-			ss.Status, ss.Job = story.FinitoMale, nil // la spesa resta contata, si rifà solo con --scene
-		case started && recoverable(err, time.Since(start) >= job.req.Timeout):
-			ss.Status = story.Partito // la prossima esecuzione lo recupera
+			ss.Status, ss.Job = story.Fallito, nil // la spesa resta contata, si rifà solo con --scene
 		case started:
-			ss.Status = story.Fallito // il job resta: la prossima esecuzione prova prima a recuperarlo
+			ss.Status = story.Partito // il job resta: la prossima esecuzione lo recupera, non lo rilancia
 		case errors.As(err, &se):
 			// avvio senza esito: forse addebitato, si rifà solo con --scene
 		default:
-			// richiesta rifiutata o mai partita: niente addebito
+			// avvio rifiutato (4xx) o mai partito: nessun job, niente addebito,
+			// la scena resta da fare e la prossima esecuzione la riprova
 			ss.Charges = slices.Delete(ss.Charges, k, k+1)
-			ss.Status = story.Fallito
+			ss.Status = idle(ss)
 		}
 		return fail(err)
 	}
@@ -588,8 +614,9 @@ func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *stor
 		case received, uncertainStart(err):
 			// arrivata e addebitata senza file salvato, o senza esito: resta incerta
 		default:
+			// rifiutata (4xx) o mai partita: niente addebito, la scena resta da fare
 			ss.Charges = slices.Delete(ss.Charges, k, k+1)
-			ss.Status = story.Fallito
+			ss.Status = idle(ss)
 		}
 		return err
 	}
@@ -610,6 +637,15 @@ func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *stor
 	ss.Keyframe = &story.Take{File: rel, Done: time.Now()}
 	r.save()
 	return nil
+}
+
+// idle è lo stato di una scena senza richieste in corso: fatta se ha una clip
+// in uso, altrimenti da fare.
+func idle(ss *story.SceneState) string {
+	if ss.Clip != nil {
+		return story.Fatto
+	}
+	return story.DaFare
 }
 
 // uncertainStart: l'errore di una richiesta di generazione non dice se è stata
@@ -762,9 +798,9 @@ func (r *storyRunner) copyClip(rel, work string) (string, error) {
 }
 
 // recover scarica il job già partito della scena senza un nuovo avvio. Se il
-// provider dice che il job è finito male (errore con provider.ErrJobFailed) la
-// scena resta finito_male, spesa contata: si rifà solo con --scene. Ogni altro
-// errore lascia il job, da recuperare alla prossima esecuzione.
+// provider dice che il job è finito male (provider.ErrJobFailed) la scena è
+// fallita, spesa contata: si rifà solo con --scene. Ogni altro errore lascia il
+// job, da recuperare alla prossima esecuzione.
 func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 	ss := r.st.Scenes[scene.ID]
 	j := ss.Job
@@ -779,18 +815,15 @@ func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 		r.save()
 	}
 	fmt.Fprintf(os.Stderr, "scena %s: recupero del job %s (%s), senza nuovo avvio\n", scene.ID, j.ID, j.Provider)
-	start := time.Now()
 	res, err := f.FetchVideo(ctx, provider.Job{ID: j.ID, PollingURL: j.PollingURL}, storyTimeout)
 	if err != nil {
 		ss.Error = err.Error()
 		if errors.Is(err, provider.ErrJobFailed) {
-			ss.Status, ss.Job = story.FinitoMale, nil
+			ss.Status, ss.Job = story.Fallito, nil
 			r.save()
 			return err
 		}
-		if recoverable(err, time.Since(start) >= storyTimeout) {
-			ss.Status = story.Partito
-		}
+		ss.Status = story.Partito
 		r.save()
 		return fmt.Errorf("%w (il job resta: si recupera alla prossima esecuzione)", err)
 	}
@@ -821,7 +854,7 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	}
 	if file == "" {
 		ss.Error = "nessun video nella risposta"
-		ss.Status, ss.Job = story.FinitoMale, nil // job finito, forse addebitato: si rifà solo con --scene
+		ss.Status, ss.Job = story.Fallito, nil // job finito, forse addebitato: si rifà solo con --scene
 		r.save()
 		return errors.New(ss.Error)
 	}
@@ -849,16 +882,6 @@ func (r *storyRunner) save() {
 	if err := r.st.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "avviso: %v\n", err)
 	}
-}
-
-// recoverable: errore dopo cui il job può ancora finire bene (interruzione,
-// rete, tetto di attesa, provider momentaneamente non disponibile).
-func recoverable(err error, timedOut bool) bool {
-	if timedOut || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || httpx.IsNetwork(err) {
-		return true
-	}
-	var he *httpx.Error
-	return errors.As(err, &he) && (he.Status >= 500 || he.Status == 429)
 }
 
 // summary compila il manifest finale dallo stato: per scena stima e addebito.
