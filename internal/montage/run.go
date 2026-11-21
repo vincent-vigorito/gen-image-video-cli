@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -21,17 +22,17 @@ var ErrMissingTool = errors.New("ffmpeg non disponibile")
 // ErrExists: il file finale esiste già e il piano non chiede di sovrascriverlo.
 var ErrExists = errors.New("il file d'uscita esiste già")
 
-// Tetti di tempo di default per ogni esecuzione.
+// Tetti di tempo di default.
 const (
-	DefaultTimeout = 30 * time.Minute // montaggio e conversioni
-	ProbeTimeout   = time.Minute      // ffprobe ed estrazione del fotogramma
+	DefaultTimeout = 30 * time.Minute // un intero Montage: letture, conversione e montaggio
+	ProbeTimeout   = time.Minute      // una lettura con ffprobe, un LastFrame
 )
 
 // Tool lancia ffmpeg e ffprobe.
 type Tool struct {
 	FFmpeg  string        // percorso di ffmpeg; vuoto: cercato nel PATH
 	FFprobe string        // percorso di ffprobe; vuoto: cercato nel PATH
-	Timeout time.Duration // tetto di ogni montaggio; 0: DefaultTimeout
+	Timeout time.Duration // tetto di un intero Montage; 0: DefaultTimeout
 }
 
 // Info è il risultato di Probe.
@@ -99,24 +100,47 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// limitBuffer tiene lo stdout fino a max byte: oltre, la scrittura fallisce,
+// la pipe si chiude e il programma si ferma.
+type limitBuffer struct {
+	buf      bytes.Buffer
+	max      int
+	exceeded bool
+}
+
+func (b *limitBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		b.exceeded = true
+		return 0, errors.New("uscita troppo lunga")
+	}
+	return b.buf.Write(p)
+}
+
+// maxStdout è il tetto dello stdout letto (la risposta JSON di ffprobe).
+const maxStdout = 1 << 20
+
 // run lancia il programma con gli argomenti come lista (niente shell), senza
-// stdin, entro il tetto di tempo; restituisce lo stdout.
+// stdin, entro il tetto di tempo (il più stretto fra timeout e la scadenza di
+// ctx); restituisce lo stdout, al più maxStdout byte.
 func run(ctx context.Context, bin string, timeout time.Duration, args []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.WaitDelay = 5 * time.Second
-	var out bytes.Buffer
+	out := &limitBuffer{max: maxStdout}
 	errBuf := &tailBuffer{max: 4096}
-	cmd.Stdout = &out
+	cmd.Stdout = out
 	cmd.Stderr = errBuf
 	err := cmd.Run()
 	name := filepath.Base(bin)
 	if ctx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("%s: interrotto dopo %s (tetto di tempo): %w", name, timeout, context.DeadlineExceeded)
+		return nil, fmt.Errorf("%s: interrotto, superato il tetto di tempo: %w", name, context.DeadlineExceeded)
 	}
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s: %w", name, ctx.Err())
+	}
+	if out.exceeded {
+		return nil, fmt.Errorf("%s: uscita oltre %d byte, interrotto", name, maxStdout)
 	}
 	if err != nil {
 		msg := strings.TrimSpace(string(errBuf.buf))
@@ -125,7 +149,7 @@ func run(ctx context.Context, bin string, timeout time.Duration, args []string) 
 		}
 		return nil, fmt.Errorf("%s: %v: %s", name, err, msg)
 	}
-	return out.Bytes(), nil
+	return out.buf.Bytes(), nil
 }
 
 func (t Tool) timeout() time.Duration {
@@ -260,86 +284,136 @@ func checkOutput(out string, overwrite bool) error {
 	return nil
 }
 
-// tempOutput crea il file temporaneo accanto all'uscita, con la sua stessa
-// estensione: ffmpeg scrive lì e il file finale compare solo a lavoro riuscito.
-func tempOutput(out string) (string, error) {
-	dir := filepath.Dir(out)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(out)+".part-*"+filepath.Ext(out))
+// sameAsInput rifiuta un'uscita che esiste ed è lo stesso file di un ingresso
+// (anche attraverso link o cartelle con un altro nome).
+func sameAsInput(out string, inputs []string) error {
+	ost, err := os.Stat(out)
 	if err != nil {
-		return "", err
+		return nil
 	}
-	name := f.Name()
-	f.Close()
-	return name, nil
+	for _, in := range inputs {
+		if ist, err := os.Stat(in); err == nil && os.SameFile(ost, ist) {
+			return fmt.Errorf("%w: l'uscita %s è lo stesso file dell'ingresso %s", ErrInvalid, out, in)
+		}
+	}
+	return nil
 }
 
-// publish porta il temporaneo al nome finale: senza overwrite non sostituisce
-// un file comparso nel frattempo (link, che fallisce se il nome esiste).
-func publish(tmp, out string, overwrite bool) error {
-	if err := os.Chmod(tmp, 0o644); err != nil {
+// stagingDir crea la cartella privata (0700, nella cartella temporanea del
+// sistema) dove ffmpeg scrive: nessun altro utente può sostituirvi i file.
+func stagingDir(prefix string) (string, error) {
+	return os.MkdirTemp("", prefix)
+}
+
+// publish copia il file preparato nella cartella privata al nome finale, senza
+// riaprire per nome file che altri possono sostituire. Senza overwrite il nome
+// finale si crea con O_EXCL, che fallisce se esiste (anche come link
+// simbolico): un file comparso nel frattempo non viene mai sostituito. Con
+// overwrite si scrive in un temporaneo nuovo accanto (O_EXCL, tenuto aperto),
+// i permessi si cambiano dal descrittore e la rinomina sostituisce la voce
+// della cartella senza seguire link.
+func publish(src, out string, overwrite bool) error {
+	in, err := os.Open(src)
+	if err != nil {
 		return err
 	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
+	var f *os.File
 	if overwrite {
-		return os.Rename(tmp, out)
-	}
-	if err := os.Link(tmp, out); err != nil {
+		f, err = os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+".part-*")
+	} else {
+		f, err = os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("%w: %s", ErrExists, out)
+			return fmt.Errorf("%w: %s (chiedi la sovrascrittura per sostituirlo)", ErrExists, out)
 		}
-		// file system senza link: controllo e rinomina
-		if err := checkOutput(out, false); err != nil {
-			return err
-		}
-		return os.Rename(tmp, out)
 	}
-	return os.Remove(tmp)
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	_, err = io.Copy(f, in)
+	if err == nil && overwrite {
+		err = f.Chmod(0o644)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && overwrite {
+		err = os.Rename(name, out)
+	}
+	if err != nil {
+		os.Remove(name)
+		return fmt.Errorf("scrittura di %s: %w", out, err)
+	}
+	return nil
+}
+
+// probeErr distingue un file illeggibile (errore del piano) da tetto di tempo
+// e annullamento, che restano tali.
+func probeErr(what string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if errors.Is(err, ErrInvalid) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return fmt.Errorf("%w: %s: %v", ErrInvalid, what, err)
 }
 
 // LastFrame scrive in out (.png o .jpg) l'ultimo fotogramma della clip; con
-// overwrite false si rifiuta se out esiste.
+// overwrite false si rifiuta se out esiste. Tutto entro ProbeTimeout (o
+// Tool.Timeout se più stretto).
 func (t Tool) LastFrame(ctx context.Context, clip, out string, overwrite bool) error {
 	if _, err := LastFrameArgs(clip, out, overwrite); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, t.probeTimeout())
+	defer cancel()
 	if err := regularFile(clip); err != nil {
 		return fmt.Errorf("%w: clip: %v", ErrInvalid, err)
 	}
 	if err := checkOutput(out, overwrite); err != nil {
 		return err
 	}
+	if err := sameAsInput(out, []string{clip}); err != nil {
+		return err
+	}
 	bin, err := t.bin("ffmpeg", t.FFmpeg)
 	if err != nil {
 		return err
 	}
-	tmp, err := tempOutput(out)
+	work, err := stagingDir("giv-fotogramma-")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
-	args, err := LastFrameArgs(clip, tmp, true)
+	defer os.RemoveAll(work)
+	staged := filepath.Join(work, "fotogramma"+strings.ToLower(filepath.Ext(out)))
+	args, err := LastFrameArgs(clip, staged, false)
 	if err != nil {
 		return err
 	}
 	if _, err := run(ctx, bin, t.probeTimeout(), args); err != nil {
 		return fmt.Errorf("ultimo fotogramma di %s: %w", clip, err)
 	}
-	if st, err := os.Stat(tmp); err != nil || st.Size() == 0 {
+	if st, err := os.Stat(staged); err != nil || st.Size() == 0 {
 		return fmt.Errorf("ultimo fotogramma di %s: nessun fotogramma video", clip)
 	}
-	return publish(tmp, out, overwrite)
+	return publish(staged, out, overwrite)
 }
 
 // Montage esegue il piano: controlla file e tracce, completa le durate mancanti
-// dei video con quella del file, converte un .srt in .ass, monta in un file
-// temporaneo accanto all'uscita e lo porta al nome finale solo a lavoro
-// riuscito.
+// dei video con quella del file, converte un .srt in .ass, monta in una
+// cartella privata e porta il file al nome finale solo a lavoro riuscito.
+// Tutto (letture con ffprobe, conversione, montaggio) sta entro Tool.Timeout.
 func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	if err := p.checkStatic(false); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, t.timeout())
+	defer cancel()
 	ffmpeg, err := t.bin("ffmpeg", t.FFmpeg)
 	if err != nil {
 		return nil, err
@@ -355,6 +429,9 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	if err := checkOutput(p.Output, p.Overwrite); err != nil {
 		return nil, err
 	}
+	if err := sameAsInput(p.Output, p.inputs()); err != nil {
+		return nil, err
+	}
 
 	res := &Result{}
 	clips := append([]Clip(nil), p.Clips...)
@@ -365,7 +442,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 		if !c.Image {
 			info, err := t.Probe(ctx, c.Path)
 			if err != nil {
-				return nil, fmt.Errorf("%w: clip %d: %v", ErrInvalid, i+1, err)
+				return nil, probeErr(fmt.Sprintf("clip %d", i+1), err)
 			}
 			if info.Video == nil {
 				return nil, invalid("clip %d: %s non ha una traccia video", i+1, c.Path)
@@ -386,7 +463,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 		if c.Voice != "" {
 			info, err := t.Probe(ctx, c.Voice)
 			if err != nil {
-				return nil, fmt.Errorf("%w: clip %d: voce: %v", ErrInvalid, i+1, err)
+				return nil, probeErr(fmt.Sprintf("clip %d: voce", i+1), err)
 			}
 			if info.Audio == nil {
 				return nil, invalid("clip %d: la voce %s non ha una traccia audio", i+1, c.Voice)
@@ -397,7 +474,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	if p.Music != nil {
 		info, err := t.Probe(ctx, p.Music.Path)
 		if err != nil {
-			return nil, fmt.Errorf("%w: musica: %v", ErrInvalid, err)
+			return nil, probeErr("musica", err)
 		}
 		if info.Audio == nil {
 			return nil, invalid("musica: %s non ha una traccia audio", p.Music.Path)
@@ -413,7 +490,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 		}
 	}
 
-	work, err := os.MkdirTemp("", "giv-montage-")
+	work, err := stagingDir("giv-montaggio-")
 	if err != nil {
 		return nil, err
 	}
@@ -425,35 +502,29 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 			return nil, err
 		}
 		if _, err := run(ctx, ffmpeg, t.timeout(), args); err != nil {
-			return nil, fmt.Errorf("%w: sottotitoli %s: %v", ErrInvalid, p.Subtitles, err)
+			return nil, probeErr("sottotitoli "+p.Subtitles, err)
 		}
 		p.Subtitles = ass
 	}
 
 	final := p.Output
-	tmp, err := tempOutput(final)
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(tmp)
-	run1 := p
-	run1.Output, run1.Overwrite = tmp, true
-	args, err := Args(run1)
+	staged := p
+	staged.Output, staged.Overwrite = filepath.Join(work, "montato.mp4"), false
+	args, err := Args(staged)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := run(ctx, ffmpeg, t.timeout(), args); err != nil {
 		return nil, fmt.Errorf("montaggio: %w", err)
 	}
-	if err := publish(tmp, final, p.Overwrite); err != nil {
+	info, err := t.Probe(ctx, staged.Output)
+	if err != nil {
+		return nil, fmt.Errorf("montato illeggibile: %w", err)
+	}
+	if err := publish(staged.Output, final, p.Overwrite); err != nil {
 		return nil, err
 	}
-	res.Output, res.Duration = final, total
-	info, err := t.Probe(ctx, final)
-	if err != nil {
-		return nil, fmt.Errorf("montato scritto in %s ma illeggibile: %w", final, err)
-	}
-	res.Info = info
+	res.Output, res.Duration, res.Info = final, total, info
 	return res, nil
 }
 
@@ -467,6 +538,6 @@ func srtToASSArgs(src, dst string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{"-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-y",
+	return []string{"-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-n",
 		"-protocol_whitelist", "file", "-f", "srt", "-i", in, "-f", "ass", out}, nil
 }
