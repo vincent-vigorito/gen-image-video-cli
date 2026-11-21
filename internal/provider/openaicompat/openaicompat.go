@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -45,10 +46,21 @@ type Client struct {
 }
 
 func New(name, baseURL, apiKey string, opts Options) *Client {
-	return &Client{
-		name: name, baseURL: baseURL, apiKey: apiKey, opts: opts,
-		http: &http.Client{Timeout: 300 * time.Second},
+	c := &Client{name: name, baseURL: baseURL, apiKey: apiKey, opts: opts}
+	c.http = &http.Client{Timeout: 300 * time.Second, CheckRedirect: c.checkRedirect}
+	return c
+}
+
+// checkRedirect lascia l'Authorization solo ai salti sull'origine dell'API
+// (schema, host e porta): fuori origine la chiave viene tolta.
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
+	if !c.apiOrigin(req.URL) {
+		req.Header.Del("Authorization")
+	}
+	return nil
 }
 
 func (c *Client) Name() string { return c.name }
@@ -386,7 +398,8 @@ func (c *Client) FetchVideo(ctx context.Context, job provider.Job, timeout time.
 }
 
 // CheckJob rifiuta, senza richieste, un job che non può essere di questo
-// provider: la chiave va solo all'host API del provider.
+// provider: l'indirizzo di attesa (letto anche da file) deve stare sull'origine
+// dell'API, sotto <base>/videos/ e finire con l'id del job.
 func (c *Client) CheckJob(job provider.Job) error {
 	if !c.opts.Router && !c.opts.Grok {
 		return fmt.Errorf("%s non ha job video da recuperare", c.name)
@@ -403,21 +416,63 @@ func (c *Client) CheckJob(job provider.Job) error {
 	if !c.apiHost(job.PollingURL) {
 		return fmt.Errorf("%s: l'indirizzo di attesa del job %s non è sull'host del provider: rifiutato", c.name, job.ID)
 	}
+	if !c.jobPath(job) {
+		return fmt.Errorf("%s: l'indirizzo di attesa non è quello del job %s: rifiutato", c.name, job.ID)
+	}
 	return nil
 }
 
-// apiHost dice se rawURL sta sull'host API del provider (stesso schema e host,
-// senza credenziali nell'URL): solo lì si manda la chiave.
+// jobPath dice se l'indirizzo di attesa è un percorso di job del provider:
+// sotto <base>/videos/, ultimo segmento uguale all'id, senza segmenti vuoti o
+// punti, senza query né frammento.
+func (c *Client) jobPath(job provider.Job) bool {
+	u, err := url.Parse(job.PollingURL)
+	b, berr := url.Parse(c.baseURL)
+	if err != nil || berr != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(u.EscapedPath(), strings.TrimSuffix(b.EscapedPath(), "/")+"/videos/")
+	if !ok {
+		return false
+	}
+	segs := strings.Split(rest, "/")
+	for _, s := range segs {
+		if s == "" || s == "." || s == ".." {
+			return false
+		}
+	}
+	return segs[len(segs)-1] == url.PathEscape(job.ID)
+}
+
+// apiHost dice se rawURL sta sull'origine dell'API del provider, senza
+// credenziali nell'URL: solo lì si manda la chiave.
 func (c *Client) apiHost(rawURL string) bool {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.User != nil || u.Host == "" {
-		return false
-	}
+	return err == nil && c.apiOrigin(u)
+}
+
+// apiOrigin dice se u ha schema, host e porta (esplicita o di default)
+// dell'API del provider e nessuna credenziale.
+func (c *Client) apiOrigin(u *url.URL) bool {
 	b, err := url.Parse(c.baseURL)
-	if err != nil {
+	if err != nil || u == nil || u.User != nil || u.Host == "" {
 		return false
 	}
-	return u.Scheme == b.Scheme && strings.EqualFold(u.Host, b.Host)
+	return u.Scheme == b.Scheme && strings.EqualFold(u.Hostname(), b.Hostname()) && port(u) == port(b)
+}
+
+// port è la porta di u, quella di default dello schema se non indicata.
+func port(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch u.Scheme {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 func (c *Client) grokPollURL(id string) string {
@@ -576,26 +631,30 @@ func (c *Client) routerStart(ctx context.Context, req provider.VideoRequest) (pr
 func (c *Client) wait(ctx context.Context, job provider.Job, timeout time.Duration, immediate bool) (res *provider.Result, err error) {
 	// da qui ogni errore porta l'id del job
 	defer func() { err = httpx.Job(job.ID, err) }()
-	if err := c.CheckJob(job); err != nil {
-		return nil, err
+	if !c.apiHost(job.PollingURL) {
+		return nil, fmt.Errorf("%s: l'indirizzo di attesa del job %s non è sull'host del provider: rifiutato", c.name, job.ID)
 	}
 	timeout = jobTimeout(timeout)
-	deadline := time.Now().Add(timeout)
-	for first := true; ; first = false {
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
+	// il tetto copre attesa, controlli, ritentativi e scaricamento
+	tctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	defer func() {
+		if err != nil && ctx.Err() == nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
+			res, err = nil, fmt.Errorf("%s: timeout dopo %s", c.name, timeout)
 		}
+	}()
+	for first := true; ; first = false {
 		if !first || !immediate {
 			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			case <-tctx.Done():
+				return nil, tctx.Err()
 			case <-time.After(pollInterval):
 			}
 		}
 		if c.opts.Router {
-			res, err = c.routerPoll(ctx, job)
+			res, err = c.routerPoll(tctx, job)
 		} else {
-			res, err = c.grokPoll(ctx, job)
+			res, err = c.grokPoll(tctx, job)
 		}
 		if err != nil || res != nil {
 			return res, err
