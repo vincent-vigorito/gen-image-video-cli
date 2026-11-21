@@ -232,6 +232,10 @@ func (r *storyRunner) preflight() error {
 			continue
 		}
 		if r.toLaunch(scene) {
+			if err := r.staleKeyframe(scene); err != nil {
+				rejects = append(rejects, err)
+				continue
+			}
 			launch = append(launch, scene)
 		}
 	}
@@ -414,6 +418,9 @@ func (r *storyRunner) toLaunch(scene *story.Scene) bool {
 	return ss == nil || ss.Clip == nil || !r.exists(ss.Clip.File)
 }
 
+// needKeyframe: la scena va generata col fotogramma chiave da fare, la prima
+// volta o con --new-keyframe. Uno già registrato non si rigenera da solo, anche
+// se il file manca (staleKeyframe).
 func (r *storyRunner) needKeyframe(scene *story.Scene) bool {
 	if scene.FotogrammaChiave == nil {
 		return false
@@ -422,7 +429,21 @@ func (r *storyRunner) needKeyframe(scene *story.Scene) bool {
 		return true
 	}
 	ss := r.st.Scenes[scene.ID]
-	return ss == nil || ss.Keyframe == nil || !r.exists(ss.Keyframe.File)
+	return ss == nil || ss.Keyframe == nil
+}
+
+// staleKeyframe rifiuta una scena da generare il cui fotogramma chiave
+// registrato non c'è più (o non è un file della cartella dello storyboard):
+// rigenerarlo è a pagamento e solo su richiesta, con --new-keyframe.
+func (r *storyRunner) staleKeyframe(scene *story.Scene) error {
+	if scene.FotogrammaChiave == nil || r.needKeyframe(scene) {
+		return nil
+	}
+	if f := r.st.Scenes[scene.ID].Keyframe.File; !r.exists(f) {
+		return usageError("scena %s: il fotogramma chiave registrato %s non c'è più: per generarne uno nuovo (a pagamento) giv story run --scene %s --new-keyframe %s",
+			scene.ID, f, scene.ID, r.path)
+	}
+	return nil
 }
 
 func (r *storyRunner) exists(file string) bool {
@@ -504,6 +525,9 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 	req := job.req
 	req.Refs = slices.Clone(job.req.Refs)
 	shown := newManifestInputs(req) // come nello storyboard
+	if err := r.staleKeyframe(scene); err != nil {
+		return err // nessuna richiesta: il fotogramma si rigenera solo con --new-keyframe
+	}
 	switch {
 	case scene.FotogrammaChiave != nil:
 		if r.needKeyframe(scene) {
