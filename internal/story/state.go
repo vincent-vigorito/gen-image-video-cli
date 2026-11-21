@@ -20,12 +20,9 @@ const StateVersion = 1
 const (
 	Fatto   = "fatto"   // clip scaricata
 	Partito = "partito" // job avviato, risultato non ancora scaricato: si recupera, non si rilancia
-	Fallito = "fallito" // errore senza addebito (si rigenera); con un job, la prossima esecuzione lo recupera
+	Fallito = "fallito" // job accettato dal provider e finito male (o senza video): spesa contata, si rifà solo con --scene
 	Incerto = "incerto" // richiesta di generazione inviata senza esito: forse addebitata, si rifà solo con --scene
-	// FinitoMale: job partito che il provider dà per finito male (o finito senza
-	// video): la spesa resta contata e la scena si rifà solo con --scene
-	FinitoMale = "finito_male"
-	DaFare     = "da_fare" // niente in corso e nessuna clip nuova (es. fotogramma chiave fatto, clip no)
+	DaFare  = "da_fare" // niente in corso né addebitato senza clip (es. fotogramma chiave fatto, avvio rifiutato): si riprova
 )
 
 // Tipi di generazione pagata.
@@ -231,9 +228,9 @@ func (st *State) validate() error {
 			if sc.Job == nil {
 				fail("%s: partita senza job", where)
 			}
-		case Fallito, Incerto, FinitoMale, DaFare:
+		case Fallito, Incerto, DaFare:
 		default:
-			fail("%s: stato %q sconosciuto (fatto, partito, fallito, incerto, finito_male, da_fare)", where, sc.Status)
+			fail("%s: stato %q sconosciuto (fatto, partito, fallito, incerto, da_fare)", where, sc.Status)
 		}
 		takeOK(where+" clip", sc.Clip)
 		takeOK(where+" keyframe", sc.Keyframe)
