@@ -339,3 +339,26 @@ func TestMontageUscitaUgualeIngresso(t *testing.T) {
 		}
 	}
 }
+
+func TestMontageUscitaFuoriRoot(t *testing.T) {
+	needFFmpeg(t)
+	dir := t.TempDir()
+	p := basePlan(t, dir)
+	p.Clips = p.Clips[:1]
+	root := filepath.Join(dir, "root")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.Root = root
+	p.Output = filepath.Join(dir, "fuori.mp4")
+	if _, err := (Tool{}).Montage(context.Background(), p); !errors.Is(err, ErrInvalid) {
+		t.Errorf("uscita fuori da Root: %v", err)
+	}
+	if _, err := os.Stat(p.Output); err == nil {
+		t.Errorf("file scritto fuori da Root")
+	}
+	p.Output = filepath.Join(root, "dentro.mp4")
+	if _, err := (Tool{}).Montage(context.Background(), p); err != nil {
+		t.Errorf("uscita dentro Root: %v", err)
+	}
+}
