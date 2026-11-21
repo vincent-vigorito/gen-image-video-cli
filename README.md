@@ -39,7 +39,7 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
   | 2 | uso errato (flag, prompt, provider o modello non validi) | correggere la chiamata |
   | 3 | modello non trovato (HTTP 404) | `giv models --provider <p>` e scegliere un altro modello |
   | 4 | autenticazione o credito (HTTP 401/402/403) | controllare la chiave, ricaricare il credito o cambiare provider |
-  | 5 | errore dell'API o di rete | riprovare; per i video leggere l'id del job nel messaggio |
+  | 5 | errore dell'API o di rete | riprovare; per i video leggere l'id del job nel messaggio e scaricarlo con `giv job fetch` |
   | 7 | troppe richieste (HTTP 429) | aspettare e riprovare |
   | 10 | chiave API mancante | impostare la chiave del provider |
 - **manifest completo** — path dei file scritti, **mime reale** restituito dal provider
@@ -65,6 +65,12 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
 - **creazione del job video non ripetuta** — la richiesta che avvia il video non viene
   mai rilanciata da sola dopo un 5xx o un timeout (il job potrebbe essere partito e un
   secondo invio costarebbe due video): `giv` esce con codice 5 e un suggerimento.
+- **recupero dei job** — ogni job video avviato lascia il suo stato in `giv-jobs.jsonl`;
+  `giv job fetch --provider P <id>` ne riprende l'attesa e scarica il video **senza un
+  nuovo avvio** (vedi [Recupero dei job video](#recupero-dei-job-video)).
+- **storyboard a più scene** — `giv story check` valida un file JSON con le scene di uno
+  spot (modello, file, preset, riferimenti fra scene) e ne stima il costo senza generare
+  niente (vedi [Storyboard](#storyboard-video-a-più-scene)).
 - **capacità e costo prima di spendere** — prima di avviare un video `giv` controlla il
   modello (OpenRouter: `/videos/models`; xAI: tabella interna). Un controllo che il
   modello non supporta (fotogrammi, riferimenti, durata, risoluzione, aspect, audio,
@@ -112,6 +118,9 @@ giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
                                               # modelli disponibili; --caps (con --kind video): capacità e $/s
 giv image   [flag] "<prompt>"                 # genera immagini
 giv video   [flag] "<prompt>"                 # genera video (job asincrono, 1-5 min)
+giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
+                                              # scarica un job video già partito, senza nuovo avvio
+giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -129,6 +138,8 @@ prima o dopo.
 |---|---|
 | `image` | `-n <num>` (su OpenRouter una richiesta per immagine, costi sommati) · `--aspect <1:1\|16:9\|9:16\|4:3\|3:4>` · `--seed <n>` · `--input <file\|url>` (ripetibile: reference di stile / editing) |
 | `video` | tabella sotto |
+| `job fetch` | `--provider` (xai o openrouter, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
+| `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -161,7 +172,7 @@ Tra parentesi il modello usato senza `--model` (la stessa tabella è in `giv --h
 | `gemini` (provider di default) | ✅ Nano Banana (`gemini-3.1-flash-image`) | ❌ nessuna API video (Veo spento): usa `openrouter` o `xai` | ✅ | ✅ | ✅ |
 | `openai` | ✅ gpt-image-* (`gpt-image-2.6-flare`) | ❌ nessuna API video: usa `openrouter` o `xai` | ✅ via edits | ✅ via size | ❌ |
 | `xai` | ✅ grok-imagine-image-* (`grok-imagine-image-2.0`) | ✅ grok-imagine-video (`grok-imagine-video-1.5`, 1-15 s, primo e ultimo fotogramma, fino a 14 riferimenti) | ❌ immagini / ✅ video | ❌ immagini / ✅ video | ❌ |
-| `openrouter` | ✅ Google, OpenAI, ByteDance, Flux, Recraft… (`google/gemini-3.1-flash-image`) | ✅ Gemini Omni, Seedance, Veo, Kling, Wan… (`google/gemini-omni-1.2-flash`); capacità per modello da `/videos/models` | ✅ | ✅ | ✅ |
+| `openrouter` | ✅ Google, OpenAI, ByteDance, Flux, Recraft… (`google/gemini-3.1-flash-image`) | ✅ Gemini Omni, Seedance, Veo, Wan… (`google/gemini-omni-1.2-flash`); capacità per modello da `/videos/models` | ✅ | ✅ | ✅ |
 
 Note:
 - OpenRouter usa gli endpoint media dedicati (`/images`, `/videos` asincrono) — l'unica
@@ -203,8 +214,8 @@ download o generazione:
   modelli a token (es. Seedance) la stima non c'è.
 
 ```bash
-giv video --provider openrouter --model kwaivgi/kling-v3.0-pro --duration 5 --audio off \
-  --image foto.jpg --dry-run "il flacone su un piano di marmo"   # cost_est_usd 0.56, nessuna generazione
+giv video --provider openrouter --model alibaba/wan-3.0 --duration 5 --resolution 720p \
+  --audio off --image foto.jpg --dry-run "il flacone su un piano di marmo"   # cost_est_usd 0.5, nessuna generazione
 giv video … --max-cost 0.50 "…"                                 # stima oltre il tetto: codice 2
 giv models --provider openrouter --kind video --caps [--json]    # capacità e $/s di ogni modello video
 ```
@@ -224,16 +235,128 @@ inputs, cost_est_usd, cost_source, warnings}`; serve comunque la chiave del prov
 - La frase cambia con la famiglia del modello, ricavata dal nome (`kling`, `veo`,
   `seedance`, `wan`); per le altre (es. `grok`, `omni`) vale la frase generica, con avviso
   (con `--strict` di `presets show`, codice 2).
-- Dove il modello ha il negative (kling, veo, wan) i negative dei preset si sommano a
-  `--negative`; altrove si omettono.
+- Dove la famiglia ha il negative (kling, veo, wan) i negative dei preset si sommano a
+  `--negative`; altrove si omettono. Se il modello non accetta il negative (es.
+  `alibaba/wan-3.0`, nessun parametro passante) resta un avviso.
 - `--tutela` aggiunge una clausola: `prodotto` (default con `--image`: prodotto, etichetta
   e proporzioni come nel primo fotogramma), `illustrazione` (stile piatto, niente testo),
   `no`.
-- `giv presets show orbit --model kwaivgi/kling-v3.0-pro --prompt "…" [--negative "…"]`
+- `giv presets show orbit --model alibaba/wan-3.0 --prompt "…" [--negative "…"]`
   mostra prompt e negative finali, senza chiamate.
 - `./giv-presets.json` e `~/.config/giv/presets.json` aggiungono o sostituiscono preset
   (vince il primo), nello stesso formato della libreria incorporata
   (`internal/presets/presets.json`); un file malformato esce con codice 2.
+
+## Recupero dei job video
+
+Un video è un job asincrono: `giv` lo avvia, ne controlla lo stato ogni 10 s fino a
+`--timeout` e scarica il file. Se l'attesa si interrompe dopo l'avvio (timeout, rete o
+errore del provider: codice 5 con l'id del job nel messaggio; oppure `giv` chiuso a mano),
+il job resta sul provider e può essere già addebitato. Invece di rilanciare `giv video`:
+
+```bash
+giv job fetch --provider openrouter <id>                  # --out e --name come giv video
+giv job fetch --provider xai --timeout 30m --name s2 <id>
+```
+
+- **stato su file**: ogni job avviato da `giv video` lascia una riga in `giv-jobs.jsonl`
+  nella directory corrente (id, indirizzo di attesa, modello, prompt inviato), creato con
+  permessi 0600. `giv job fetch` va lanciato dalla stessa directory: su OpenRouter
+  l'indirizzo di attesa arriva solo nella risposta dell'avvio.
+- **nessun nuovo avvio**: `job fetch` non manda mai la richiesta di generazione. Controlla
+  subito lo stato, aspetta se il job è ancora in corso e scarica il video; manifest e riga
+  di `giv-log.jsonl` come `giv video` (`command` `job fetch`, `job_id`, `cost_usd` su
+  openrouter).
+- **job fallito**: errore con l'id del job, codice 5.
+- **rifiuti con codice 2, senza richieste**: provider senza job video (gemini, openai), id
+  assente da `giv-jobs.jsonl`, file di stato che non è un file regolare (anche un
+  symlink), indirizzo di attesa fuori dall'API del provider (schema, host e porta) o
+  diverso dal percorso del job (`<api>/videos/…/<id>`, senza query).
+- **la chiave va solo all'API del provider**: nei redirect e negli scaricamenti, fuori da
+  schema, host e porta dell'API l'intestazione `Authorization` viene tolta.
+- `--timeout` (di `giv video` e di `job fetch`) copre l'attesa, i controlli dello stato e
+  lo scaricamento.
+
+## Storyboard: video a più scene
+
+Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
+valida e ne stima il costo **senza generare niente**: legge solo i file locali e il
+catalogo video del provider (gratuito, ma serve la chiave). L'esempio in `examples/spot/`
+passa il controllo:
+
+```bash
+giv story check examples/spot/storyboard.json     # JSON su stdout: scene, stime, totale
+```
+
+```json
+{
+  "titolo": "Spot di prova: crema alle erbe, 18 secondi",
+  "formato": { "aspect": "16:9", "risoluzione": "720p", "fps": 24 },
+  "default": { "provider": "openrouter", "modello": "alibaba/wan-3.0", "audio": "off" },
+  "tetto_costo_usd": 3,
+  "riferimenti": { "prodotto": ["img/prodotto.png"] },
+  "scene": [
+    { "id": "s1", "tipo": "video", "durata": 5, "immagine": "img/prodotto.png",
+      "preset": ["dolly-in"], "prompt": "il vasetto di crema su un piano di legno chiaro…",
+      "voce": "voce/s1.wav" },
+    { "id": "s2", "tipo": "video", "durata": 5, "continua_da": "s1", "preset": ["orbit"],
+      "prompt": "la camera gira attorno al vasetto…", "voce": "voce/s2.wav" },
+    { "id": "s3", "tipo": "video", "durata": 5, "usa": ["prodotto"], "preset": ["static"],
+      "prompt": "una mano apre il vasetto e mostra la crema…" },
+    { "id": "chiusura", "tipo": "immagine", "durata": 3, "file": "img/logo.png",
+      "voce": "voce/chiusura.wav" }
+  ],
+  "montaggio": { "transizione": "dissolvenza", "uscita": "spot.mp4" }
+}
+```
+
+Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost_total_usd`
+1,5. I file in `examples/spot/img/` e `voce/` sono segnaposto (tinte piatte e silenzio):
+sostituirli con la foto del prodotto, il logo e la voce vera.
+
+| Campo | Cosa contiene |
+|---|---|
+| `titolo` | facoltativo |
+| `formato` | `aspect`, `risoluzione` e `fps` del video: valgono per le scene video che non li indicano |
+| `default` | `provider`, `modello`, `risoluzione`, `aspect`, `audio` (`on`/`off`), `seed`, `tutela`, `param` (oggetto, come `--param`) per tutte le scene video; senza `modello` vale il default di `giv video` per quel provider |
+| `tetto_costo_usd` | tetto in dollari: un totale oltre il tetto, o una generazione senza stima né costo dichiarato, esce con codice 2 |
+| `strict` | come `--strict` di `giv video`: anche i controlli di rifinitura sono errori |
+| `riferimenti` | insiemi di immagini per nome (`"prodotto": ["img/prodotto.png"]`), richiamati dalle scene con `usa` |
+| `scene` | le scene, in ordine |
+| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1), `sottotitoli` (file), `uscita` (file finale) |
+
+Ogni scena ha un `id` (lettere, cifre, `_` e `-`, al massimo 64 caratteri), un `tipo`, una
+`durata` in secondi e, facoltativa, la `voce`: un file audio fuori campo, messo al
+montaggio.
+
+- `video`: generata da un modello. `prompt`, `negative`, `preset`; il primo fotogramma
+  viene da **uno solo** fra `immagine` (file o URL), `fotogramma_chiave` (immagine
+  generata prima con `giv image`: `prompt`, `provider`, `modello`, `costo_dichiarato_usd`;
+  gli insiemi di `usa` ne sono gli ingressi) e `continua_da` (id di una scena video o clip
+  precedente, di cui si usa l'ultimo fotogramma); poi `ultimo_fotogramma`, `usa`,
+  `costo_dichiarato_usd` e i campi di `default`, che la scena sovrascrive. Senza `durata`
+  vale il default del modello.
+- `clip`: un `file` video già pronto (ripresa vera, screencast).
+- `immagine`: un `file` immagine fermo, con `durata` obbligatoria (cartelli, chiusure).
+- `avatar` non c'è in giv 0.9.0 e viene rifiutato: la voce va nel campo `voce` di una
+  scena.
+
+`giv story check` esce con codice 2 e l'elenco di tutti i problemi trovati, uno per riga:
+
+- **forma**: JSON con campi sconosciuti, id mancanti o ripetuti, tipi sconosciuti, campi
+  che non valgono per il tipo di scena, `continua_da` verso una scena successiva o
+  inesistente, più di un primo fotogramma;
+- **file**: relativi alla cartella dello storyboard, esistenti, regolari e dentro la
+  cartella anche seguendo i link; un URL solo per `immagine`, `ultimo_fotogramma` e
+  `riferimenti`;
+- **scene video**: ognuna come `giv video --dry-run`, sul catalogo letto in quel momento
+  (un modello che non c'è più viene rifiutato), con capacità, preset e stima; gli avvisi
+  sono nei `warnings` della scena;
+- **costi**: `cost_est_usd` (stime da listino), `cost_declared_usd` (costi dichiarati
+  dall'autore dove la stima non c'è, per esempio i modelli a token come Seedance),
+  `cost_total_usd`; le generazioni senza stima né costo dichiarato (compresi i
+  fotogrammi chiave) sono in `not_estimated` e non contano come zero. Con
+  `tetto_costo_usd` vengono rifiutate.
 
 ## Uso da un agente (Claude Code)
 
@@ -245,7 +368,8 @@ ln -s "$(pwd)/skills/gen-image-video" ~/.claude/skills/gen-image-video
 
 Da quel momento qualsiasi sessione sa usare il CLI: contratto di output, matrice
 provider, ricette (reference di stile, image-to-video, spot da foto di prodotto, mascotte
-fra scene, preset di camera), controlli prima di spendere, costi indicativi e quirk.
+fra scene, preset di camera, spot a più scene con lo storyboard, voce fuori campo),
+controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
 
@@ -268,8 +392,11 @@ internal/provider/gemini/ adapter Gemini (generateContent; niente video)
 internal/provider/openaicompat/  adapter OpenAI-compatible (openai, xai, openrouter)
 internal/caps/            capacità e prezzi dei modelli video (OpenRouter /videos/models, tabella xAI), controlli e stima
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
+internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
+internal/story/           formato e controlli dello storyboard di giv story
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
+examples/spot/            storyboard d'esempio con file segnaposto
 ```
 
 ## Versioning
