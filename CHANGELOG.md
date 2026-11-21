@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.9.0] - non ancora rilasciata
+## [0.9.0] - 2026-11-21
 
 ### Aggiunto
 
@@ -25,7 +25,25 @@ versioning [SemVer](https://semver.org/lang/it/).
   quel momento (un modello sparito viene rifiutato) e somma stime da listino e costi
   dichiarati; le generazioni senza stima sono elencate a parte (`not_estimated`), mai
   contate come zero, e con `tetto_costo_usd` vengono rifiutate. Nessuna generazione. Il
-  tipo di scena `avatar` viene rifiutato.
+  tipo di scena `avatar` viene rifiutato. Con `ffprobe`, avviso se la voce dura più della
+  sua scena.
+- **`giv story run [--scene <id>] <storyboard.json>`**: genera a pagamento le scene video
+  in ordine, una richiesta alla volta (fotogramma chiave, poi clip; `continua_da` con
+  l'ultimo fotogramma della scena prima, estratto con ffmpeg). Lo stato per scena
+  (`fatto`, `partito`, `incerto`, `fallito`, `da_fare`) sta in `<nome>.stato.json`
+  accanto allo storyboard: una nuova esecuzione riprende, recupera i job già partiti senza
+  nuovo avvio e non rilancia da sola né le richieste rimaste senza esito né i job falliti
+  sul provider; `--scene` rifà una scena tenendo la ripresa precedente.
+  `tetto_costo_usd` è cumulativo sullo stato e si ricontrolla prima di ogni richiesta a
+  pagamento, con la spesa fin qui più le stime da fare; cancellando lo stato il conto
+  riparte. Clip in `clip/`, mai sovrascritte; JSON su stdout con stima e addebito
+  affiancati, per scena e in totale.
+- **`giv story cut <storyboard.json>`**: monta con ffmpeg in un solo video le scene già
+  pronte (clip, immagini ferme e clip generate da `giv story run`, prese dal suo stato), con transizioni a
+  taglio o dissolvenza, voce fuori campo per scena, musica in loop e sottotitoli incisi.
+  L'uscita resta nella cartella dello storyboard e si riscrive a ogni montaggio; JSON su
+  stdout con durata e formato del file scritto. Niente rete e nessuna generazione;
+  servono `ffmpeg` e `ffprobe`.
 
 ### Modificato
 
@@ -38,7 +56,9 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 - La chiave del provider va solo all'API del provider (schema, host e porta): nei
   redirect e negli scaricamenti fuori da quell'origine l'intestazione `Authorization`
-  viene tolta, e un indirizzo di attesa fuori dall'API viene rifiutato.
+  viene tolta, e un indirizzo di attesa fuori dall'API viene rifiutato. Il controllo dello
+  stato di un job non segue redirect fuori dall'origine dell'API: è un errore e il job
+  resta recuperabile.
 - `giv job fetch` rifiuta con codice 2, senza richieste, un indirizzo di attesa salvato
   diverso dal percorso del job e un file di stato che non è un file regolare (anche un
   symlink).

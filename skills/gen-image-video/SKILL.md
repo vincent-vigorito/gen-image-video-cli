@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma e immagini di riferimento), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma e immagini di riferimento), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -53,6 +53,8 @@ giv video   [flag] "<prompt>"                   # genera video (job asincrono, 1
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
+giv story run [--scene <id>] <storyboard.json>  # genera le scene video, a pagamento; riprende da dove si era fermato
+giv story cut <storyboard.json>                 # monta con ffmpeg le scene pronte in un solo video, gratis
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -215,6 +217,22 @@ stesso formato di `internal/presets/presets.json`.
    scena (controlli che il modello ignora). Nessuna generazione, nessun costo.
 4. Il modello va scelto fra quelli del catalogo letto in quel momento: un modello sparito
    viene rifiutato (`giv models --provider openrouter --kind video --caps`).
+5. Generazione: `giv story run storyboard.json`, a pagamento, solo dopo un check con 0 e
+   una stima accettata. Genera le scene video in ordine; clip in `clip/`, stato in
+   `storyboard.stato.json` accanto. Se si ferma (timeout, rete, Ctrl-C) **rilanciare lo
+   stesso comando**: riprende e recupera i job già partiti senza pagarli due volte. Stati
+   nel JSON: `incerto` (richiesta senza esito, forse addebitata: controllare sul provider,
+   poi `--scene <id>`), `fallito` (job finito male, spesa contata: rifarla solo con
+   `--scene <id>`). Per rifare una scena venuta male: `giv story run --scene s2
+   storyboard.json` (la ripresa precedente resta). Il tetto conta tutta la spesa
+   registrata nello stato: cancellare lo stato azzera il conto e fa rigenerare tutto, non
+   farlo per «liberare» il tetto.
+6. Montaggio: `giv story cut storyboard.json` (serve `ffmpeg`), gratis e senza rete,
+   quando ogni scena video ha la sua clip nello stato: codice 2 con «clip mancanti» elenca
+   le scene ancora da generare. Nel blocco `montaggio`: `transizione` (`taglio` o `dissolvenza` di
+   0,5 s), `musica` in loop (`volume` 0,25 se non indicato), `sottotitoli` (`.srt`,
+   `.ass`), `uscita` nella cartella dello spot, riscritta a ogni cut. Sul JSON confrontare
+   `duration_s` con `expected_duration_s` e leggere i `warnings`, poi la verifica visiva.
 
 **Voce fuori campo** (sintesi locale, nessun costo; giv non sintetizza la voce, riceve i
 file già pronti):
@@ -226,9 +244,10 @@ file già pronti):
    (circa 12 s di calcolo per secondo di audio). Un WAV per scena: `voce/s1.wav`,
    `voce/s2.wav`…
 3. Ogni file non più lungo della sua scena:
-   `ffprobe -v error -show_entries format=duration -of csv=p=0 voce/s1.wav`.
+   `ffprobe -v error -show_entries format=duration -of csv=p=0 voce/s1.wav`
+   (`giv story check` lo segnala nei `warnings` della scena).
 4. Nello storyboard `"voce": "voce/s1.wav"` sulla scena. I tempi delle frasi per i
-   sottotitoli si ricavano dalla trascrizione automatica del WAV.
+   sottotitoli (`montaggio.sottotitoli`) si ricavano dalla trascrizione automatica del WAV.
 
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
 per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)

@@ -70,7 +70,10 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
   nuovo avvio** (vedi [Recupero dei job video](#recupero-dei-job-video)).
 - **storyboard a più scene** — `giv story check` valida un file JSON con le scene di uno
   spot (modello, file, preset, riferimenti fra scene) e ne stima il costo senza generare
-  niente (vedi [Storyboard](#storyboard-video-a-più-scene)).
+  niente; `giv story run` genera le scene video riprendendo da dove si era fermato, senza
+  rilanciare i job già partiti e dentro un tetto di spesa cumulativo; `giv story cut`
+  monta con ffmpeg le scene in un solo video, con voce, musica e sottotitoli (vedi
+  [Storyboard](#storyboard-video-a-più-scene)).
 - **capacità e costo prima di spendere** — prima di avviare un video `giv` controlla il
   modello (OpenRouter: `/videos/models`; xAI: tabella interna). Un controllo che il
   modello non supporta (fotogrammi, riferimenti, durata, risoluzione, aspect, audio,
@@ -121,6 +124,9 @@ giv video   [flag] "<prompt>"                 # genera video (job asincrono, 1-5
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                               # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
+giv story run [--scene <id>] <storyboard.json>
+                                              # genera le scene video (a pagamento), riprende da dove si era fermato
+giv story cut <storyboard.json>               # monta con ffmpeg le scene già pronte in un solo video
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -141,6 +147,7 @@ prima o dopo.
 | `job fetch` | `--provider` (xai o openrouter, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 | `story run` | `--scene <id>` rifà una sola scena; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
+| `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -353,11 +360,99 @@ montaggio.
 - **scene video**: ognuna come `giv video --dry-run`, sul catalogo letto in quel momento
   (un modello che non c'è più viene rifiutato), con capacità, preset e stima; gli avvisi
   sono nei `warnings` della scena;
+- **voce** (con `ffprobe` nel PATH): un avviso nei `warnings` della scena se la voce dura
+  più della scena di oltre 0,05 s o se il file non si legge come audio;
 - **costi**: `cost_est_usd` (stime da listino), `cost_declared_usd` (costi dichiarati
   dall'autore dove la stima non c'è, per esempio i modelli a token come Seedance),
   `cost_total_usd`; le generazioni senza stima né costo dichiarato (compresi i
   fotogrammi chiave) sono in `not_estimated` e non contano come zero. Con
   `tetto_costo_usd` vengono rifiutate.
+
+### Generazione: `giv story run`
+
+```bash
+giv story run examples/spot/storyboard.json              # genera le scene video, a pagamento
+giv story run --scene s2 examples/spot/storyboard.json   # rifà solo la scena s2
+```
+
+`giv story run` genera **a pagamento** le scene `video` dello storyboard, in ordine e una
+richiesta alla volta: prima l'eventuale `fotogramma_chiave`, poi la clip; per
+`continua_da` l'ultimo fotogramma della scena prima, estratto con ffmpeg. Prima del primo
+avvio rifà i controlli di `giv story check` sul catalogo letto in quel momento: un
+problema esce con codice 2 senza avviare niente. Le clip vanno in `clip/` nella cartella
+dello storyboard (`<id>-r<N>-<data>.mp4`, mai sovrascritte) e ogni clip entra nel
+registro di `giv log` con `command` `story video`. L'attesa di ogni video ha un tetto di
+15 minuti.
+
+**Stato.** Lo stato delle scene sta in un solo file accanto allo storyboard,
+`<nome>.stato.json` (per `storyboard.json`, `storyboard.stato.json`); mentre il comando
+lavora c'è anche `<nome>.stato.lock` e un secondo `giv story run` sullo stesso storyboard
+esce con codice 2. Spostare, rinominare o copiare la cartella dello spot non cambia
+niente. Una nuova esecuzione riprende da dove si era fermata: prima di ogni nuovo avvio
+recupera i job già partiti, **senza rilanciarli**, poi genera le scene mancanti. Uno stato
+illeggibile o non valido esce con codice 2, senza avvii.
+
+| `status` | Cosa vuol dire | Alla prossima esecuzione |
+|---|---|---|
+| `fatto` | clip scaricata | niente; se il file della clip non c'è più, la scena si rigenera |
+| `partito` | job avviato, video non ancora scaricato (rete, timeout, errore di salvataggio) | il job si recupera, mai rilanciato |
+| `incerto` | richiesta inviata senza esito (5xx, rete caduta dopo l'invio, interruzione): può essere stata addebitata | codice 2 finché non la si rifà con `--scene <id>`, dopo aver controllato sul provider |
+| `fallito` | job finito male sul provider, spesa contata | non si rigenera da sola: le altre scene proseguono e il comando esce con codice 1 e la riga `giv story run --scene <id>` per rifarla |
+| `da_fare` | niente in corso: avvio rifiutato subito (4xx) o solo fotogramma chiave fatto | si riprova |
+
+`--scene <id>` rifà una sola scena video, anche fatta, incerta o fallita: la ripresa
+precedente resta nello stato e in `clip/`. Se la scena ha un job ancora da scaricare, il
+job recuperato vale come nuova ripresa, senza un nuovo avvio.
+
+**Tetto di spesa.** Con `tetto_costo_usd` il conto è cumulativo sullo stato: prima di ogni
+richiesta a pagamento (fotogramma chiave o avvio video) `giv story run` somma la spesa già
+registrata (l'addebito riportato dal provider dove c'è, altrimenti la stima) e le stime
+delle generazioni ancora da fare; oltre il tetto esce con codice 2 senza nuovi avvii. Ogni
+richiesta viene registrata nello stato prima di partire. **Cancellando il file di stato il
+conto riparte da zero** e le scene tornano da generare.
+
+Il JSON su stdout ha `state`, le `scene` (per scena `status`, `file`, `keyframe`, `takes`,
+`this_run`: generata, recuperata, già fatta o fallita, `cost_est_usd`, `cost_usd`),
+`jobs_started`, `jobs_recovered`, `keyframes` e i totali `cost_est_usd` (stime e costi
+dichiarati), `cost_usd` (addebito riportato dai provider), `spent_usd` (la spesa contata
+per il tetto) e `cap_usd`.
+
+### Montaggio: `giv story cut`
+
+```bash
+giv story cut examples/spot/storyboard.json       # JSON su stdout: file scritto, durata, formato
+```
+
+`giv story cut` monta in un solo video le scene già pronte, con `ffmpeg` e `ffprobe` (da
+installare e nel PATH, per esempio `apt install ffmpeg`): niente rete, niente generazione,
+nessuna chiave. Ogni scena dà al montaggio:
+
+- `video`: la clip in uso nello stato di `giv story run` (`<nome>.stato.json`); se una
+  manca esce con codice 2 e l'elenco delle scene da generare, col loro stato;
+- `clip`: il suo `file`; `immagine`: il suo `file` fermo per tutta la `durata`.
+
+Come monta:
+
+- **formato**: `aspect`, `risoluzione` e `fps` da `formato`, poi dal blocco `default`,
+  altrimenti 16:9, 720p e 30 fps. La risoluzione è il lato corto: 720p è 1280×720 in 16:9
+  e 720×1280 in 9:16. Video H.264, audio AAC.
+- **transizioni**: `taglio` o `dissolvenza` di 0,5 s fra una scena e l'altra; ogni
+  dissolvenza accorcia il totale di 0,5 s.
+- **audio**: la `voce` di una scena parte con la scena (se dura di più continua sulla
+  scena dopo, o viene tagliata alla fine); l'audio di una clip resta se il file ne ha uno;
+  la `musica` va in loop sotto tutto il video a `volume` 0,25 se non indicato (0 = niente
+  musica).
+- **sottotitoli**: un file `.ass`, `.ssa` o `.srt`, inciso nel video.
+- **uscita**: `montaggio.uscita`, altrimenti `<nome dello storyboard>.mp4`, sempre dentro
+  la cartella dello storyboard anche seguendo i link. Si riscrive a ogni `giv story cut`;
+  il file compare solo a montaggio riuscito. Tutto il montaggio sta entro 30 minuti.
+
+Il JSON su stdout ha `storyboard`, `output`, `scenes`, `duration_s` (letta dal file
+scritto), `expected_duration_s` (dalle durate delle scene), `width`, `height`, `fps`,
+`video_codec`, `audio_codec` e `warnings` (per esempio una clip più corta della sua
+durata o una voce tagliata). Esce con codice 2 per clip mancanti, file illeggibili,
+storyboard o formato non validi e uscita fuori dalla cartella; con codice 1 se mancano
+`ffmpeg` o `ffprobe` o il montaggio fallisce.
 
 ## Uso da un agente (Claude Code)
 
@@ -394,7 +489,8 @@ internal/provider/openaicompat/  adapter OpenAI-compatible (openai, xai, openrou
 internal/caps/            capacità e prezzi dei modelli video (OpenRouter /videos/models, tabella xAI), controlli e stima
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
-internal/story/           formato e controlli dello storyboard di giv story
+internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
+internal/montage/         montaggio con ffmpeg e ffprobe, per giv story cut
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto
