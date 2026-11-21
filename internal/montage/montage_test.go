@@ -316,3 +316,26 @@ func TestMontageSottotitoliAssEHostile(t *testing.T) {
 		t.Errorf("%v %v", info, err)
 	}
 }
+
+func TestMontageUscitaUgualeIngresso(t *testing.T) {
+	needFFmpeg(t)
+	dir := t.TempDir()
+	p := basePlan(t, dir)
+	p.Clips = p.Clips[:1]
+	p.Output = p.Clips[0].Path
+	p.Overwrite = true
+	orig, _ := os.ReadFile(p.Output)
+	if _, err := (Tool{}).Montage(context.Background(), p); !errors.Is(err, ErrInvalid) {
+		t.Errorf("uscita = ingresso: %v", err)
+	}
+	if now, _ := os.ReadFile(p.Output); string(now) != string(orig) {
+		t.Errorf("ingresso modificato")
+	}
+	link := filepath.Join(dir, "link.mp4")
+	if err := os.Symlink(p.Clips[0].Path, link); err == nil {
+		p.Output = link
+		if _, err := (Tool{}).Montage(context.Background(), p); !errors.Is(err, ErrInvalid) {
+			t.Errorf("uscita via symlink: %v", err)
+		}
+	}
+}
