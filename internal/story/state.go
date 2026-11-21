@@ -20,9 +20,12 @@ const StateVersion = 1
 const (
 	Fatto   = "fatto"   // clip scaricata
 	Partito = "partito" // job avviato, risultato non ancora scaricato: si recupera, non si rilancia
-	Fallito = "fallito" // errore; con un job, la prossima esecuzione prova prima a recuperarlo
+	Fallito = "fallito" // errore senza addebito (si rigenera); con un job, la prossima esecuzione lo recupera
 	Incerto = "incerto" // richiesta di generazione inviata senza esito: forse addebitata, si rifà solo con --scene
-	DaFare  = "da_fare" // niente in corso e nessuna clip nuova (es. fotogramma chiave fatto, clip no)
+	// FinitoMale: job partito che il provider dà per finito male (o finito senza
+	// video): la spesa resta contata e la scena si rifà solo con --scene
+	FinitoMale = "finito_male"
+	DaFare     = "da_fare" // niente in corso e nessuna clip nuova (es. fotogramma chiave fatto, clip no)
 )
 
 // Tipi di generazione pagata.
@@ -151,7 +154,12 @@ func readState(path string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := newState(path)
+	// un file che c'è è un oggetto con version e scenes espliciti: null, un
+	// oggetto vuoto o senza scene non valgono come stato nuovo
+	if t := bytes.TrimSpace(data); len(t) == 0 || t[0] != '{' {
+		return nil, fmt.Errorf("file di stato %s: non è un oggetto JSON", path)
+	}
+	st := &State{}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(st); err != nil {
@@ -161,11 +169,9 @@ func readState(path string) (*State, error) {
 		return nil, fmt.Errorf("file di stato %s: altro testo dopo lo stato", path)
 	}
 	if err := st.validate(); err != nil {
-		return nil, fmt.Errorf("file di stato %s non valido (correggilo o toglilo: le scene fatte si rifarebbero):\n%w", path, err)
+		return nil, fmt.Errorf("file di stato %s non valido (correggilo o toglilo: le scene fatte si rifarebbero e la spesa ripartirebbe da zero):\n%w", path, err)
 	}
-	if st.Scenes == nil {
-		st.Scenes = map[string]*SceneState{}
-	}
+	st.path = path
 	return st, nil
 }
 
@@ -187,7 +193,10 @@ func OpenRunState(storyboard string) (st *State, unlock func(), err error) {
 
 func (st *State) validate() error {
 	if st.Version != StateVersion {
-		return fmt.Errorf("versione %d non riconosciuta (attesa %d)", st.Version, StateVersion)
+		return fmt.Errorf("versione %d mancante o non riconosciuta (attesa %d)", st.Version, StateVersion)
+	}
+	if st.Scenes == nil {
+		return errors.New("scenes mancante")
 	}
 	var errs []error
 	fail := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
@@ -222,9 +231,9 @@ func (st *State) validate() error {
 			if sc.Job == nil {
 				fail("%s: partita senza job", where)
 			}
-		case Fallito, Incerto, DaFare:
+		case Fallito, Incerto, FinitoMale, DaFare:
 		default:
-			fail("%s: stato %q sconosciuto (fatto, partito, fallito, incerto, da_fare)", where, sc.Status)
+			fail("%s: stato %q sconosciuto (fatto, partito, fallito, incerto, finito_male, da_fare)", where, sc.Status)
 		}
 		takeOK(where+" clip", sc.Clip)
 		takeOK(where+" keyframe", sc.Keyframe)
