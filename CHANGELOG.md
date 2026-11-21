@@ -25,7 +25,14 @@ versioning [SemVer](https://semver.org/lang/it/).
   quel momento (un modello sparito viene rifiutato) e somma stime da listino e costi
   dichiarati; le generazioni senza stima sono elencate a parte (`not_estimated`), mai
   contate come zero, e con `tetto_costo_usd` vengono rifiutate. Nessuna generazione. Il
-  tipo di scena `avatar` viene rifiutato.
+  tipo di scena `avatar` viene rifiutato. Con `ffprobe`, avviso se la voce dura più della
+  sua scena.
+- **`giv story cut <storyboard.json>`**: monta con ffmpeg in un solo video le scene già
+  pronte (clip, immagini ferme e clip generate da `giv story run`), con transizioni a
+  taglio o dissolvenza, voce fuori campo per scena, musica in loop e sottotitoli incisi.
+  L'uscita resta nella cartella dello storyboard e si riscrive a ogni montaggio; JSON su
+  stdout con durata e formato del file scritto. Niente rete e nessuna generazione;
+  servono `ffmpeg` e `ffprobe`.
 
 ### Modificato
 
