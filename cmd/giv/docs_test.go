@@ -57,7 +57,7 @@ func TestEsempioSpotStoryCheck(t *testing.T) {
 		t.Fatalf("code=%d avvii=%d %s", code, starts, se)
 	}
 	var p struct {
-		Scenes       []json.RawMessage `json:"scene"`
+		Scenes       []json.RawMessage `json:"scenes"`
 		CostEstUSD   float64           `json:"cost_est_usd"`
 		CostTotalUSD float64           `json:"cost_total_usd"`
 		CapUSD       float64           `json:"cap_usd"`
