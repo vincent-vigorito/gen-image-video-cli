@@ -222,6 +222,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce}
 	if scene.Tipo != story.Video {
 		c.File = scene.File
+		if w := voiceWarning(sc.s, scene, float64(scene.Durata)); w != "" {
+			c.Warnings = append(c.Warnings, w)
+		}
 		return c, nil
 	}
 	o, err := sc.videoOptions(scene)
@@ -236,6 +239,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	plan := job.plan
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
+	if w := voiceWarning(sc.s, scene, float64(max(job.req.Duration, scene.Durata))); w != "" {
+		c.Warnings = append(c.Warnings, w)
+	}
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
@@ -385,5 +391,5 @@ func cmdStoryRun(args []string) error {
 }
 
 func cmdStoryCut(args []string) error {
-	return &cliError{code: exitError, msg: "giv story cut non ancora disponibile"}
+	return runStoryCut(args)
 }
