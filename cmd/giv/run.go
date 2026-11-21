@@ -31,6 +31,11 @@ type videoOptions struct {
 	MaxCost                      *float64 // nil = nessun tetto
 	Strict, DryRun               bool
 	Out, Name                    string
+
+	// per giv story: il primo fotogramma nasce prima della scena (fotogramma chiave,
+	// continua_da), quindi solo capacità e preset; client già creato e riusato
+	ImagePending bool
+	client       provider.Provider
 }
 
 // videoJob è una generazione video controllata e pronta a partire.
@@ -86,12 +91,18 @@ func prepareVideo(o videoOptions) (*videoJob, error) {
 		return nil, usageError("--max-cost deve essere un importo finito e non negativo in dollari")
 	}
 	req.Image, req.LastFrame, req.Refs = o.Image, o.LastFrame, slices.Clone(o.Refs)
-	if err := checkVideoInputs(&req); err != nil {
+	files := req
+	if o.ImagePending {
+		files.Image = ""
+	}
+	if err := checkVideoInputs(&files); err != nil {
 		return nil, err
 	}
-	c, err := newProvider(o.Provider)
-	if err != nil {
-		return nil, err
+	c := o.client
+	if c == nil {
+		if c, err = newProvider(o.Provider); err != nil {
+			return nil, err
+		}
 	}
 	// capacità e costo prima dei download e della generazione
 	plan, err := checkVideo(c, &req, videoChecks{strict: o.Strict, maxCost: o.MaxCost, dryRun: o.DryRun})
