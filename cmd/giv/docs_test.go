@@ -3,15 +3,16 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 )
 
-// F1-T6: versione 0.8.0 e help <-> README coerenti, flag per flag.
-func TestVersion080(t *testing.T) {
+// F1-T6: versione 0.9.0 e help <-> README coerenti, flag per flag.
+func TestVersion090(t *testing.T) {
 	so, _, code, _ := runGiv(t, nil, "version")
-	if code != 0 || strings.TrimSpace(so) != "giv 0.8.0" {
+	if code != 0 || strings.TrimSpace(so) != "giv 0.9.0" {
 		t.Fatalf("code=%d out=%q", code, so)
 	}
 }
@@ -67,5 +68,17 @@ func TestEsempioSpotStoryCheck(t *testing.T) {
 	}
 	if len(p.Scenes) != 4 || p.CostEstUSD != 1.5 || p.CostTotalUSD != 1.5 || p.CapUSD != 3 || len(p.NotEstimated) != 0 {
 		t.Errorf("piano inatteso: %s", out)
+	}
+}
+
+// F2-T5: giv story cut sull'esempio senza stato: clip mancanti, codice 2.
+func TestEsempioSpotCutSenzaClip(t *testing.T) {
+	board, err := filepath.Abs("../../examples/spot/storyboard.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, se, code, _ := runGiv(t, nil, "story", "cut", board)
+	if code != 2 || !strings.Contains(se, "clip mancanti") || !strings.Contains(se, "s1") {
+		t.Fatalf("code=%d %s", code, se)
 	}
 }
