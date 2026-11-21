@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,15 +50,30 @@ type SceneState struct {
 	Keyframe *Take    `json:"keyframe,omitempty"` // fotogramma chiave, riusato alle riprese successive
 	Job      *Job     `json:"job,omitempty"`      // job avviato e non ancora scaricato
 	Error    string   `json:"error,omitempty"`    // ultimo errore
-	Previous []Take   `json:"previous,omitempty"` // riprese sostituite: i file restano su disco
+	Previous []Take   `json:"previous,omitempty"` // riprese e fotogrammi chiave sostituiti: i file restano su disco
 	Charges  []Charge `json:"charges,omitempty"`  // generazioni pagate o forse pagate
 }
 
 // Take è un file generato, relativo alla cartella dello storyboard.
 type Take struct {
+	Kind  string    `json:"kind,omitempty"` // in previous: "fotogramma" per un fotogramma chiave sostituito, vuoto per una clip
 	File  string    `json:"file"`
 	JobID string    `json:"job_id,omitempty"`
 	Done  time.Time `json:"done"`
+}
+
+// ClipTakes sono le riprese video della scena: quelle sostituite più quella in uso.
+func (sc *SceneState) ClipTakes() int {
+	n := 0
+	for _, t := range sc.Previous {
+		if t.Kind == "" {
+			n++
+		}
+	}
+	if sc.Clip != nil {
+		n++
+	}
+	return n
 }
 
 // Job è un job video avviato: quanto serve per recuperarlo senza un nuovo avvio.
@@ -93,13 +109,20 @@ func (c Charge) Spent() float64 {
 	return 0
 }
 
+// Spent è la spesa della scena (riprese precedenti e job falliti compresi).
+func (sc *SceneState) Spent() float64 {
+	var total float64
+	for _, c := range sc.Charges {
+		total += c.Spent()
+	}
+	return total
+}
+
 // Spent è la spesa di tutte le scene (riprese precedenti e job falliti compresi).
 func (st *State) Spent() float64 {
 	var total float64
 	for _, sc := range st.Scenes {
-		for _, c := range sc.Charges {
-			total += c.Spent()
-		}
+		total += sc.Spent()
 	}
 	return total
 }
@@ -197,9 +220,12 @@ func (st *State) validate() error {
 	}
 	var errs []error
 	fail := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
-	takeOK := func(where string, t *Take) {
+	takeOK := func(where string, t *Take, kinds ...string) {
 		if t == nil {
 			return
+		}
+		if t.Kind != "" && !slices.Contains(kinds, t.Kind) {
+			fail("%s: kind %q non valido", where, t.Kind)
 		}
 		if err := localPath(t.File); t.File == "" || err != nil {
 			fail("%s: file %q non valido", where, t.File)
@@ -235,7 +261,7 @@ func (st *State) validate() error {
 		takeOK(where+" clip", sc.Clip)
 		takeOK(where+" keyframe", sc.Keyframe)
 		for i := range sc.Previous {
-			takeOK(fmt.Sprintf("%s previous n. %d", where, i+1), &sc.Previous[i])
+			takeOK(fmt.Sprintf("%s previous n. %d", where, i+1), &sc.Previous[i], ChargeKeyframe)
 		}
 		if j := sc.Job; j != nil {
 			if j.Provider == "" || !ValidJobID(j.ID) {
