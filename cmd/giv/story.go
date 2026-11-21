@@ -86,7 +86,8 @@ ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video, anche fatta, incerta o fallita: la
                      ripresa precedente resta nello stato e in clip/; il fotogramma
-                     chiave già generato si riusa
+                     chiave già generato si riusa (se il suo file manca, codice 2:
+                     serve --new-keyframe)
   --new-keyframe     solo con --scene, per una scena con fotogramma_chiave: rigenera
                      anche il fotogramma chiave, con la stessa riserva e lo stesso tetto
                      delle altre richieste; il precedente resta fra le riprese precedenti
