@@ -1,14 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -21,6 +27,9 @@ type runEnv struct {
 	dir     string
 	board   string
 	posts   int32
+	images  int32 // richieste POST /images (fotogramma chiave)
+	bodies  []string
+	mu      sync.Mutex
 	polls   int32
 	failAt  int32   // dal POST numero N in poi l'avvio fallisce (0 = mai)
 	cost    float64 // usage.cost riportato a fine job
@@ -40,13 +49,22 @@ func newRunEnv(t *testing.T, boardJSON string) *runEnv {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/videos/models"):
 			w.Write(e.catalog)
 		case r.Method == http.MethodPost && r.URL.Path == "/videos":
-			io.Copy(io.Discard, r.Body)
+			b, _ := io.ReadAll(r.Body)
+			e.mu.Lock()
+			e.bodies = append(e.bodies, string(b))
+			e.mu.Unlock()
 			n := atomic.AddInt32(&e.posts, 1)
 			if e.failAt > 0 && n >= e.failAt {
 				http.Error(w, `{"error":"rifiutato"}`, http.StatusBadRequest)
 				return
 			}
 			fmt.Fprintf(w, `{"id":"job-%d","polling_url":%q,"status":"pending"}`, n, e.srv.URL+"/poll")
+		case r.Method == http.MethodPost && r.URL.Path == "/images":
+			io.Copy(io.Discard, r.Body)
+			atomic.AddInt32(&e.images, 1)
+			var b bytes.Buffer
+			png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+			fmt.Fprintf(w, `{"data":[{"b64_json":%q,"media_type":"image/png"}],"usage":{"cost":0.14}}`, base64.StdEncoding.EncodeToString(b.Bytes()))
 		case r.URL.Path == "/poll":
 			atomic.AddInt32(&e.polls, 1)
 			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":%v}}`, e.srv.URL+"/content", e.cost)
@@ -274,5 +292,74 @@ func TestStoryRunStatoCorrotto(t *testing.T) {
 	_, se, code := e.run(t)
 	if code != 2 || e.posts != 0 {
 		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+}
+
+// 8: fotogramma chiave generato una volta sola e riusato alla ripresa; il suo
+// costo dichiarato entra nel tetto.
+func TestStoryRunFotogrammaChiaveRiusato(t *testing.T) {
+	key := `,"fotogramma_chiave":{"prompt":"un gatto fermo","costo_dichiarato_usd":0.14}`
+	t.Run("tetto", func(t *testing.T) {
+		// clip 0.5 + fotogramma 0.14 = 0.64 > 0.6
+		e := newRunEnv(t, sb(`,"tetto_costo_usd":0.6`, sc("s1", key)))
+		_, se, code := e.run(t)
+		if code != 2 || e.posts != 0 || e.images != 0 {
+			t.Fatalf("code=%d posts=%d images=%d\n%s", code, e.posts, e.images, se)
+		}
+	})
+	t.Run("riuso", func(t *testing.T) {
+		e := newRunEnv(t, sb(`,"tetto_costo_usd":2`, sc("s1", key)))
+		out, se, code := e.run(t)
+		if code != 0 || e.images != 1 || e.posts != 1 {
+			t.Fatalf("prima: code=%d images=%d posts=%d\n%s", code, e.images, e.posts, se)
+		}
+		if !strings.Contains(e.bodies[0], "first_frame") {
+			t.Errorf("la clip non parte dal fotogramma chiave: %s", e.bodies[0])
+		}
+		_ = out
+		// seconda ripresa della stessa scena: nuova clip, fotogramma riusato
+		_, se, code = e.run(t, "--scene", "s1")
+		if code != 0 || e.images != 1 || e.posts != 2 {
+			t.Fatalf("--scene: code=%d images=%d posts=%d\n%s", code, e.images, e.posts, se)
+		}
+	})
+}
+
+type fakeFrames struct {
+	png  []byte
+	clip string
+}
+
+func (f *fakeFrames) Check() error { return nil }
+func (f *fakeFrames) LastFrame(_ context.Context, clip, out string, _ bool) error {
+	f.clip = clip
+	return os.WriteFile(out, f.png, 0o644)
+}
+
+// 9: continua_da: la scena parte dall'ultimo fotogramma della scena indicata
+// (estrattore finto: nessun bisogno di ffmpeg, i video del server finto non sono veri).
+func TestStoryRunContinuaDaPartoDallUltimoFotogramma(t *testing.T) {
+	var b bytes.Buffer
+	im := image.NewRGBA(image.Rect(0, 0, 3, 5)) // misure uniche: si riconosce nel corpo
+	if err := png.Encode(&b, im); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeFrames{png: b.Bytes()}
+	old := storyFrames
+	storyFrames = f
+	t.Cleanup(func() { storyFrames = old })
+	e := newRunEnv(t, sb("", sc("s1", ""), sc("s2", `,"continua_da":"s1"`)))
+	_, se, code := e.run(t)
+	if code != 0 || e.posts != 2 {
+		t.Fatalf("code=%d posts=%d\n%s", code, e.posts, se)
+	}
+	if strings.Contains(e.bodies[0], "first_frame") {
+		t.Errorf("s1 non deve avere un primo fotogramma: %s", e.bodies[0])
+	}
+	if !strings.Contains(e.bodies[1], "first_frame") || !strings.Contains(e.bodies[1], base64.StdEncoding.EncodeToString(f.png)) {
+		t.Errorf("s2 non parte dall'ultimo fotogramma di s1: %.300s", e.bodies[1])
+	}
+	if !strings.Contains(filepath.ToSlash(f.clip), "clip/s1-r1-") {
+		t.Errorf("fotogramma estratto dalla clip sbagliata: %s", f.clip)
 	}
 }
