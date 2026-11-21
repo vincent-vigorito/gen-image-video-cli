@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma e immagini di riferimento), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma e immagini di riferimento), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -33,7 +33,8 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
   openai e video gemini, anche con `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
   4 chiave rifiutata o credito esaurito (401/402/403: cambiare provider o ricaricare) ·
   5 errore dell'API o di rete · 7 troppe richieste (429: aspettare) · 10 chiave API mancante.
-  Decidere dal codice: 3 → altro modello, 4 → altro provider, 7 → attendere e riprovare.
+  Decidere dal codice: 3 → altro modello, 4 → altro provider, 7 → attendere e riprovare,
+  5 su un video con l'id del job nel messaggio → `giv job fetch`, non un nuovo `giv video`.
 - File salvati come `<out>/<slug>-<timestamp>[-n].<ext>` — `--name` per slug stabile,
   `--out` per la directory (default `out/`).
 - Il mime nel manifest è quello **reale** restituito dal provider (Nano Banana → jpeg,
@@ -49,6 +50,9 @@ giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
                                                 # elenca modelli (verifica anche l'auth); --caps con --kind video
 giv image   [flag] "<prompt>"                   # genera immagini
 giv video   [flag] "<prompt>"                   # genera video (job asincrono, 1-5 min)
+giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
+                                                # scarica un job video già partito, senza nuovo avvio
+giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -83,8 +87,18 @@ non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche 
 errori di rete (fino a 5 volte, rispettando `Retry-After`). La richiesta che **avvia** il
 video invece non viene mai ripetuta dopo un 5xx o un timeout: il job potrebbe essere già
 partito e un secondo invio costerebbe due video. Se esce con codice 5, **non rilanciare
-subito**: cercare il job sul provider (l'id è nel messaggio d'errore quando il job è
-partito) e solo dopo decidere se riprovare.
+`giv video`**:
+
+- con l'id del job nel messaggio (il job è partito): `giv job fetch --provider P <id>`
+  dalla **stessa directory** (lo stato del job è in `giv-jobs.jsonl` lì). Riprende
+  l'attesa e scarica il video senza un nuovo avvio; manifest come `giv video` (`command`
+  `job fetch`). Un job fallito dà di nuovo codice 5 con l'id: allora sì, si rigenera.
+- senza id (il messaggio dice che il job potrebbe essere partito): controllare sul
+  provider prima di rilanciare.
+
+`job fetch` rifiuta con codice 2, senza richieste: gemini e openai (nessun job video), un
+id che non è in `giv-jobs.jsonl`, un file di stato che non è un file regolare, un
+indirizzo di attesa fuori dall'API del provider. `--timeout` copre anche lo scaricamento.
 
 ## Prima di spendere (video)
 
@@ -109,7 +123,7 @@ partito) e solo dopo decidere se riprovare.
 | `gemini` | ✅ | ❌ | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; nessuna API video (Veo spento), usare openrouter |
 | `openai` | ✅ | ❌ | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-2.6-flare` (default), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare`/`-sunburst`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1-mini`; nessuna API video |
 | `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `grok-imagine-image`; video `grok-imagine-video-1.5` (default, 1-15 s, 480p default, primo e ultimo fotogramma, fino a 14 `--ref`), `grok-imagine-video-1.5-lite` (uguale, più economico), `grok-imagine-video` (solo primo fotogramma, 7 `--ref`); con `--ref` max 720p; `--seed` ignorato; con `--image` ignora `--aspect` |
-| `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, `kwaivgi/kling-v3.0-pro`, Wan…; capacità per modello con `giv models --kind video --caps` |
+| `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, `alibaba/wan-3.0` (2-30 s, primo e ultimo fotogramma), Wan 2.x…; capacità per modello con `giv models --kind video --caps` |
 
 - **Video gemini**: non supportato (Veo 3.1 spento sulla Gemini API dal 22/10/2026, percorso
   rimosso): `giv video --provider gemini` esce subito con codice 2, anche con `--model`,
@@ -141,10 +155,10 @@ in `dati-siti/STILE-ILLUSTRAZIONI-ALEGRIA.md` del workspace):
 **Spot da una foto di prodotto** (camera da preset, prodotto fedele):
 
 ```bash
-./bin/giv video --provider openrouter --model kwaivgi/kling-v3.0-pro \
-  --image foto-prodotto.jpg --preset dolly-in --duration 5 --audio off --dry-run \
-  --name spot-01 "il flacone su un piano di marmo, luce da studio"
-# stima ok (0,56 $) → stessa riga senza --dry-run, con --max-cost 0.60
+./bin/giv video --provider openrouter --model alibaba/wan-3.0 \
+  --image foto-prodotto.jpg --preset dolly-in --duration 5 --resolution 720p --audio off \
+  --dry-run --name spot-01 "il flacone su un piano di marmo, luce da studio"
+# stima ok (0,50 $) → stessa riga senza --dry-run, con --max-cost 0.60
 ```
 
 Con `--image` la clausola `--tutela prodotto` è già il default (prodotto, etichetta e
@@ -168,15 +182,53 @@ richiamano nel prompt con `<IMAGE_0>`, `<IMAGE_1>`…
 
 ```bash
 ./bin/giv presets                                              # elenco (camera ed effetto)
-./bin/giv presets show orbit slow-motion --model kwaivgi/kling-v3.0-pro --prompt "<scena>"
-./bin/giv video --provider openrouter --model kwaivgi/kling-v3.0-pro --image foto.jpg \
+./bin/giv presets show orbit slow-motion --model alibaba/wan-3.0 --prompt "<scena>"
+./bin/giv video --provider openrouter --model alibaba/wan-3.0 --image foto.jpg \
   --preset orbit --preset slow-motion --name orbit-01 "<scena>"
 ```
 
 Al massimo un preset di camera e uno di effetto; le coppie incompatibili escono con codice
 2. Varianti scritte per kling, veo, seedance e wan; su grok e omni vale la frase generica
-(avviso). Preset propri in `./giv-presets.json` o `~/.config/giv/presets.json`, stesso
-formato di `internal/presets/presets.json`.
+(avviso). I negative dei preset wan su `alibaba/wan-3.0` danno un avviso (il modello non
+accetta il negative). Preset propri in `./giv-presets.json` o `~/.config/giv/presets.json`,
+stesso formato di `internal/presets/presets.json`.
+
+**Spot a più scene** (storyboard; esempio completo in `examples/spot/storyboard.json`):
+
+1. Una cartella per lo spot: `storyboard.json`, `img/` (foto del prodotto, logo, immagini
+   di riferimento), `voce/` (un file audio per scena, vedi la voce fuori campo sotto). I
+   percorsi nello storyboard sono relativi a questa cartella e devono restarci dentro.
+2. Scrivere lo storyboard: `formato` comune (`aspect`, `risoluzione`, `fps`), blocco
+   `default` col modello (`"provider": "openrouter", "modello": "alibaba/wan-3.0",
+   "audio": "off"`: clip mute, voce e musica al montaggio), `tetto_costo_usd`, gli
+   insiemi di `riferimenti` del prodotto o del personaggio, poi le scene in ordine:
+   - `video` con `prompt`, `durata`, un preset di camera, e un solo primo fotogramma fra
+     `immagine` (la foto del prodotto), `continua_da` (l'ultimo fotogramma della scena
+     prima: la continuità più forte fra due clip) e `fotogramma_chiave` (immagine
+     generata prima, coi riferimenti di `usa` come ingressi);
+   - `clip` per un video già pronto, `immagine` con `durata` per cartelli e chiusura;
+   - `voce` sulle scene con la voce fuori campo. Il tipo `avatar` non c'è in giv 0.9.0.
+3. `giv story check storyboard.json` finché non esce con 0. Con codice 2 l'errore elenca
+   tutti i problemi, uno per riga. Sul JSON stampato guardare `cost_total_usd` (contro il
+   tetto), `not_estimated` (generazioni senza stima: dare un `costo_dichiarato_usd`, per
+   esempio ai modelli a token come Seedance e ai fotogrammi chiave) e i `warnings` di ogni
+   scena (controlli che il modello ignora). Nessuna generazione, nessun costo.
+4. Il modello va scelto fra quelli del catalogo letto in quel momento: un modello sparito
+   viene rifiutato (`giv models --provider openrouter --kind video --caps`).
+
+**Voce fuori campo** (sintesi locale, nessun costo; giv non sintetizza la voce, riceve i
+file già pronti):
+
+1. Un testo breve per scena: l'italiano parlato va a circa 15 caratteri al secondo, una
+   scena da 5 s regge una settantina di caratteri.
+2. Sintesi con la voce locale del progetto: si fissa una voce di riferimento e si clona la
+   stessa voce per tutte le scene, così il timbro non cambia fra una scena e l'altra
+   (circa 12 s di calcolo per secondo di audio). Un WAV per scena: `voce/s1.wav`,
+   `voce/s2.wav`…
+3. Ogni file non più lungo della sua scena:
+   `ffprobe -v error -show_entries format=duration -of csv=p=0 voce/s1.wav`.
+4. Nello storyboard `"voce": "voce/s1.wav"` sulla scena. I tempi delle frasi per i
+   sottotitoli si ricavano dalla trascrizione automatica del WAV.
 
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
 per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)
@@ -199,7 +251,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 - Prezzi video indicativi su openrouter (listino del 20/11/2026, $ al secondo a 720p, tra
   parentesi senza audio): `google/gemini-omni-1.2-flash` 0,07 (audio sempre incluso;
   1080p 0,10), `google/veo-3.1-lite` 0,05 (0,03), `google/veo-3.1-fast` 0,10 (0,08),
-  `google/veo-3.1` 0,40 (0,20). Veo e Sora diretti non esistono più (Gemini e OpenAI).
+  `google/veo-3.1` 0,40 (0,20), `alibaba/wan-3.0` 0,10 (480p 0,05, 1080p 0,20; stesso
+  prezzo con o senza audio). Veo e Sora diretti non esistono più (Gemini e OpenAI).
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 
@@ -210,6 +263,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
   via `GET /api/v1/models/<id>/endpoints`.
 - **HTTP 500 dal provider "Seed"** (ByteDance su OpenRouter): instabilità temporanea
   dell'endpoint, riprovare più tardi — non è un errore del CLI.
+- **Kling** non è più nel catalogo video di OpenRouter (21/11/2026): negli esempi
+  `alibaba/wan-3.0`. Le varianti kling dei preset restano nella libreria.
 - I nomi modello **cambiano spesso** (es. `grok-2-image` → `grok-imagine-image-*`;
   ritirati `veo-3.0-*` e `imagen-4.0-*`; al 13/11/2026 non sono più elencati `gpt-image-1`
   su openai né modelli video su gemini): in caso di 404 sul modello (codice 3), rifare

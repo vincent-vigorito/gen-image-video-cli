@@ -4,6 +4,45 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.9.0] - non ancora rilasciata
+
+### Aggiunto
+
+- **`giv job fetch --provider P <id>`**: riprende l'attesa di un job video già partito (per
+  esempio dopo un'uscita con codice 5) e ne scarica il risultato **senza un nuovo avvio**;
+  `--out`, `--name`, `--timeout` come `giv video`. Manifest e riga di registro come un
+  video normale, con `command` `job fetch`. Ogni job avviato lascia il suo stato (id,
+  indirizzo di attesa, modello, prompt inviato) in `giv-jobs.jsonl` nella directory
+  corrente, creato con permessi 0600.
+- **Storyboard** a più scene: un file JSON con `formato`, blocco `default` (provider,
+  modello, risoluzione, aspect, audio, seed, tutela, parametri passanti),
+  `tetto_costo_usd`, `strict`, insiemi di `riferimenti`, scene `video`, `clip` e
+  `immagine` (`prompt`, `negative`, `preset`, `immagine`, `fotogramma_chiave`,
+  `continua_da`, `ultimo_fotogramma`, `usa`, `costo_dichiarato_usd`, `voce`) e
+  `montaggio` (transizione, musica, sottotitoli, uscita). Esempio in `examples/spot/`.
+- **`giv story check <storyboard.json>`**: valida forma, file e riferimenti fra scene,
+  controlla ogni scena video come `giv video --dry-run` sul catalogo del provider letto in
+  quel momento (un modello sparito viene rifiutato) e somma stime da listino e costi
+  dichiarati; le generazioni senza stima sono elencate a parte (`not_estimated`), mai
+  contate come zero, e con `tetto_costo_usd` vengono rifiutate. Nessuna generazione. Il
+  tipo di scena `avatar` viene rifiutato.
+
+### Modificato
+
+- Avvio e attesa dei job video separati nel codice; il corpo della richiesta di avvio e il
+  manifest di `giv video` non cambiano.
+- `--timeout` copre anche i controlli dello stato e lo scaricamento del video, non solo
+  l'attesa fra un controllo e l'altro.
+
+### Sicurezza
+
+- La chiave del provider va solo all'API del provider (schema, host e porta): nei
+  redirect e negli scaricamenti fuori da quell'origine l'intestazione `Authorization`
+  viene tolta, e un indirizzo di attesa fuori dall'API viene rifiutato.
+- `giv job fetch` rifiuta con codice 2, senza richieste, un indirizzo di attesa salvato
+  diverso dal percorso del job e un file di stato che non è un file regolare (anche un
+  symlink).
+
 ## [0.8.0] - 2026-11-20
 
 ### Aggiunto
