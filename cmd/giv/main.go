@@ -512,38 +512,18 @@ func cmdImage(args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := newProvider(*prov)
-	if err != nil {
-		return err
-	}
-	m, err := resolveModel(*model, *prov, defaultImageModels)
-	if err != nil {
-		return err
-	}
-	var tmp tempInputs
-	defer tmp.cleanup()
-	resolved := make([]string, len(inputs))
-	for i, in := range inputs {
-		if resolved[i], err = tmp.resolve(in); err != nil {
-			return err
-		}
-	}
-	fmt.Fprintf(os.Stderr, "generazione immagine con %s/%s…\n", *prov, m)
-	res, err := c.GenerateImage(context.Background(), provider.ImageRequest{
-		Prompt: prompt, Model: m, N: *n, Aspect: *aspect, Seed: *seed, Inputs: resolved,
+	job, err := prepareImage(imageOptions{
+		Provider: *prov, Model: *model, Prompt: prompt, Aspect: *aspect,
+		N: *n, Seed: *seed, Inputs: inputs, Out: *out, Name: *name,
 	})
 	if err != nil {
 		return err
 	}
-	slug := *name
-	if slug == "" {
-		slug = output.Slug(prompt)
-	}
-	files, err := output.SaveAll(*out, slug, res.Media)
+	man, err := job.run(context.Background())
 	if err != nil {
 		return err
 	}
-	return emit("image", manifest{Provider: c.Name(), Model: m, Prompt: prompt, Files: files, CostUSD: res.CostUSD})
+	return emit("image", man)
 }
 
 func cmdVideo(args []string) error {
@@ -574,90 +554,32 @@ func cmdVideo(args []string) error {
 	if err != nil {
 		return err
 	}
-	// provider e modello prima delle credenziali: gli errori video (openai, gemini
-	// senza --model) escono senza chiave e senza chiamate di rete
-	if err := checkProvider(*prov); err != nil {
-		return err
-	}
-	m, err := resolveVideoModel(*model, *prov)
-	if err != nil {
-		return err
-	}
-	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
-	// il manifest tiene il prompt dell'utente
-	pres, err := videoPresets(presetNames, *protect, prompt, *negative, m,
-		presets.Inputs{FirstFrame: *image != "", LastFrame: *lastFrame != "", Duration: *duration})
-	if err != nil {
-		return err
-	}
-	// controlli dei flag nuovi: codice 2 prima di chiave, download e chiamate
-	req := provider.VideoRequest{
-		Prompt: pres.Prompt, Model: m, Aspect: *aspect,
-		Resolution: *resolution, Negative: pres.Negative,
-		Duration: *duration, Seed: *seed, Timeout: *timeout,
-	}
-	if req.Audio, err = parseAudio(*audio); err != nil {
-		return err
-	}
-	if req.Params, err = parseParams(params); err != nil {
-		return err
-	}
-	if *seed < 0 {
-		return usageError("--seed deve essere un intero non negativo")
-	}
-	if *timeout <= 0 {
-		return usageError("--timeout deve essere una durata positiva (es. 20m)")
-	}
-	// --max-cost: tetto solo se il flag c'è (anche 0); mai NaN o infinito
+	// --max-cost: tetto solo se il flag c'è (anche 0)
 	var costCap *float64
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "max-cost" {
 			costCap = maxCost
 		}
 	})
-	if costCap != nil && (math.IsNaN(*costCap) || math.IsInf(*costCap, 0) || *costCap < 0) {
-		return usageError("--max-cost deve essere un importo finito e non negativo in dollari")
-	}
-	req.Image, req.LastFrame, req.Refs = *image, *lastFrame, slices.Clone(refs)
-	if err := checkVideoInputs(&req); err != nil {
-		return err
-	}
-	c, err := newProvider(*prov)
-	if err != nil {
-		return err
-	}
-	// capacità e costo prima dei download e della generazione
-	plan, err := checkVideo(c, &req, videoChecks{strict: *strict, maxCost: costCap, dryRun: *dryRun})
+	job, err := prepareVideo(videoOptions{
+		Provider: *prov, Model: *model, Prompt: prompt,
+		Aspect: *aspect, Resolution: *resolution, Negative: *negative,
+		Image: *image, LastFrame: *lastFrame, Refs: refs,
+		Duration: *duration, Seed: *seed, Audio: *audio, Params: params, Timeout: *timeout,
+		Presets: presetNames, Protect: *protect,
+		MaxCost: costCap, Strict: *strict, DryRun: *dryRun,
+		Out: *out, Name: *name,
+	})
 	if err != nil {
 		return err
 	}
 	if *dryRun {
-		plan.Prompt = prompt // prompt dell'utente; prompt_final è quello coi preset
-		return output.PrintJSON(plan)
+		return output.PrintJSON(job.plan)
 	}
-	var tmp tempInputs
-	defer tmp.cleanup()
-	inputs := newManifestInputs(req) // come li ha passati l'utente, prima dei download
-	if err := tmp.resolveVideo(&req); err != nil {
-		return err
-	}
-	man := videoManifest(c.Name(), prompt, pres, plan, inputs, req)
-	fmt.Fprintf(os.Stderr, "generazione video con %s/%s…\n", *prov, m)
-	start := time.Now()
-	res, err := c.GenerateVideo(context.Background(), req)
-	if err != nil {
-		logFailedJob(man, err, time.Since(start) >= req.Timeout)
-		return err
-	}
-	slug := *name
-	if slug == "" {
-		slug = output.Slug(prompt)
-	}
-	files, err := output.SaveAll(*out, slug, res.Media)
+	man, err := job.run(context.Background())
 	if err != nil {
 		return err
 	}
-	man.done(files, res)
 	return emit("video", man)
 }
 
