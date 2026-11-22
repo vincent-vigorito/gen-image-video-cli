@@ -86,6 +86,14 @@ func cmdStoryRun(args []string) error {
 	if man != nil && ctx.Err() == nil {
 		if s, lerr := story.LoadWithKit(path, *kitFile); lerr == nil {
 			contactSheet(s, path)
+			if controlOn(s) || voiceControlOn(s) {
+				// avvisa e basta: nessuna scena si rigenera; con strict un
+				// difetto fa uscire con 1 dopo il manifest
+				man.Controllo = controlStory(s, path, "story run", man.voiceChecks)
+				if c := man.Controllo; c != nil && s.Strict && c.Result == montage.QCDefect && err == nil {
+					err = &cliError{code: exitError, msg: fmt.Sprintf("controllo dei file: difetti (strict nello storyboard): vedi %s; nessuna scena rigenerata", firstOf(c.File, "controllo nel JSON"))}
+				}
+			}
 		}
 	}
 	if man != nil {
@@ -108,13 +116,25 @@ type storyRunManifest struct {
 	Recovered  int        `json:"jobs_recovered"`   // job già partiti, scaricati senza nuovo avvio
 	Keyframes  int        `json:"keyframes"`        // fotogrammi chiave generati in questa esecuzione
 	Voices     int        `json:"voices,omitempty"` // voci dai testi generate in questa esecuzione
-	CostEstUSD float64    `json:"cost_est_usd"`     // stime (o costi dichiarati) delle generazioni delle scene
-	CostUSD    float64    `json:"cost_usd"`         // addebito riportato dai provider
-	SpentUSD   float64    `json:"spent_usd"`        // per il tetto: addebito dove c'è, altrimenti stima (anche delle scene tolte)
+	// trascrizioni delle voci generate (controllo.voce) fatte in questa esecuzione
+	VoiceChecks int     `json:"voice_checks,omitempty"`
+	CostEstUSD  float64 `json:"cost_est_usd"` // stime (o costi dichiarati) delle generazioni delle scene
+	CostUSD     float64 `json:"cost_usd"`     // addebito riportato dai provider
+	SpentUSD    float64 `json:"spent_usd"`    // per il tetto: addebito dove c'è, altrimenti stima (anche delle scene tolte)
+	// richieste a pagamento partite in questa esecuzione (fotogrammi chiave,
+	// video, voci e trascrizioni): stime (o costi dichiarati) e spesa contata
+	// per il tetto (addebito dove c'è, altrimenti stima); i job recuperati
+	// restano dell'esecuzione che li ha avviati
+	RunCostEstUSD float64 `json:"run_cost_est_usd,omitempty"`
+	RunSpentUSD   float64 `json:"run_spent_usd,omitempty"`
 	// spesa nello stato di scene non più nello storyboard: in spent_usd, non fra le scene
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"`
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
 	CapUSD          *float64       `json:"cap_usd,omitempty"`
+	// Controllo è il controllo dei file a fine giro (controllo.tecnico e controllo.voce)
+	Controllo *storyControl `json:"controllo,omitempty"`
+
+	voiceChecks map[string]*storyVoiceCheck // controlli della voce di questa esecuzione, per scena
 }
 
 type sceneRun struct {
@@ -147,6 +167,7 @@ type storyRunner struct {
 	thisRun map[string]string
 	failed  []string // scene fallite sul provider (in questa esecuzione o prima): non si rigenerano da sole
 	man     storyRunManifest
+	started time.Time // inizio dell'esecuzione: gli addebiti da qui in poi sono suoi
 
 	kitRoot      *os.Root // cartella del kit: i suoi file letti solo qui dentro (nil senza kit)
 	newVoice     string   // --new-voice: scena di cui rigenerare la voce
@@ -155,6 +176,14 @@ type storyRunner struct {
 	voiceSent    map[string]bool // voci già riservate in questa esecuzione: non più nelle stime da fare
 	voiceThisRun map[string]string
 	speech       map[string]speech.Synthesizer // client della voce per provider
+
+	// controllo.voce: trascrizioni da fare, stima non arrotondata per scena,
+	// trascrizioni già riservate o saltate, esiti di questa esecuzione e client
+	checkOrder  []*story.Scene
+	checkEst    map[string]float64
+	checkDone   map[string]bool
+	voiceChecks map[string]*storyVoiceCheck
+	transcriber speech.Transcriber
 }
 
 // storyRunOptions sono i flag di giv story run.
@@ -199,9 +228,10 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 		return nil, err
 	}
 	defer root.Close()
-	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only,
+	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only, started: time.Now(),
 		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{},
-		voicesOnly: o.voicesOnly, voiceSent: map[string]bool{}, voiceThisRun: map[string]string{}, speech: map[string]speech.Synthesizer{}}
+		voicesOnly: o.voicesOnly, voiceSent: map[string]bool{}, voiceThisRun: map[string]string{}, speech: map[string]speech.Synthesizer{},
+		checkEst: map[string]float64{}, checkDone: map[string]bool{}, voiceChecks: map[string]*storyVoiceCheck{}}
 	r.sc.state = st
 	if o.newVoice {
 		r.newVoice = only
@@ -249,12 +279,16 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 	if err := r.makeVoices(ctx); err != nil {
 		return nil, r.stopped(err)
 	}
+	// controllo.voce: ogni voce appena generata (o mai controllata) si
+	// trascrive prima dei video; avvisa e basta
+	r.checkVoices(ctx)
 	for i, scene := range r.order {
 		if err := r.scene(ctx, i, scene); err != nil && !r.failedNow(scene.ID) {
 			return nil, r.stopped(fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
 	}
 	r.summary()
+	r.man.voiceChecks = r.voiceChecks
 	return &r.man, r.stopped(nil)
 }
 
@@ -294,7 +328,10 @@ func (r *storyRunner) preflight() error {
 	if err := r.voicePreflight(); err != nil {
 		return err
 	}
-	var rejects []error
+	rejects, err := r.voiceCheckPreflight()
+	if err != nil {
+		return err
+	}
 	var launch []*story.Scene
 	for _, scene := range r.pending() {
 		if err := r.checkJob(r.jobOf(scene.ID)); err != nil {
@@ -543,16 +580,7 @@ func (r *storyRunner) checkCap(from int) error {
 	if cap == nil {
 		return nil
 	}
-	spent := r.st.Spent()
-	next := r.voiceNext()
-	for _, scene := range r.order[from:] {
-		if r.toLaunch(scene) {
-			next += r.est[scene.ID]
-			if r.needKeyframe(scene) {
-				next += *scene.FotogrammaChiave.CostoDichiaratoUSD
-			}
-		}
-	}
+	spent, next := r.st.Spent(), r.capNext(from)
 	if spent+next > *cap {
 		removed := ""
 		if rs, v := removedSpend(r.s, r.st); len(rs) > 0 {
@@ -562,6 +590,21 @@ func (r *storyRunner) checkCap(from int) error {
 			*cap, round4(spent), removed, round4(next), r.st.Path())
 	}
 	return nil
+}
+
+// capNext è la stima non arrotondata delle generazioni ancora da chiedere:
+// voci, trascrizioni (controllo.voce) e video dalla scena from in poi.
+func (r *storyRunner) capNext(from int) float64 {
+	next := r.voiceNext() + r.voiceCheckNext()
+	for _, scene := range r.order[from:] {
+		if r.toLaunch(scene) {
+			next += r.est[scene.ID]
+			if r.needKeyframe(scene) {
+				next += *scene.FotogrammaChiave.CostoDichiaratoUSD
+			}
+		}
+	}
+	return next
 }
 
 // toLaunch: la scena va generata (non ha un job da recuperare e non ha una clip,
@@ -1174,7 +1217,7 @@ func (r *storyRunner) summary() {
 				// la voce dal testo: la sua spesa è della scena
 				var est, cost float64
 				for _, c := range ss.Charges {
-					if c.Kind != story.ChargeVoice {
+					if !c.OfVoice() {
 						continue
 					}
 					if c.CostEstUSD != nil {
@@ -1217,6 +1260,22 @@ func (r *storyRunner) summary() {
 	}
 	r.man.CostEstUSD, r.man.CostUSD = round4(r.man.CostEstUSD), round4(r.man.CostUSD)
 	r.man.SpentUSD = round4(r.st.Spent())
+	var runEst, runSpent float64
+	for _, ss := range r.st.Scenes {
+		for _, c := range ss.Charges {
+			if c.At.Before(r.started) {
+				continue
+			}
+			switch {
+			case c.CostEstUSD != nil:
+				runEst += *c.CostEstUSD
+			case c.CostDeclaredUSD != nil:
+				runEst += *c.CostDeclaredUSD
+			}
+			runSpent += c.Spent()
+		}
+	}
+	r.man.RunCostEstUSD, r.man.RunSpentUSD = round4(runEst), round4(runSpent)
 	var removed float64
 	r.man.RemovedScenes, removed = removedSpend(r.s, r.st)
 	r.man.RemovedSpentUSD = round4(removed)

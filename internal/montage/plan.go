@@ -19,6 +19,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"gen-image-video-cli/internal/speech"
 )
 
 // ErrInvalid marca gli errori del piano (valori, file mancanti o non adatti):
@@ -87,6 +90,13 @@ type Plan struct {
 	MusicFade float64
 	Loudness  float64 // volume finale in LUFS (CheckLoudness); 0: com'è
 
+	// Captions sono i sottotitoli dai testi delle voci (sottotitoli "auto" di
+	// giv story cut, 0.12.0), facoltativi: Montage li divide coi tempi della
+	// voce nel montato (Captions) e li mette nel file .ass dei testi, dentro i
+	// margini sicuri, con CaptionStyle (vuoto: DefaultCaptionStyle).
+	Captions     []ClipCaption
+	CaptionStyle TextStyle
+
 	// preparati da Montage: file .ass dei testi, cartella dei font, misura
 	// della prima passata del volume
 	texts, fontsDir string
@@ -100,9 +110,48 @@ type Title struct {
 	Clip int
 }
 
-// extended dice se il piano usa sovrimpressioni o audio della 0.11.0.
+// ClipCaption è il testo scritto della voce della clip numero Clip (da 1):
+// la voce della clip (Voice, da VoiceAt) o, senza, l'audio della clip stessa
+// (scena avatar, dove la voce guida il labiale).
+type ClipCaption struct {
+	Clip    int
+	Text    string            // reso alla lettera; un a capo chiude un sottotitolo
+	Timings []speech.CharTime // tempi per carattere dall'inizio della voce; nil: assenti
+	Dict    speech.Dictionary // pronunce usate dalla voce (solo per i tempi)
+}
+
+// extended dice se il piano usa sovrimpressioni o audio della 0.11.0, o i
+// sottotitoli dai testi della 0.12.0.
 func (p Plan) extended() bool {
-	return p.Logo != nil || len(p.Titles) > 0 || p.EndCard != nil || p.Duck || p.MusicFade != 0 || p.Loudness != 0
+	return p.Logo != nil || len(p.Titles) > 0 || p.EndCard != nil || p.Duck || p.MusicFade != 0 || p.Loudness != 0 || len(p.Captions) > 0
+}
+
+// captionTexts sono i sottotitoli di p.Captions come testi del file .ass, coi
+// tempi del montato: ogni voce parte all'inizio della sua clip (più VoiceAt)
+// e dura quanto la voce (voiceLen; senza file di voce, quanto la clip), al
+// più fino alla fine delle scene (total).
+func (p Plan) captionTexts(starts, voiceLen []float64, total float64, m Margins) ([]Text, []string, error) {
+	var voices []CaptionVoice
+	var warns []string
+	for _, c := range p.Captions {
+		i := c.Clip - 1
+		start, d := starts[i], p.Clips[i].Duration
+		if p.Clips[i].Voice != "" {
+			start += p.Clips[i].VoiceAt
+			d = voiceLen[i]
+		}
+		if d = min(d, total-start); d <= 0 {
+			warns = append(warns, fmt.Sprintf("clip %d: sottotitoli tolti: la voce parte dopo la fine delle scene", c.Clip))
+			continue
+		}
+		voices = append(voices, CaptionVoice{Text: c.Text, Start: start, Duration: d, Timings: c.Timings, Dict: c.Dict})
+	}
+	l := CaptionLayout{Width: p.Width, Height: p.Height, Margins: m, Style: p.CaptionStyle}
+	cs, cw, err := Captions(voices, l)
+	if err != nil {
+		return nil, nil, err
+	}
+	return CaptionTexts(cs, l), append(warns, cw...), nil
 }
 
 // checkExtended controlla i valori delle sovrimpressioni e dell'audio che non
@@ -138,6 +187,18 @@ func (p Plan) checkExtended() error {
 		if err := checkText(fmt.Sprintf("titolo %d", i+1), t.Text.Text); err != nil {
 			return err
 		}
+	}
+	seen := map[int]bool{}
+	for i, c := range p.Captions {
+		switch {
+		case c.Clip < 1 || c.Clip > len(p.Clips):
+			return invalid("sottotitoli %d: clip %d inesistente", i+1, c.Clip)
+		case seen[c.Clip]:
+			return invalid("sottotitoli %d: clip %d ripetuta", i+1, c.Clip)
+		case !utf8.ValidString(c.Text):
+			return invalid("sottotitoli %d: testo non UTF-8", i+1)
+		}
+		seen[c.Clip] = true
 	}
 	for _, f := range p.Fonts {
 		if err := checkPath(f); err != nil {
@@ -579,9 +640,9 @@ func buildArgs(p Plan, analyze bool) ([]string, error) {
 	if p.EndCard != nil {
 		total += p.EndCard.Duration
 	}
-	if len(p.Titles) > 0 || (p.EndCard != nil && (p.EndCard.Text != "" || p.EndCard.Subtext != "")) {
+	if len(p.Titles) > 0 || len(p.Captions) > 0 || (p.EndCard != nil && (p.EndCard.Text != "" || p.EndCard.Subtext != "")) {
 		if p.texts == "" {
-			return nil, invalid("titoli e testi del cartello senza il file .ass (li prepara Montage)")
+			return nil, invalid("titoli, sottotitoli e testi del cartello senza il file .ass (li prepara Montage)")
 		}
 	}
 	if p.Loudness != 0 && !analyze && p.measured == nil {
