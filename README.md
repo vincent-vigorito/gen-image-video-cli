@@ -221,6 +221,7 @@ Note:
   via per i modelli ByteDance; riporta `cost_usd` nel manifest. `giv models --provider
   openrouter` elenca l'intero catalogo immagini e video.
 - Video gemini: `gemini-omni-1.2-flash` sulla Gemini API (interactions), a pagamento.
+  Non ancora provato dal vivo: nella 0.10.0 è provato solo contro server finti.
   Parte solo con una scelta esplicita del provider: `--provider gemini`, il provider dello
   storyboard o `GIV_PROVIDER`. Senza nessuno dei tre `giv video` e `giv story` escono con
   codice 2, senza chiamate, e dicono quali provider scegliere (come nella 0.9.1: un
@@ -240,7 +241,8 @@ Note:
 - `-n` maggiore di 1 su OpenRouter: l'API `/images` accetta una sola immagine per
   richiesta, quindi `giv` ne fa una per immagine e somma i costi in `cost_usd`. Se una
   richiesta fallisce, le immagini già generate non vengono salvate.
-- fal: chiave `FAL_KEY`. Nessun catalogo letto in rete: `giv models --provider fal` (anche
+- fal: non ancora provato dal vivo (nella 0.10.0 provato solo contro server finti). Chiave
+  `FAL_KEY`. Nessun catalogo letto in rete: `giv models --provider fal` (anche
   `--kind video --caps`) elenca le schede di giv, con capacità, regole e prezzi presi dalle
   pagine dei modelli il 22/11/2026; un `--model` senza scheda esce con codice 2. Il job
   parte sulla coda di fal (`queue.fal.run`) una volta sola; immagini e voci locali vanno
