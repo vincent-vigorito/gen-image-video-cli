@@ -9,14 +9,7 @@ import (
 	"testing"
 )
 
-// CLI-886: versione 0.9.1 e help <-> README coerenti, flag per flag.
-func TestVersion091(t *testing.T) {
-	so, _, code, _ := runGiv(t, nil, "version")
-	if code != 0 || strings.TrimSpace(so) != "giv 0.9.1" {
-		t.Fatalf("code=%d out=%q", code, so)
-	}
-}
-
+// CLI-886: help <-> README coerenti, flag per flag (la versione è in TestVersioneRilascio).
 func TestHelpFlagsMatchReadme(t *testing.T) {
 	_, help, code, _ := runGiv(t, nil, "--help")
 	if code != 0 {
