@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -83,9 +84,11 @@ func ReadDictionaryFile(path string) (Dictionary, error) {
 	return d, nil
 }
 
-// ReadSmallFile legge un file normale di al massimo limit byte.
+// ReadSmallFile legge un file normale di al massimo limit byte. L'apertura è
+// senza blocco (una FIFO o un device non fermano la CLI) e il tipo si
+// controlla sul descrittore aperto.
 func ReadSmallFile(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

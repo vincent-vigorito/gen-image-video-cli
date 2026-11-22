@@ -172,9 +172,9 @@ giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
                                               # GIF animata, palette in due passate (locale, gratuita)
 giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
                                               # un file per canale col suo profilo, in locale con ffmpeg (gratuito)
-giv voice   "<testo>" | --text-file <f> [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--pronuncia <file.json>]
-                                              # voce fuori campo WAV con i tempi per carattere (xai, a pagamento; giv voice help)
-giv voice   --voices                          # elenco delle voci del provider (gratuito)
+giv voice   "<testo>" | --text-file <f> [--provider xai|gemini] [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--kit <kit.json>] [--pronuncia <file.json>]
+                                              # voce fuori campo WAV, coi tempi per carattere su xai (a pagamento; giv voice help)
+giv voice   --voices [--provider xai|gemini]  # elenco delle voci del provider (gratuito)
 giv version
 ```
 
@@ -198,7 +198,7 @@ prima o dopo.
 | `kit check` | nessun flag: il file del kit è l'unico argomento; `giv kit help` (o `giv kit --help`) stampa l'aiuto |
 | `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
 | `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
-| `voice` | testo fra virgolette oppure `--text-file <file>` · `--voice <nome>` · `--lang <codice>` (default `it`) · `--speed <0.7-1.5>` · `--style "<t>"` · `--pronuncia <file.json>` · `--out` · `--name` · `--dry-run` · `--max-cost <usd>` · `--voices`; provider `xai`: vedi [Voce fuori campo](#voce-fuori-campo-giv-voice) |
+| `voice` | testo fra virgolette oppure `--text-file <file>` · `--provider xai\|gemini` (default `xai`) · `--model <m>` (gemini) · `--voice <nome>` · `--lang <codice>` (default `it`) · `--speed <0.7-1.5>` (xai) · `--style "<t>"` (gemini) · `--kit <kit.json>` · `--pronuncia <file.json>` · `--out` · `--name` · `--dry-run` · `--max-cost <usd>` · `--voices`: vedi [Voce fuori campo](#voce-fuori-campo-giv-voice) |
 | `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
 | `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
@@ -529,33 +529,53 @@ giv job fetch --provider xai --timeout 30m --name s2 <id>
 giv voice --dry-run "Swerpify ti porta dove vuoi."
 giv voice --pronuncia pronunce.json --speed 1.1 --name s1-voce --max-cost 0.01 "Swerpify ti porta dove vuoi."
 giv voice --text-file testi/s2.txt --voice eve --lang it --out voce
+giv voice --provider gemini --style "calda, ritmo calmo" --max-cost 0.02 "Swerpify ti porta dove vuoi."
+giv voice --kit kit/argo.json --name s1-voce "Swerpify ti porta dove vuoi."
 giv voice --voices
+giv voice --voices --provider gemini
 ```
 
-- **provider**: xAI (chiave `XAI_API_KEY`), `POST /v1/tts`. La voce predefinita `eve` è
-  **provvisoria**: la scelta finale si fa dopo l'ascolto. Lingua predefinita `it`
-  (`--lang` accetta un codice BCP-47 o `auto`). `--style` vale solo per gemini: xai lo
-  ignora con un avviso (per ritmo e pause: `--speed` e i tag nel testo, come `[pause]`).
+- **provider**: xAI (predefinito, chiave `XAI_API_KEY`), `POST /v1/tts`, oppure Gemini
+  (`--provider gemini`, chiave `GEMINI_API_KEY`), `POST /v1beta/interactions` col modello
+  `gemini-3.8-flash-tts` (oppure `--model gemini-3.8-flash-lite-tts`). Le voci predefinite
+  `eve` (xai) e `Kore` (gemini) sono **provvisorie**: la scelta finale si fa dopo
+  l'ascolto. Lingua predefinita `it` (`--lang` accetta un codice BCP-47 o `auto`; gemini
+  la rileva dal testo e non la riceve). `--style` vale solo per gemini (stile e ritmo a
+  parole): xai lo ignora con un avviso (per ritmo e pause: `--speed` e i tag nel testo,
+  come `[pause]`); `--speed` vale solo per xai: gemini la ignora con un avviso.
 - **testo**: fra virgolette oppure `--text-file` (UTF-8), al massimo 15.000 caratteri per
-  richiesta. Il testo va a xAI, che conserva richieste e risposte per 30 giorni: solo
-  testi di marketing, mai dati di clienti.
+  richiesta (con gemini 6.000, pronunce comprese, perché l'audio di una richiesta non
+  supera gli 11 minuti circa). Il testo va al provider (xAI conserva richieste e
+  risposte per 30 giorni): solo testi di marketing, mai dati di clienti.
 - **pronunce** (`--pronuncia`): un file JSON piatto `{"Swerpify": "suèrpifai", "ARGO":
-  "àrgo"}`, inviato a xAI come dizionario: parola intera, senza distinguere le maiuscole,
-  vince la più lunga. Al massimo 200 voci; la parola fino a 100 caratteri (lettere,
-  cifre, apostrofi e spazi), la pronuncia fino a 128 (anche IPA fra barre, `/ˈanja/`);
-  fuori da questi limiti, o con due parole uguali a meno delle maiuscole, codice 2
-  prima di qualsiasi chiamata.
+  "àrgo"}`: parola intera, senza distinguere le maiuscole, vince la più lunga. A xAI va
+  come dizionario; gemini non ne ha uno, quindi giv sostituisce le parole nel testo
+  inviato (nei sottotitoli e nel manifest resta la grafia giusta). Al massimo 200 voci;
+  la parola fino a 100 caratteri (lettere, cifre, apostrofi e spazi), la pronuncia fino
+  a 128 (anche IPA fra barre, `/ˈanja/`, utile solo con xai); fuori da questi limiti, o
+  con due parole uguali a meno delle maiuscole, codice 2 prima di qualsiasi chiamata.
+- **kit** (`--kit <kit.json>`): il blocco `voce` del kit (provider, modello, voce, lingua,
+  velocità, stile) e le sue `pronuncia` fanno da predefiniti; i flag vincono e
+  `--pronuncia` va sopra le pronunce del kit (a parità di parola vince il file). Con un
+  `--provider` diverso da quello del kit, del kit valgono solo lingua e pronunce (avviso).
+  Il kit si controlla come con `giv kit check` (codice 2 se non va).
 - **uscita**: in `--out` (default `out`) `<nome>.wav` (24 kHz) e `<nome>.tempi.json` con
   i tempi per carattere (`{"provider", "text", "duration_s", "chars": [{"c", "start",
   "end"}]}`); `--name` dà il nome, altrimenti deriva dal testo con data e ora. Un file
   che c'è già non si sovrascrive: il nome diventa `<nome>-2`, `<nome>-3`… Se i tempi
-  mancano o non tornano, solo il WAV, con un avviso. Su stdout il manifest JSON (file,
-  durata misurata sul WAV, caratteri, stima), una riga in `giv-log.jsonl`.
-- **costo**: 15 $ per milione di caratteri del testo inviato (le pronunce non cambiano il
-  conto): uno spot da 375 caratteri costa circa 0,006 $. xAI non riporta il costo: il
-  manifest ha la stima (`cost_est_usd`). `--dry-run` stampa la richiesta e la stima senza
-  chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto o non
-  è stimabile.
+  mancano o non tornano, solo il WAV, con un avviso; gemini non dà tempi, quindi sempre
+  solo il WAV (i sottotitoli si distribuiscono sulla durata). Su stdout il manifest JSON
+  (file, durata misurata sul WAV, caratteri, stima), una riga in `giv-log.jsonl`.
+- **costo**: xai 15 $ per milione di caratteri del testo inviato (le pronunce non cambiano
+  il conto): uno spot da 375 caratteri costa circa 0,006 $. xAI non riporta il costo: il
+  manifest ha la stima (`cost_est_usd`). Gemini: 0,50 $ per milione di token di testo e
+  9 $ (flash-lite 6 $) per milione di token audio, 25 token al secondo; **dal 01/01/2027
+  il doppio** (la tariffa si sceglie dalla data). La stima di gemini è per eccesso (un
+  ritmo lento di 10 caratteri al secondo, almeno 2 secondi, entro il massimo d'uscita);
+  dopo la generazione il manifest ha anche il costo dai token riportati o, se mancano,
+  dalla durata misurata (`cost_usage_usd`). `--dry-run` stampa la richiesta e la stima
+  senza chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto
+  o non è stimabile (per esempio un modello gemini senza tariffa nel listino di giv).
 - **una sola richiesta, mai ripetuta**: un esito incerto (redirect, errore del server,
   rete, risposta non valida) esce con codice 5 e una riga `failed` nel registro: la voce
   può essere stata addebitata, controlla prima di rilanciare. Voce sconosciuta: codice 3

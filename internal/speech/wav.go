@@ -84,3 +84,25 @@ func ParseWAV(data []byte) (WAVInfo, error) {
 	w.DurationS = math.Round(float64(w.DataBytes)/float64(byteRate)*1000) / 1000
 	return w, nil
 }
+
+// PCM16WAV avvolge in un WAV i campioni PCM a 16 bit little-endian senza
+// intestazione (audio/L16 di alcuni provider): un byte spaiato in coda si
+// toglie.
+func PCM16WAV(pcm []byte, rate, channels int) []byte {
+	block := 2 * channels
+	pcm = pcm[:len(pcm)-len(pcm)%block]
+	out := make([]byte, 44, 44+len(pcm))
+	copy(out[0:], "RIFF")
+	binary.LittleEndian.PutUint32(out[4:], uint32(36+len(pcm)))
+	copy(out[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(out[16:], 16)
+	binary.LittleEndian.PutUint16(out[20:], 1)
+	binary.LittleEndian.PutUint16(out[22:], uint16(channels))
+	binary.LittleEndian.PutUint32(out[24:], uint32(rate))
+	binary.LittleEndian.PutUint32(out[28:], uint32(rate*block))
+	binary.LittleEndian.PutUint16(out[32:], uint16(block))
+	binary.LittleEndian.PutUint16(out[34:], 16)
+	copy(out[36:], "data")
+	binary.LittleEndian.PutUint32(out[40:], uint32(len(pcm)))
+	return append(out, pcm...)
+}
