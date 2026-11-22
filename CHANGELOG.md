@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.12.0] - in preparazione
+## [0.12.0] - 2026-11-22
 
 > **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
 > `giv voice` o dai testi dello storyboard (xAI predefinita, voce `eve`; Gemini seconda
@@ -202,10 +202,21 @@ versioning [SemVer](https://semver.org/lang/it/).
 - **`giv story check` e le scene già fatte**: la stima del video di una scena compare anche
   quando la scena è già generata; il tetto di `giv story run` conta invece la spesa
   registrata più le stime di ciò che resta da fare.
+- **Controllo tecnico, avvisi attesi**: il cartello finale dei montati è un'immagine ferma e
+  il controllo `freeze` lo segnala come avviso; le clip di xAI portano una traccia di
+  copertina e `streams` dà un avviso («tracce in più»), che nel montato sparisce.
+- **Trascrizione e nomi propri**: il riconoscimento sbaglia i nomi propri; nella prova un
+  nome di marca a inizio frase è stato trascritto in altro modo, due volte su due, e il
+  controllo della voce ha dato un avviso. Ascoltare prima di rifare la voce; al
+  riconoscitore vanno come termini attesi solo le parole del dizionario delle pronunce.
+- **`<nome>.controllo.json` dopo `giv story cut`**: per le voci riporta l'esito registrato
+  nello stato, senza trascrizione né confronto parola per parola: quelli sono nel JSON di
+  `giv story run` (campo `controllo`), e il file viene riscritto a ogni `story cut`.
 
 ### Prove dal vivo
 
-Spesa complessiva delle prove della 0.12.0 finora: circa 0,07 $, solo materiale nostro.
+Spesa complessiva delle prove della 0.12.0: circa 0,08 $ (28 richieste), solo materiale
+nostro.
 
 - **Voce xAI**: 12 chiamate su 12 riuscite, WAV mono a 24 kHz con i tempi per carattere;
   la voce `eve` è stata scelta all'ascolto.
@@ -217,8 +228,17 @@ Spesa complessiva delle prove della 0.12.0 finora: circa 0,07 $, solo materiale 
 - **Kit e fotogramma**: il fotogramma del personaggio coi riferimenti del kit è stato fatto
   con `giv image`; il passaggio dal kit al fotogramma chiave dentro `giv story run` è
   coperto solo dai test con un server finto.
-- **Non ancora provati dal vivo**: la trascrizione (`giv qc --voice` e `controllo.voce`), i
-  sottotitoli dai testi e il controllo dei file in un montaggio reale.
+- **Prova finale sullo spot di prova col kit** (`controllo` tecnico e voce, `sottotitoli`
+  `"auto"`, quattro formati): `giv story run`, `giv story cut --export
+  instagram,tiktok,youtube,linkedin` e `giv qc` escono con 0; nessun video, fotogramma o
+  voce nuova (`run_cost_est_usd` e `run_spent_usd` 0,01 $: solo le trascrizioni). 4 montati
+  e 4 export da 30,3 s con sottotitoli dai testi, logo, cartello finale e musica dal kit,
+  -13,9 LUFS, picco vero -1,8 dBTP (-1,5 negli export a 1080x1920). I sottotitoli ci sono in
+  tutti i formati, spezzati in righe, e non toccano i titoli in alto. Controllo: 113
+  controlli a posto, 11 avvisi, 0 difetti.
+- **Trascrizione**: 6 voci trascritte da `controllo.voce` in `giv story run` e una con `giv
+  qc --voice`, 0,0117 $ in tutto; 5 voci su 6 uguali al testo, la sesta con un avviso (il
+  nome della marca a inizio frase, vedi i limiti noti).
 
 ## [0.11.0] - 2026-11-22
 
