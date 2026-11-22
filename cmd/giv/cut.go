@@ -921,6 +921,9 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 			voiceFile[i] = sc.Voce
 		case needsVoice(sc):
 			if ss := chk.state.Scenes[sc.ID]; ss != nil && ss.Voice != nil {
+				if _, err := chk.state.VoiceFile(s, sc.ID); err != nil {
+					continue // voce registrata mancante o fuori cartella: l'avviso c'è già (checkVoice), niente letture
+				}
 				voiceFile[i] = ss.Voice.File
 			} else if v := chk.voices[sc.ID]; v != nil {
 				estimated[i], voiceLen[i] = true, voiceDuration(v.req)

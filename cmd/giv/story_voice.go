@@ -256,7 +256,8 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 		e := v.est.Exact
 		ch.CostEstUSD = &e
 	}
-	if err := r.reserveVoice(scene.ID, ss, ch); err != nil {
+	prevStatus, prevError, err := r.reserveVoice(scene.ID, ss, ch)
+	if err != nil {
 		return err
 	}
 	k := len(ss.Charges) - 1
@@ -277,9 +278,14 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 			logRun(failed)
 			return &cliError{code: exitAPI, msg: fmt.Sprintf("voce dall'esito incerto: %v — può essere stata addebitata (contata nella spesa) e non si rilancia da sola: controlla sul provider, poi giv story run --scene %s --new-voice %s", se.Err, scene.ID, r.path)}
 		}
-		// rifiutata o mai partita: niente addebito
+		// rifiutata o mai partita: niente addebito, si toglie solo la sua
+		// riserva; una richiesta di prima rimasta incerta resta incerta (K7)
 		ss.Charges = slices.Delete(ss.Charges, k, k+1)
-		ss.VoiceStatus, ss.VoiceError = voiceIdle(ss), err.Error()
+		if prevStatus == story.Incerto {
+			ss.VoiceStatus, ss.VoiceError = prevStatus, prevError
+		} else {
+			ss.VoiceStatus, ss.VoiceError = voiceIdle(ss), err.Error()
+		}
 		r.save()
 		return voiceError(v.req.Provider, err)
 	}
@@ -316,9 +322,10 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 // reserveVoice ricontrolla il tetto con la spesa fatta fin qui (più le voci e
 // i video ancora da fare) e registra la voce ch come incerta nel file di
 // stato, prima di inviarla: se lo stato non si salva la richiesta non parte.
-func (r *storyRunner) reserveVoice(id string, ss *story.SceneState, ch story.Charge) error {
+// Restituisce stato ed errore della voce di prima della riserva.
+func (r *storyRunner) reserveVoice(id string, ss *story.SceneState, ch story.Charge) (string, string, error) {
 	if err := r.checkCap(0); err != nil {
-		return err
+		return "", "", err
 	}
 	status, msg := ss.VoiceStatus, ss.VoiceError
 	ch.At = time.Now()
@@ -327,10 +334,10 @@ func (r *storyRunner) reserveVoice(id string, ss *story.SceneState, ch story.Cha
 	if err := r.st.Save(); err != nil {
 		ss.Charges = ss.Charges[:len(ss.Charges)-1]
 		ss.VoiceStatus, ss.VoiceError = status, msg
-		return fmt.Errorf("stato non salvato, nessuna richiesta inviata: %w", err)
+		return "", "", fmt.Errorf("stato non salvato, nessuna richiesta inviata: %w", err)
 	}
 	r.voiceSent[id] = true
-	return nil
+	return status, msg, nil
 }
 
 // voiceIdle è lo stato della voce senza richieste in corso: fatta se ce n'è
