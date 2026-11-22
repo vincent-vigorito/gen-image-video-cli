@@ -633,6 +633,15 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 		if _, err := run(ctx, ffmpeg, t.timeout(), args); err != nil {
 			return nil, probeErr("sottotitoli "+p.Subtitles, err)
 		}
+		if p.SafeSubtitles {
+			m := SafeMargins(p.Width, p.Height)
+			if p.Margins != nil {
+				m = *p.Margins
+			}
+			if err := subtitleMargins(ass, m); err != nil {
+				return nil, err
+			}
+		}
 		p.Subtitles = ass
 	}
 	if p.Subtitles != "" && voiceDelayed(clips) {

@@ -130,3 +130,81 @@ func parseASSTime(s string) (int64, error) {
 func formatASSTime(cs int64) string {
 	return fmt.Sprintf("%d:%02d:%02d.%02d", cs/360000, cs/6000%60, cs/100%60, cs%100)
 }
+
+// subtitleMargins riscrive nel file .ass path, convertito da un .srt, i
+// margini (MarginL, MarginR, MarginV) di ogni stile con i margini sicuri m,
+// in unità di PlayResX e PlayResY: la riga in basso resta sopra m.Bottom.
+// Cambia solo le righe Style della sezione degli stili, mai le Dialogue.
+func subtitleMargins(path string, m Margins) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxSubtitles+1))
+	f.Close()
+	if err != nil {
+		return err
+	}
+	if len(data) > maxSubtitles {
+		return invalid("sottotitoli %s: oltre %d MiB", path, maxSubtitles>>20)
+	}
+	resX, resY := 384, 288 // PlayRes di default di libass
+	lines := bytes.Split(data, []byte("\n"))
+	section := ""
+	nf, ml, mr, mv := 0, -1, -1, -1
+	for n, raw := range lines {
+		line := strings.TrimSuffix(string(raw), "\r")
+		head := strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
+		if strings.HasPrefix(head, "[") {
+			section = strings.ToLower(head)
+			continue
+		}
+		switch section {
+		case "[script info]":
+			k, v, ok := strings.Cut(head, ":")
+			if !ok {
+				continue
+			}
+			if r, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && r > 0 {
+				switch strings.ToLower(strings.TrimSpace(k)) {
+				case "playresx":
+					resX = r
+				case "playresy":
+					resY = r
+				}
+			}
+		case "[v4+ styles]", "[v4 styles]":
+			if rest, ok := strings.CutPrefix(head, "Format:"); ok {
+				fields := strings.Split(rest, ",")
+				nf, ml, mr, mv = len(fields), -1, -1, -1
+				for i, f := range fields {
+					switch strings.ToLower(strings.TrimSpace(f)) {
+					case "marginl":
+						ml = i
+					case "marginr":
+						mr = i
+					case "marginv":
+						mv = i
+					}
+				}
+				continue
+			}
+			rest, ok := strings.CutPrefix(head, "Style:")
+			if !ok || ml < 0 || mr < 0 || mv < 0 {
+				continue
+			}
+			fields := strings.SplitN(rest, ",", nf)
+			if len(fields) < nf {
+				return invalid("sottotitoli %s: riga %d: Style con meno campi del Format", path, n+1)
+			}
+			px := func(f float64, side int) string { return strconv.Itoa(int(math.Round(f * float64(side)))) }
+			fields[ml], fields[mr], fields[mv] = px(m.Left, resX), px(m.Right, resX), px(m.Bottom, resY)
+			out := "Style:" + strings.Join(fields, ",")
+			if strings.HasSuffix(string(raw), "\r") {
+				out += "\r"
+			}
+			lines[n] = []byte(out)
+		}
+	}
+	return os.WriteFile(path, bytes.Join(lines, []byte("\n")), 0o600)
+}
