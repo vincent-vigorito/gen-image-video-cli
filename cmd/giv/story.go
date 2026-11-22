@@ -56,6 +56,7 @@ Uso:
 Flag di giv story run (anche dopo il file):
   --scene <id>       rifà solo questa scena video, anche fatta, incerta o fallita
   --new-keyframe     con --scene: rigenera anche il fotogramma chiave della scena
+  --new-job          con --scene: abbandona il job già partito della scena e ne avvia uno nuovo
 
 Uscita: su stdout solo il JSON del risultato; avanzamento, avvisi ed errori su stderr.
 Uno storyboard, uno stato o un tetto di spesa non validi escono con codice 2, senza generazioni.
@@ -91,6 +92,10 @@ Flag (anche dopo il file):
   --new-keyframe     solo con --scene, per una scena con fotogramma_chiave: rigenera
                      anche il fotogramma chiave, con la stessa riserva e lo stesso tetto
                      delle altre richieste; il precedente resta fra le riprese precedenti
+  --new-job          solo con --scene, per una scena con un job partito che non si
+                     scarica più: il job non si recupera, resta fra i precedenti con
+                     l'errore e il suo addebito resta contato; poi una nuova richiesta,
+                     con la stessa riserva e lo stesso tetto delle altre
   -h, --help         questo aiuto
 `,
 	"cut": `uso: giv story cut <storyboard.json>

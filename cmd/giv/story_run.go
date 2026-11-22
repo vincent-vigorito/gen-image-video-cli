@@ -40,6 +40,7 @@ func cmdStoryRun(args []string) error {
 	fl := flag.NewFlagSet("story run", flag.ExitOnError)
 	only := fl.String("scene", "", "rifà solo questa scena (id); la ripresa precedente resta")
 	newKeyframe := fl.Bool("new-keyframe", false, "con --scene: rigenera anche il fotogramma chiave")
+	newJob := fl.Bool("new-job", false, "con --scene: abbandona il job già partito della scena e ne avvia uno nuovo")
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["run"]) }
 	if err := fl.Parse(args); err != nil {
 		return usageError("%v", err)
@@ -59,9 +60,12 @@ func cmdStoryRun(args []string) error {
 	if *newKeyframe && *only == "" {
 		return usageError("--new-keyframe vale solo insieme a --scene <id>")
 	}
+	if *newJob && *only == "" {
+		return usageError("--new-job vale solo insieme a --scene <id>")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	man, err := runStory(ctx, path, *only, *newKeyframe)
+	man, err := runStory(ctx, path, *only, *newKeyframe, *newJob)
 	if man != nil {
 		// scene fallite sul provider: manifest delle altre, poi l'errore con l'elenco
 		if perr := output.PrintJSON(man); err == nil {
@@ -112,6 +116,7 @@ type storyRunner struct {
 	order   []*story.Scene     // scene video da trattare, in ordine
 	forced  string             // --scene: rifatta anche se fatta
 	renew   string             // --new-keyframe: scena di cui rigenerare il fotogramma chiave (vuoto dopo averlo generato)
+	abandon string             // --new-job: scena il cui job partito non si recupera e si abbandona alla nuova richiesta
 	est     map[string]float64 // stima non arrotondata (o costo dichiarato) della clip, per scena pianificata
 	planned map[string]bool
 	thisRun map[string]string
@@ -119,7 +124,7 @@ type storyRunner struct {
 	man     storyRunManifest
 }
 
-func runStory(ctx context.Context, path, only string, newKeyframe bool) (*storyRunManifest, error) {
+func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) (*storyRunManifest, error) {
 	s, err := loadStory(path)
 	if err != nil {
 		return nil, err
@@ -150,6 +155,11 @@ func runStory(ctx context.Context, path, only string, newKeyframe bool) (*storyR
 		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{}}
 	if newKeyframe {
 		r.renew = only
+	}
+	if newJob {
+		if err := r.abandonJob(only); err != nil {
+			return nil, err
+		}
 	}
 	if rs, v := removedSpend(s, st); len(rs) > 0 {
 		fmt.Fprintf(os.Stderr, "spesa già registrata nello stato: %s; conta nel tetto\n", removedText(rs, v))
@@ -218,13 +228,13 @@ func (r *storyRunner) preflight() error {
 	var rejects []error
 	var launch []*story.Scene
 	for _, scene := range r.pending() {
-		if err := r.checkJob(r.st.Scenes[scene.ID].Job); err != nil {
+		if err := r.checkJob(r.jobOf(scene.ID)); err != nil {
 			rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
 	}
 	for _, scene := range r.order {
 		ss := r.st.Scenes[scene.ID]
-		if ss != nil && ss.Job != nil {
+		if r.jobOf(scene.ID) != nil {
 			continue
 		}
 		if ss != nil && ss.Status == story.Incerto && scene.ID != r.forced {
@@ -254,7 +264,7 @@ func (r *storyRunner) pending() []*story.Scene {
 	for i := range r.s.Scene {
 		scene := &r.s.Scene[i]
 		seen[scene.ID] = true
-		if ss := r.st.Scenes[scene.ID]; ss != nil && ss.Job != nil {
+		if r.jobOf(scene.ID) != nil {
 			if scene.Tipo != story.Video {
 				scene = &story.Scene{ID: scene.ID, Tipo: story.Video}
 			}
@@ -262,8 +272,8 @@ func (r *storyRunner) pending() []*story.Scene {
 		}
 	}
 	var rest []string
-	for id, ss := range r.st.Scenes {
-		if !seen[id] && ss.Job != nil {
+	for id := range r.st.Scenes {
+		if !seen[id] && r.jobOf(id) != nil {
 			rest = append(rest, id)
 		}
 	}
@@ -272,6 +282,35 @@ func (r *storyRunner) pending() []*story.Scene {
 		out = append(out, &story.Scene{ID: id, Tipo: story.Video})
 	}
 	return out
+}
+
+// jobOf è il job partito della scena, da recuperare; nil anche per la scena di
+// --new-job, il cui job non si recupera.
+func (r *storyRunner) jobOf(id string) *story.Job {
+	ss := r.st.Scenes[id]
+	if ss == nil || id == r.abandon {
+		return nil
+	}
+	return ss.Job
+}
+
+// abandonJob prepara --new-job sulla scena id: il suo job partito non si
+// recupera e si abbandona solo con la riserva della nuova richiesta, nella
+// stessa scrittura dello stato (reserve); se nessuna richiesta parte, lo stato
+// non cambia. L'addebito del job resta contato nella spesa.
+func (r *storyRunner) abandonJob(id string) error {
+	ss := r.st.Scenes[id]
+	if ss == nil || ss.Job == nil {
+		return usageError("--new-job: la scena %s non ha un job partito nello stato %s", id, r.st.Path())
+	}
+	j := ss.Job
+	if !slices.ContainsFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == story.ChargeClip && ch.JobID == j.ID }) {
+		// come in recover: ogni job partito conta nella spesa
+		ss.Charges = append(ss.Charges, story.Charge{Kind: story.ChargeClip, JobID: j.ID, CostDeclaredUSD: r.s.Scena(id).CostoDichiaratoUSD, At: time.Now()})
+	}
+	r.abandon = id
+	fmt.Fprintf(os.Stderr, "scena %s: --new-job: il job %s (%s) non si recupera e resta contato nella spesa; nuova richiesta\n", id, j.ID, j.Provider)
+	return nil
 }
 
 // checkJob controlla, senza richieste, un job del file di stato: provider con
@@ -406,7 +445,7 @@ func (r *storyRunner) checkCap(from int) error {
 // oppure è quella di --scene).
 func (r *storyRunner) toLaunch(scene *story.Scene) bool {
 	ss := r.st.Scenes[scene.ID]
-	if ss != nil && ss.Job != nil {
+	if r.jobOf(scene.ID) != nil {
 		return false
 	}
 	if scene.ID == r.forced {
@@ -632,13 +671,18 @@ func (r *storyRunner) reserve(i int, ss *story.SceneState, ch story.Charge) erro
 	if err := r.checkCap(i); err != nil {
 		return err
 	}
-	status, msg := ss.Status, ss.Error
+	status, msg, job, prev := ss.Status, ss.Error, ss.Job, len(ss.Previous)
+	if j := ss.Job; j != nil && ss == r.st.Scenes[r.abandon] {
+		// --new-job: il job lasciato passa fra i precedenti con l'ultimo errore
+		ss.Previous = append(ss.Previous, story.Take{Kind: story.TakeJob, JobID: j.ID, Error: ss.Error, Done: time.Now()})
+		ss.Job = nil
+	}
 	ch.At = time.Now()
 	ss.Charges = append(ss.Charges, ch)
 	ss.Status, ss.Error = story.Incerto, ""
 	if err := r.st.Save(); err != nil {
 		ss.Charges = ss.Charges[:len(ss.Charges)-1]
-		ss.Status, ss.Error = status, msg
+		ss.Status, ss.Error, ss.Job, ss.Previous = status, msg, job, ss.Previous[:prev]
 		return fmt.Errorf("stato non salvato, nessuna richiesta inviata: %w", err)
 	}
 	return nil
@@ -890,7 +934,11 @@ func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 		}
 		ss.Status = story.Partito
 		r.save()
-		return fmt.Errorf("%w (il job resta: si recupera alla prossima esecuzione)", err)
+		hint := ""
+		if sc := r.s.Scena(scene.ID); sc != nil && sc.Tipo == story.Video {
+			hint = fmt.Sprintf("; se non si scarica più, per abbandonarlo e rifare la scena: giv story run --scene %s --new-job %s", scene.ID, r.path)
+		}
+		return fmt.Errorf("%w (il job resta: si recupera alla prossima esecuzione%s)", err, hint)
 	}
 	files, err := r.saveFiles(fmt.Sprintf("%s-r%d", scene.ID, takeNumber(ss)), res.Media)
 	if err != nil {
