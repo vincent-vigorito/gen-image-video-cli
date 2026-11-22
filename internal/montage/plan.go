@@ -496,7 +496,11 @@ func filterValue(s string) string {
 const (
 	videoFormats = "mov,mp4,matroska,webm,avi,mpegts"
 	audioFormats = "wav,mp3,mov,mp4,m4a,ogg,flac,aac,matroska,webm"
-	probeFormats = videoFormats + "," + audioFormats + ",image2,png_pipe,jpeg_pipe,webp_pipe"
+	// imagePipes leggono un'immagine dal contenuto, sempre un file solo:
+	// image2, che con un nome come foto%d.png legge una sequenza di altri
+	// file, non è mai fra i formati scelti da soli (solo literalImage)
+	imagePipes   = "png_pipe,jpeg_pipe,webp_pipe"
+	probeFormats = videoFormats + "," + audioFormats + "," + imagePipes
 )
 
 // inputOpts sono le opzioni messe davanti a ogni -i: solo file locali, solo i
@@ -505,11 +509,35 @@ func inputOpts(formats string) []string {
 	return []string{"-protocol_whitelist", "file", "-format_whitelist", formats}
 }
 
-// literalImage sono le opzioni d'ingresso di un'immagine da posare (logo,
-// sfondo e logo del cartello): un file solo letto alla lettera, mai una
-// sequenza (un nome con %d non fa leggere altri file della cartella).
+// literalImage sono le opzioni d'ingresso di un'immagine (.png, .jpg, .jpeg,
+// .webp) in ffmpeg e ffprobe: un file solo letto alla lettera, mai una
+// sequenza (un nome con %d non fa leggere altri file).
 func literalImage() []string {
 	return []string{"-protocol_whitelist", "file", "-f", "image2", "-pattern_type", "none"}
+}
+
+// imagePath: il file ha l'estensione di un'immagine (imageExt) e si legge
+// con literalImage.
+func imagePath(path string) bool {
+	return imageExt[strings.ToLower(filepath.Ext(path))]
+}
+
+// readOpts sono le opzioni di lettura di path coi formati ammessi, in ffmpeg
+// e in ffprobe. Un'immagine si legge sempre alla lettera, mai come sequenza:
+// dove le immagini sono ammesse (imageFormats, probeFormats, outputFormats)
+// un file con l'estensione di un'immagine va con literalImage, gli altri solo
+// coi formati che leggono il contenuto (image2 non si sceglie mai da solo).
+func readOpts(path, formats string) []string {
+	if !strings.Contains(formats, imagePipes) {
+		return inputOpts(formats) // video e audio: nessun formato d'immagine
+	}
+	if imagePath(path) {
+		return literalImage()
+	}
+	if formats == imageFormats {
+		return inputOpts(imagePipes)
+	}
+	return inputOpts(formats)
 }
 
 const audioFmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
@@ -575,8 +603,8 @@ func buildArgs(p Plan, analyze bool) ([]string, error) {
 	for i, c := range p.Clips {
 		var err error
 		if c.Image {
-			err = addInput(c.Path, "-loop", "1", "-framerate", strconv.Itoa(p.FPS), "-t", num(c.Duration),
-				"-protocol_whitelist", "file", "-f", "image2", "-pattern_type", "none")
+			err = addInput(c.Path, append([]string{"-loop", "1", "-framerate", strconv.Itoa(p.FPS), "-t", num(c.Duration)},
+				literalImage()...)...)
 		} else if c.TrimStart > 0 || c.TrimEnd > 0 {
 			// il pezzo della clip: -ss e -t sull'ingresso valgono per video e audio
 			opts := []string{"-ss", num(c.TrimStart)}
@@ -614,7 +642,7 @@ func buildArgs(p Plan, analyze bool) ([]string, error) {
 	}
 	// immagini delle sovrimpressioni: logo, sfondo e logo del cartello
 	image := func(path string) (string, error) {
-		if err := addInput(path, literalImage()...); err != nil {
+		if err := addInput(path, readOpts(path, imageFormats)...); err != nil {
 			return "", err
 		}
 		next++
@@ -854,35 +882,8 @@ func LastFrameArgs(clip, out string, overwrite bool) ([]string, error) {
 	return args, nil
 }
 
-// imageProbeArgs è ProbeArgs per un'immagine da posare, letta come la legge
-// il montaggio (literalImage).
-func imageProbeArgs(path string) ([]string, error) {
-	if err := checkPath(path); err != nil {
-		return nil, invalid("%v", err)
-	}
-	f, err := fileArg(path)
-	if err != nil {
-		return nil, invalid("%s: %v", path, err)
-	}
-	args := append([]string{"-hide_banner", "-loglevel", "error"}, literalImage()...)
-	return append(args, "-show_entries",
-		"format=format_name,duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,duration",
-		"-of", "json", "-i", f), nil
-}
-
-// ProbeArgs costruisce gli argomenti di ffprobe per leggere durata e formato.
+// ProbeArgs costruisce gli argomenti di ffprobe per leggere durata e formato
+// (un'immagine alla lettera, readOpts).
 func ProbeArgs(path string) ([]string, error) {
-	if err := checkPath(path); err != nil {
-		return nil, invalid("%v", err)
-	}
-	f, err := fileArg(path)
-	if err != nil {
-		return nil, invalid("%s: %v", path, err)
-	}
-	args := []string{"-hide_banner", "-loglevel", "error"}
-	args = append(args, inputOpts(probeFormats)...)
-	args = append(args, "-show_entries",
-		"format=format_name,duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,duration",
-		"-of", "json", "-i", f)
-	return args, nil
+	return probeArgsFormats(path, probeFormats)
 }
