@@ -201,6 +201,8 @@ func TestClipRifiutiCodice2SenzaChiamate(t *testing.T) {
 		"flag non ammesso":      {"--video", "short.mp4", "--resolution", "720p", "x"},
 		"audio non ammesso":     {"--video", "short.mp4", "--audio", "v.mp3", "x"},
 		"manca il prompt":       {"--video", "short.mp4"},
+		"video vuoto":           {"--video", "", "x"},
+		"url senza host":        {"--video", "https:///x.mp4", "x"},
 		"manca il video":        {"x"},
 		"durata non ammessa":    {"--video", "short.mp4", "--duration", "99", "x"},
 		"from non valido":       {"--video", "short.mp4", "--from", "a b", "x"},
