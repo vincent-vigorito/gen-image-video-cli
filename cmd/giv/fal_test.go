@@ -101,7 +101,7 @@ func newFalEnv(t *testing.T) *falEnv {
 				"upload_url": falStore + "/put/" + string(rune('0'+n)),
 				"file_url":   falStore + "/files/" + string(rune('0'+n)) + ".png",
 			})
-		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/fal-ai/") || r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/bytedance/"):
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/fal-ai/") || r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/bytedance/") || r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/kling/"):
 			json.NewEncoder(w).Encode(map[string]string{"request_id": "req-1",
 				"status_url": e.srv.URL + r.URL.Path + "/requests/req-1/status"})
 		case strings.HasSuffix(r.URL.Path, "/status"):
@@ -142,6 +142,10 @@ func falVideo(t *testing.T, args ...string) (out, errOut string, code int) {
 }
 
 func cutArgsVideo(args []string) (out, errOut string, code int) {
+	return cutArgsVideoProv("fal", args)
+}
+
+func cutArgsVideoProv(prov string, args []string) (out, errOut string, code int) {
 	capture := func(f **os.File) func() string {
 		old := *f
 		r, w, _ := os.Pipe()
@@ -151,7 +155,7 @@ func cutArgsVideo(args []string) (out, errOut string, code int) {
 		return func() string { w.Close(); *f = old; return <-done }
 	}
 	so, se := capture(&os.Stdout), capture(&os.Stderr)
-	err := cmdVideo(append([]string{"--provider", "fal"}, args...))
+	err := cmdVideo(append([]string{"--provider", prov}, args...))
 	out, errOut = so(), se()
 	if err != nil {
 		code, _ = exitCode(err)
