@@ -219,6 +219,11 @@ func (c *Client) grokUpload(ctx context.Context, path string) (string, error) {
 		FileID string `json:"file_id"`
 	}
 	if err := c.doWith(noRedirect(ctx), httpx.NoRetry, http.MethodPost, c.baseURL+"/files", w.FormDataContentType(), buf.Bytes(), &up); err != nil {
+		var he *httpx.Error
+		if errors.As(err, &he) && he.Status >= 300 && he.Status < 400 {
+			// il file può essere arrivato: esito incerto, la generazione non parte
+			return "", fmt.Errorf("%s: caricamento di --video dall'esito incerto (redirect HTTP %d non seguito): generazione non avviata; un file arrivato su xAI scade dopo un'ora", c.name, he.Status)
+		}
 		return "", fmt.Errorf("caricamento di --video: %w", err)
 	}
 	id := up.ID
