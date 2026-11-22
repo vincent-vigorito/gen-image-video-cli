@@ -201,3 +201,14 @@ func TestVoiceXAITempiEccessiviScartati(t *testing.T) {
 		t.Errorf("nessun avviso sui tempi: %s %s", out, se)
 	}
 }
+
+// la stima di Gemini per il tetto è il massimo per richiesta (0,151552 $ flash).
+func TestVoiceGeminiTettoSulMassimo(t *testing.T) {
+	hits, dir := geminiEnv(t, geminiOK(1, nil))
+	if _, se, code := voiceRun(t, "--provider", "gemini", "--max-cost", "0.1", "--out", dir, "Ciao"); code != 2 || *hits != 0 {
+		t.Errorf("sotto il massimo: code=%d hits=%d %s", code, *hits, se)
+	}
+	if _, se, code := voiceRun(t, "--provider", "gemini", "--max-cost", "0.5", "--out", dir, "Ciao"); code != 0 || *hits != 1 {
+		t.Errorf("sopra il massimo: code=%d hits=%d %s", code, *hits, se)
+	}
+}
