@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -196,5 +197,42 @@ func TestQCVoicePronunciaDettaValeLaParolaScritta(t *testing.T) {
 	cmp, _ := m["comparison"].(map[string]any)
 	if r, _ := cmp["ratio"].(float64); r != 1 {
 		t.Errorf("comparison: %v", cmp)
+	}
+}
+
+// wavSamples: WAV 24 kHz mono 16 bit di n campioni (silenzio).
+func wavSamples(n int) []byte {
+	b := fakeWAV(1)
+	data := make([]byte, 2*n)
+	hdr := append([]byte{}, b[:44]...)
+	put := func(off int, v uint32) {
+		hdr[off], hdr[off+1], hdr[off+2], hdr[off+3] = byte(v), byte(v>>8), byte(v>>16), byte(v>>24)
+	}
+	put(4, uint32(36+len(data)))
+	put(40, uint32(len(data)))
+	return append(hdr, data...)
+}
+
+// un audio appena oltre il minuto (60,0004 s) vale 2 unità di addebito: con un
+// tetto sotto la stima delle 2 unità = codice 2 senza richieste.
+func TestQCVoiceAudioOltreLUnitaDiAddebito(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg assente")
+	}
+	hits, dir := voiceEnv(t, sttResp("x"))
+	aud := filepath.Join(dir, "lungo.wav")
+	os.WriteFile(aud, wavSamples(1440010), 0o600) // 60,0004 s
+	_, se, code := qcVoiceRun(t, aud, "--script", "x", "--max-cost", "0.002")
+	if code != 2 || *hits != 0 {
+		t.Fatalf("con tetto: code=%d hits=%d %s", code, *hits, se)
+	}
+	out, se, code := qcVoiceRun(t, aud, "--script", "x", "--dry-run")
+	if code != 0 || *hits != 0 {
+		t.Fatalf("dry-run: code=%d hits=%d %s", code, *hits, se)
+	}
+	var m map[string]any
+	json.Unmarshal([]byte(out), &m)
+	if c, _ := m["cost_est_usd"].(float64); c < 0.0033 || c > 0.0034 {
+		t.Errorf("cost_est_usd=%v (attesi 2 minuti)", m["cost_est_usd"])
 	}
 }
