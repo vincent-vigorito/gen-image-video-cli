@@ -41,6 +41,11 @@ type Op struct {
 	// Root è la cartella d'uscita (--out), creata se manca: Output deve
 	// starci dentro, altrimenti ErrInvalid. Vuota: la cartella di Output.
 	Root string
+	// Replace sostituisce Output se c'è già, a lavoro riuscito e senza
+	// seguire link, invece di scegliere un nome libero: per i file che giv
+	// riscrive ogni volta (il foglio di contatto di giv story). Mai un
+	// ingresso: un'uscita che è uno degli ingressi è ErrInvalid.
+	Replace bool
 	// Build scrive il risultato in staged, un file nella cartella privata
 	// w.Dir con l'estensione di Output, lanciando ffmpeg con w.FFmpeg (anche
 	// più passate, con gli intermedi in w.Dir). Non scrive altrove.
@@ -182,6 +187,15 @@ func (t Tool) RunOp(ctx context.Context, op Op) (*OpResult, error) {
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("cartella d'uscita %s: %w", root, err)
+	}
+	if op.Replace {
+		if err := sameAsInput(op.Output, op.Inputs); err != nil {
+			return nil, err
+		}
+		if err := publish(ctx, staged, root, nil, op.Output, true); err != nil {
+			return nil, err
+		}
+		return &OpResult{Output: op.Output, Info: info}, nil
 	}
 	for _, out := range OutputNames(op.Output) {
 		err = publish(ctx, staged, root, nil, out, false)

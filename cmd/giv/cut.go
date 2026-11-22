@@ -98,11 +98,53 @@ func runStoryCut(args []string) error {
 			return err
 		}
 		if formats[i] == "" {
+			contactSheet(s, path)
 			return output.PrintJSON(out)
 		}
 		multi.Formats = append(multi.Formats, *out)
 	}
+	contactSheet(s, path)
 	return output.PrintJSON(multi)
+}
+
+// contactSheetName è il foglio di contatto che giv story run e cut scrivono
+// da soli accanto allo storyboard.
+const contactSheetName = "foglio-contatto.jpg"
+
+// contactSheet scrive (o riscrive) foglio-contatto.jpg accanto allo
+// storyboard: una riga per scena con id e ripresa (storySheet, come giv sheet
+// sullo storyboard), salvo foglio_contatto false. È un di più: un problema
+// è un avviso su stderr e non cambia l'esito del comando.
+func contactSheet(s *story.Storyboard, path string) {
+	if s.FoglioContatto != nil && !*s.FoglioContatto {
+		return
+	}
+	warn := func(err error) {
+		fmt.Fprintf(os.Stderr, "avviso: %s non scritto: %s\n", contactSheetName, strings.ReplaceAll(localErrMsg(err), "\n", " "))
+	}
+	p, err := storySheet(s, path, sheetOptions{Cols: 4, Labels: true})
+	if err != nil {
+		warn(err)
+		return
+	}
+	for _, w := range p.Warnings {
+		fmt.Fprintf(os.Stderr, "avviso: %s: %s\n", contactSheetName, w)
+	}
+	if err := p.Sheet.Check(); err != nil {
+		warn(err)
+		return
+	}
+	var inputs []string
+	for _, k := range sortedKeys(p.Inputs) {
+		inputs = append(inputs, p.Inputs[k])
+	}
+	res, err := localTool.RunOp(context.Background(), montage.Op{Inputs: inputs, Output: filepath.Join(s.Dir, contactSheetName),
+		Root: s.Dir, Replace: true, Build: p.Sheet.Build})
+	if err != nil {
+		warn(err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "foglio di contatto: %s\n", res.Output)
 }
 
 // cutOne monta un formato (format vuoto: quello dello storyboard), con una

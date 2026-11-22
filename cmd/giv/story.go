@@ -83,7 +83,9 @@ volta: prima l'eventuale fotogramma chiave, poi la clip, in clip/ accanto allo s
 spesa sono in <nome>.stato.json: una nuova esecuzione recupera i job già partiti senza
 rilanciarli e genera solo le scene mancanti. Con tetto_costo_usd, prima di ogni richiesta
 a pagamento la spesa registrata (anche di scene non più nello storyboard) più le stime
-ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii.
+ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii. Alla
+fine riscrive foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
+non farlo).
 
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
@@ -108,6 +110,8 @@ voce di una scena avatar è già nella sua clip e non si aggiunge una seconda vo
 Nessuna generazione e nessuna rete; il file d'uscita (montaggio.uscita, altrimenti
 <nome>.mp4) si riscrive a ogni montaggio. Con montaggio.formati un file per formato,
 <nome>-9x16.mp4…, adattato come dice montaggio.adatta (bande, ritaglio, sfocato).
+Riscrive anche foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
+non farlo).
 
 Flag (anche dopo il file):
   --formato <r>   monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra montaggio.formati,
