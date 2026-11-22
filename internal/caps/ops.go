@@ -3,6 +3,7 @@ package caps
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -29,7 +30,8 @@ type Op struct {
 	FactorMin       float64  `json:"factor_min,omitempty"` // --factor
 	FactorMax       float64  `json:"factor_max,omitempty"`
 	DefaultFactor   float64  `json:"default_factor,omitempty"`
-	Modes           []string `json:"modes,omitempty"` // --mode, il primo è il default
+	Modes           []string `json:"modes,omitempty"`         // --mode, il primo è il default
+	VideoURLExt     string   `json:"video_url_ext,omitempty"` // un --video da URL deve finire così (xAI: .mp4)
 
 	Pricing map[string]float64 `json:"pricing,omitempty"` // listino mostrato; il calcolo è in Price
 	// Price stima il costo di req (durate di default già applicate da chi la
@@ -110,6 +112,11 @@ func CheckOpFlags(prov string, o *Op, ops []Op, req provider.ClipRequest, set []
 	}
 	if req.Mode != "" && len(o.Modes) > 0 && !slices.Contains(o.Modes, req.Mode) {
 		return reject("--mode %s non ammesso da %s (ammessi: %s)", req.Mode, who, strings.Join(o.Modes, ", "))
+	}
+	if o.VideoURLExt != "" && (strings.HasPrefix(req.Video, "https://") || strings.HasPrefix(req.Video, "http://")) {
+		if u, err := url.Parse(req.Video); err == nil && !strings.HasSuffix(u.Path, o.VideoURLExt) {
+			return reject("--video da URL: %s vuole un indirizzo che finisce in %s", who, o.VideoURLExt)
+		}
 	}
 	return nil
 }
@@ -206,4 +213,67 @@ func rangeText(lo, hi float64) string {
 		return fmt.Sprintf("al massimo %g s", hi)
 	}
 	return fmt.Sprintf("almeno %g s", lo)
+}
+
+// xaiOpsSource è la fonte della tabella delle operazioni xAI: va aggiornata a
+// mano a ogni release.
+const xaiOpsSource = "tabella giv 22/11/2026: docs.x.ai/developers/model-capabilities/video/extension, .../video/editing, docs.x.ai/developers/pricing"
+
+// listino di grok-imagine-video per extend ed edit (22/11/2026), centesimi
+// di dollaro al secondo: il conto in centesimi evita che 0,82 diventi
+// 0,8200000000000001 contro --max-cost.
+const (
+	xaiClipInCents  = 1 // video in ingresso
+	xaiClipOutCents = 7 // uscita a 720p (a 480p 5): il caso più caro
+	xaiClipIn       = xaiClipInCents / 100.0
+	xaiClipOut      = xaiClipOutCents / 100.0
+)
+
+// XAIOps è la tabella fissa delle operazioni sulle clip di xAI: giv extend e
+// giv edit, solo grok-imagine-video. Finché non è verificato cosa si paga
+// (solo i secondi aggiunti o tutta la clip d'uscita, la risoluzione
+// d'uscita) la stima prende il caso più caro e lo scrive.
+func XAIOps() []Op {
+	pricing := map[string]float64{"input_video_per_s": xaiClipIn, "output_480p_per_s": 0.05, "output_720p_per_s": xaiClipOut}
+	return []Op{
+		{
+			Op: "extend", Model: "grok-imagine-video",
+			Flags: []string{"prompt", "video", "duration"}, Required: []string{"prompt", "video"},
+			Durations: []int{2, 3, 4, 5, 6, 7, 8, 9, 10}, DefaultDuration: 6,
+			SourceMin: 2, SourceMax: 15, MaxHeight: 720, VideoURLExt: ".mp4",
+			Pricing: pricing, Source: xaiOpsSource,
+			Price: func(req provider.ClipRequest) (float64, string, string) {
+				src, note := xaiSourceSeconds(req, 15)
+				add := req.Duration
+				if add <= 0 {
+					add = 6
+				}
+				out := src + float64(add)
+				usd := (out*xaiClipOutCents + src*xaiClipInCents) / 100
+				return usd, fmt.Sprintf("uscita %.2f s (sorgente + %d s) × %g $/s a 720p + ingresso %.2f s × %g $/s; caso più caro: tutta l'uscita a pagamento (non verificato)%s",
+					out, add, xaiClipOut, src, xaiClipIn, note), ""
+			},
+		},
+		{
+			Op: "edit", Model: "grok-imagine-video",
+			Flags: []string{"prompt", "video"}, Required: []string{"prompt", "video"},
+			SourceMax: 8.7, MaxHeight: 720, VideoURLExt: ".mp4",
+			Pricing: pricing, Source: xaiOpsSource,
+			Price: func(req provider.ClipRequest) (float64, string, string) {
+				src, note := xaiSourceSeconds(req, 8.7)
+				usd := src * (xaiClipOutCents + xaiClipInCents) / 100
+				return usd, fmt.Sprintf("%.2f s × (%g $/s uscita a 720p + %g $/s ingresso); caso più caro: uscita a 720p (non verificato)%s",
+					src, xaiClipOut, xaiClipIn, note), ""
+			},
+		},
+	}
+}
+
+// xaiSourceSeconds è la durata del sorgente per la stima: quella misurata o, se
+// non è nota (URL o ffprobe assente), il massimo ammesso, con la nota.
+func xaiSourceSeconds(req provider.ClipRequest, max float64) (float64, string) {
+	if req.Source.Duration > 0 {
+		return req.Source.Duration, ""
+	}
+	return max, fmt.Sprintf("; sorgente non misurato: calcolato sul massimo di %g s", max)
 }

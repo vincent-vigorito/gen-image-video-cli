@@ -142,6 +142,10 @@ func main() {
 		err = cmdImage(os.Args[2:])
 	case "video":
 		err = cmdVideo(os.Args[2:])
+	case "extend":
+		err = cmdExtend(os.Args[2:])
+	case "edit":
+		err = cmdEdit(os.Args[2:])
 	case "job":
 		err = cmdJob(os.Args[2:])
 	case "log":
@@ -177,6 +181,8 @@ Uso:
              [--kind image|video|other] [--caps]   --caps (con --kind video): capacità e $/s
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (job asincrono ~1-5 min)
+  giv extend --video <mp4|url https> [--duration 2-10] "<come continua>"  allunga una clip (xai)
+  giv edit   --video <mp4|url https> "<cosa cambiare>"  modifica una clip (xai)
   giv job fetch --provider <p> <id>  scarica un job video già partito, senza nuovo avvio (--out, --name, --timeout)
   giv log    [-n N|--sum-cost [--by provider|model]]
                                    registro locale delle generazioni (giv-log.jsonl)

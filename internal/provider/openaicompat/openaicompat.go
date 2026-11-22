@@ -685,6 +685,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 			URL string `json:"url"`
 		} `json:"video"`
 		Error json.RawMessage `json:"error"`
+		Usage json.RawMessage `json:"usage"` // letto solo dai comandi sulle clip
 	}
 	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
 		return nil, err
@@ -700,7 +701,8 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		if err != nil {
 			return nil, err
 		}
-		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}, nil
+		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID,
+			CostUSD: grokClipCost(ctx, st.Usage)}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
 		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
