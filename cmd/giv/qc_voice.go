@@ -5,11 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -132,6 +135,7 @@ type voiceCheck struct {
 	dict   speech.Dictionary
 	lang   string
 	report *montage.QCReport
+	secs   float64 // durata dai campioni decodificati (o, senza tetto, del contenitore)
 	est    *speech.Estimate
 	plan   *qcVoicePlan
 }
@@ -273,10 +277,27 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 	if err != nil {
 		return nil, usageError("--voice %s: %v", o.File, err)
 	}
-	audioOn := true
-	rep, err := qcFile(o.File, montage.QCOptions{ExpectAudio: &audioOn})
+	// controllo tecnico e misura sulla stessa copia dei byte che vanno al
+	// provider: un file cambiato nel frattempo non conta
+	tmp, err := audioCopy(audio, format)
 	if err != nil {
 		return nil, err
+	}
+	defer os.Remove(tmp)
+	audioOn := true
+	rep, err := qcFile(tmp, montage.QCOptions{ExpectAudio: &audioOn})
+	if err != nil {
+		return nil, withPath(err, tmp, o.File)
+	}
+	rep.File = o.File
+	secs, measureErr := decodedSeconds(tmp)
+	if measureErr != nil {
+		measureErr = withPath(measureErr, tmp, o.File)
+		if o.MaxCost != nil {
+			return nil, usageError("--max-cost: costo della trascrizione non stimabile (durata dell'audio non misurata sui campioni: %v)", measureErr)
+		}
+		secs = rep.DurationS
+		warns = append(warns, fmt.Sprintf("durata dell'audio non misurata sui campioni (%v): stima sulla durata dichiarata dal file", measureErr))
 	}
 	params := map[string]any{"file": o.File, "format": format, "bytes": len(audio), "script_chars": utf8.RuneCountInString(script),
 		"language": lang, "keyterms": len(req.Keyterms)}
@@ -297,7 +318,7 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
 		plan.Warnings = append(plan.Warnings, w)
 	}
-	est, why := speech.EstimateTranscribe(req.Provider, rep.DurationS, time.Now())
+	est, why := speech.EstimateTranscribe(req.Provider, secs, time.Now())
 	if est != nil {
 		plan.CostEstUSD, plan.CostSource = &est.USD, est.Source
 	}
@@ -314,7 +335,83 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", msg)
 		plan.Warnings = append(plan.Warnings, msg)
 	}
-	return &voiceCheck{o: o, req: req, script: script, dict: dict, lang: lang, report: rep, est: est, plan: plan}, nil
+	return &voiceCheck{o: o, req: req, script: script, dict: dict, lang: lang, report: rep, secs: secs, est: est, plan: plan}, nil
+}
+
+// audioCopy scrive i byte dell'audio in un file temporaneo privato (0600)
+// con l'estensione del formato: la copia che si controlla e si misura.
+func audioCopy(audio []byte, format string) (string, error) {
+	f, err := os.CreateTemp("", "giv-qc-voce-*."+format)
+	if err != nil {
+		return "", fmt.Errorf("giv qc --voice: copia temporanea dell'audio: %w", err)
+	}
+	_, werr := f.Write(audio)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return "", fmt.Errorf("giv qc --voice: copia temporanea dell'audio: %w", werr)
+	}
+	return f.Name(), nil
+}
+
+// withPath rimette nei messaggi il percorso dell'utente al posto della copia.
+func withPath(err error, tmp, path string) error {
+	var ce *cliError
+	if errors.As(err, &ce) {
+		return &cliError{code: ce.code, msg: strings.ReplaceAll(ce.msg, tmp, path)}
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), tmp, path))
+}
+
+// qcVoiceDecodeTimeout: tempo massimo della decodifica che misura l'audio.
+const qcVoiceDecodeTimeout = 5 * time.Minute
+
+// decodedSeconds è la durata dell'audio di path contata sui campioni
+// decodificati della prima traccia audio (ffmpeg con argomenti separati, PCM
+// a 16 bit mono alla frequenza della traccia, nessun ricampionamento): non la
+// durata dichiarata dal contenitore, nessun arrotondamento.
+func decodedSeconds(path string) (float64, error) {
+	info, err := localMedia("--voice", path)
+	if err != nil {
+		return 0, err
+	}
+	if info.Audio == nil || info.Audio.SampleRate <= 0 || info.Audio.SampleRate > 768000 {
+		return 0, errors.New("traccia audio o frequenza non lette")
+	}
+	rate := info.Audio.SampleRate
+	bin := localTool.FFmpeg
+	if bin == "" {
+		bin = "ffmpeg"
+	}
+	if bin, err = exec.LookPath(bin); err != nil {
+		return 0, errors.New("ffmpeg non trovato")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), qcVoiceDecodeTimeout)
+	defer cancel()
+	var n byteCounter
+	cmd := exec.CommandContext(ctx, bin, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", path,
+		"-map", "0:a:0", "-ac", "1", "-ar", strconv.Itoa(rate), "-f", "s16le", "-")
+	cmd.Stdout, cmd.Stderr = &n, io.Discard
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return 0, errors.New("decodifica dell'audio oltre il tempo massimo")
+		}
+		return 0, fmt.Errorf("decodifica dell'audio non riuscita (%v)", err)
+	}
+	if n < 2 {
+		return 0, errors.New("nessun campione audio decodificato")
+	}
+	return float64(n/2) / float64(rate), nil
+}
+
+// byteCounter conta i byte scritti e li scarta.
+type byteCounter int64
+
+func (c *byteCounter) Write(p []byte) (int, error) {
+	*c += byteCounter(len(p))
+	return len(p), nil
 }
 
 // run trascrive e confronta. Una trascrizione dall'esito incerto lascia una
@@ -337,7 +434,7 @@ func (v *voiceCheck) run(ctx context.Context) (*qcVoiceOut, error) {
 	if v.est != nil {
 		man.CostEstUSD, man.CostSource = v.est.USD, v.est.Source
 	}
-	fmt.Fprintf(os.Stderr, "giv qc --voice: trascrizione con %s (%.1f s di audio)…\n", v.req.Provider, v.report.DurationS)
+	fmt.Fprintf(os.Stderr, "giv qc --voice: trascrizione con %s (%.1f s di audio)…\n", v.req.Provider, v.secs)
 	at := time.Now()
 	tr, err := c.Transcribe(ctx, v.req)
 	if err != nil {
@@ -365,7 +462,7 @@ func (v *voiceCheck) run(ctx context.Context) (*qcVoiceOut, error) {
 	}
 	usd, src := tr.UsageUSD, tr.UsageSource
 	if usd <= 0 { // durata non riportata: quella misurata sul file
-		if u, s, ok := speech.TranscribeCost(v.req.Provider, v.report.DurationS, at); ok {
+		if u, s, ok := speech.TranscribeCost(v.req.Provider, v.secs, at); ok {
 			usd, src = u, s+" (durata misurata sul file)"
 		}
 	}

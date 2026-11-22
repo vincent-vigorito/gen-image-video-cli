@@ -194,7 +194,7 @@ func transcribeCost(provider string, durationS float64, at time.Time, what strin
 	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
 		return 0, "", "tariffa della trascrizione non valida"
 	}
-	return usd, fmt.Sprintf("%s %s: %g $ per ora di audio × %.0f min (%.1f s arrotondati al minuto per eccesso)", what, provider, p.USDPerHour, mins, durationS), ""
+	return usd, fmt.Sprintf("%s %s: %g $ per ora di audio × %.0f min (%.3f s arrotondati al minuto per eccesso)", what, provider, p.USDPerHour, mins, durationS), ""
 }
 
 // CleanWord ripulisce una parola trascritta: UTF-8 valido, senza caratteri di
