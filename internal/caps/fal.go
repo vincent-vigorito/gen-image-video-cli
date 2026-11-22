@@ -140,3 +140,39 @@ func aspectSize(short int, aspect string) (w, h int, ok bool) {
 	}
 	return short, long, true
 }
+
+// AvatarAudioWarnS è la durata dell'audio oltre la quale giv avatar avvisa (e
+// con --strict rifiuta): la durata massima dell'Avatar v2 non è nelle schede di
+// fal, il valore è prudente e va confermato con la prova a pagamento.
+const AvatarAudioWarnS = 60
+
+// FalOps sono le operazioni sulle clip di fal (giv avatar): schede fissate in
+// giv come quelle video. Il primo modello di un'operazione è il default.
+func FalOps() []Op {
+	avatar := func(model, endpoint string, rate float64) Op {
+		return Op{
+			Op: "avatar", Model: model,
+			Flags: []string{"image", "audio", "prompt"}, Required: []string{"image", "audio"},
+			Pricing: map[string]float64{"usd_per_second": rate},
+			Price:   avatarPrice(rate),
+			Source:  falSource(endpoint),
+		}
+	}
+	return []Op{
+		avatar("avatar-v2-standard", "fal-ai/kling-video/ai-avatar/v2/standard", 0.0562),
+		avatar("avatar-v2-pro", "fal-ai/kling-video/ai-avatar/v2/pro", 0.115),
+	}
+}
+
+// avatarPrice stima l'Avatar v2: la clip dura quanto l'audio, contato per
+// secondi interi in eccesso (prudente: il conteggio di fal non è nella scheda).
+func avatarPrice(rate float64) func(req provider.ClipRequest) (float64, string, string) {
+	return func(req provider.ClipRequest) (float64, string, string) {
+		d := req.Source.AudioDuration
+		if math.IsNaN(d) || math.IsInf(d, 0) || d <= 0 {
+			return 0, "", "durata dell'audio non nota (serve ffprobe)"
+		}
+		s := math.Ceil(d)
+		return s * rate, fmt.Sprintf("%g $/s × %g s (audio di %.2f s, arrotondato al secondo)", rate, s, d), ""
+	}
+}
