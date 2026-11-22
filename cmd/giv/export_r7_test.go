@@ -168,7 +168,7 @@ func TestR7RifiutiCodice2(t *testing.T) {
 		{"--video", "in.mp4", "--for", "instagram:3:2"},
 		{"--video", "in.mp4", "--for", "instagram,instagram"},
 		{"--video", "corto.mp4", "--for", "tiktok,instagram"}, // 2 s: sotto il minimo di Instagram, nessun file nemmeno per TikTok
-		{"--video", "lungo.mp4", "--for", "youtube:9:16"},    // Shorts: max 180 s
+		{"--video", "lungo.mp4", "--for", "youtube:9:16"},     // Shorts: max 180 s
 	}
 	for _, c := range cases {
 		so, code := r7Run(t, d, append([]string{"export", "--out", "o"}, c...)...)
