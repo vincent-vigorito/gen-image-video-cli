@@ -59,6 +59,9 @@ func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
+	if req.Context().Value(noRedirectKey{}) != nil {
+		return http.ErrUseLastResponse // POST dei comandi sulle clip: mai reinviati, nemmeno sull'origine
+	}
 	if !c.apiOrigin(req.URL) {
 		if req.Context().Value(pollKey{}) != nil {
 			return http.ErrUseLastResponse // il 3xx diventa un errore HTTP: il job resta
@@ -705,7 +708,11 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 			CostUSD: grokClipCost(ctx, st.Usage)}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
+		detail := string(st.Error)
+		if ci := clipFrom(ctx); ci != nil {
+			detail = ci.jobError(st.Error)
+		}
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, detail))
 	}
 	return nil, nil
 }
