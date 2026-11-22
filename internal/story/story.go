@@ -258,7 +258,8 @@ type Controllo struct {
 	// Tecnico: giv story run controlla clip e voci, giv story cut i montati
 	// (giv qc), con il risultato in <nome>.controllo.json.
 	Tecnico bool `json:"tecnico,omitempty"`
-	// Voce: trascrizione delle voci confrontata col testo (a pagamento).
+	// Voce: giv story run trascrive ogni voce generata e la confronta col
+	// testo della scena (a pagamento, xai, nel tetto), una volta per voce.
 	Voce bool `json:"voce,omitempty"`
 }
 
@@ -442,11 +443,6 @@ func (s *Storyboard) Validate() error {
 	}
 	if s.Formato != nil && s.Formato.FPS < 0 {
 		fail("formato.fps deve essere positivo")
-	}
-	if c := s.Controllo; c != nil && c.Voce {
-		// la trascrizione (giv qc --voice) arriva con V-T2: fino ad allora
-		// nessuna richiesta a pagamento non disponibile
-		fail("controllo.voce: il controllo della voce non è ancora disponibile: togli controllo.voce (resta controllo.tecnico)")
 	}
 	if p := s.Parlato; p != nil {
 		// i limiti della voce (provider, voce, lingua, velocità, pronunce) li

@@ -99,7 +99,10 @@ ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii
 fine riscrive foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
 non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
 (<nome>.controllo.json e campo controllo): avvisa e basta, con strict un difetto esce
-con 1.
+con 1. Con controllo.voce trascrive ogni voce generata (appena fatta o mai trascritta)
+e la confronta col testo come giv qc --voice: xai, a pagamento, riserva e tetto come
+ogni richiesta, una sola richiesta mai rilanciata (incerta: resta contata); avvisa e
+basta, i video proseguono.
 
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
@@ -223,7 +226,9 @@ type storyCheck struct {
 	CapUSD          *float64       `json:"cap_usd,omitempty"`            // tetto_costo_usd
 	Warnings        []string       `json:"warnings,omitempty"`           // avvisi del montaggio (titoli)
 	VoiceCostEstUSD float64        `json:"voice_cost_est_usd,omitempty"` // voci dai testi, già in cost_est_usd
-	Kit             *storyKitCheck `json:"kit,omitempty"`
+	// trascrizioni delle voci (controllo.voce), già in cost_est_usd
+	VoiceCheckCostEstUSD float64        `json:"voice_check_cost_est_usd,omitempty"`
+	Kit                  *storyKitCheck `json:"kit,omitempty"`
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
@@ -259,7 +264,7 @@ func removedSpend(s *story.Storyboard, st *story.State) ([]removedScene, float64
 		var v float64
 		n := 0
 		for _, c := range ss.Charges {
-			if sc == nil || c.Kind != story.ChargeVoice {
+			if sc == nil || !c.OfVoice() {
 				v += c.Spent()
 				n++
 			}
@@ -302,12 +307,17 @@ type sceneCheck struct {
 	VoiceCostEstUSD   *float64 `json:"voice_cost_est_usd,omitempty"`
 	VoiceCostProbable bool     `json:"voice_cost_probable,omitempty"` // stima probabile, non un massimo (gemini)
 	VoiceDurationEstS float64  `json:"voice_duration_est_s,omitempty"`
-	CostEstUSD        *float64 `json:"cost_est_usd,omitempty"`
-	CostSource        string   `json:"cost_source,omitempty"`
-	CostDeclaredUSD   *float64 `json:"cost_declared_usd,omitempty"`
-	Warnings          []string `json:"warnings,omitempty"`
+	// controllo.voce: stima della trascrizione della voce generata ed esito
+	// dell'ultima (ok, avviso, difetto, incerto)
+	VoiceCheckCostEstUSD *float64 `json:"voice_check_cost_est_usd,omitempty"`
+	VoiceCheck           string   `json:"voice_check,omitempty"`
+	CostEstUSD           *float64 `json:"cost_est_usd,omitempty"`
+	CostSource           string   `json:"cost_source,omitempty"`
+	CostDeclaredUSD      *float64 `json:"cost_declared_usd,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
 
-	length float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
+	length          float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
+	voiceCheckExact float64 // VoiceCheckCostEstUSD non arrotondata
 }
 
 // keyframeCheck è il fotogramma chiave di una scena: un'immagine generata prima
@@ -449,12 +459,18 @@ func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, err
 			out.VoiceCostEstUSD += v.est.USD
 			out.exactUSD += v.est.Exact
 		}
+		if c.VoiceCheckCostEstUSD != nil {
+			out.CostEstUSD += *c.VoiceCheckCostEstUSD
+			out.VoiceCheckCostEstUSD += *c.VoiceCheckCostEstUSD
+			out.exactUSD += c.voiceCheckExact
+		}
 	}
 	if len(rejects) > 0 {
 		return nil, storyError(path, errors.Join(rejects...))
 	}
 	out.NotEstimated = sc.notEstimated
 	out.CostEstUSD, out.CostDeclaredUSD, out.VoiceCostEstUSD = round4(out.CostEstUSD), round4(out.CostDeclaredUSD), round4(out.VoiceCostEstUSD)
+	out.VoiceCheckCostEstUSD = math.Round(out.VoiceCheckCostEstUSD*1e6) / 1e6
 	out.CostTotalUSD = round4(out.CostEstUSD + out.CostDeclaredUSD)
 	return out, nil
 }

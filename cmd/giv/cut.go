@@ -147,7 +147,7 @@ func runStoryCut(args []string) error {
 		}
 	}
 	if controlOn(s) {
-		multi.Controllo = controlStory(s, path, "story cut")
+		multi.Controllo = controlStory(s, path, "story cut", nil)
 	}
 	if formats[0] == "" {
 		out := multi.Formats[0]

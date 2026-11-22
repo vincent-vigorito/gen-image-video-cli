@@ -907,7 +907,7 @@ sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
 | `foglio_contatto` | `false` perché `giv story run` e `giv story cut` non scrivano `foglio-contatto.jpg` accanto allo storyboard (default: lo scrivono) |
 | `kit` | il file del kit di marca e personaggi (`"../marca/kit.json"`, relativo alla cartella dello storyboard, anche fuori): vedi [Kit e voce dai testi](#kit-e-voce-dai-testi) |
 | `parlato` | voce delle scene con `testo`: `provider` (`xai`, default), `modello`, `voce`, `lingua`, `velocita`, `stile`, `pronuncia` (oggetto `{"parola": "come dirla"}`); i predefiniti vengono dal kit |
-| `controllo` | `{"tecnico": true}`: `giv story run` (a fine giro) e `giv story cut` (dopo il montaggio) controllano clip, voci e montati come `giv qc`, con il risultato in `<nome>.controllo.json`: vedi [Controllo dei file](#controllo-dei-file-nello-storyboard); `voce` (trascrizione) non ancora disponibile |
+| `controllo` | `{"tecnico": true}`: `giv story run` (a fine giro) e `giv story cut` (dopo il montaggio) controllano clip, voci e montati come `giv qc`, con il risultato in `<nome>.controllo.json`: vedi [Controllo dei file](#controllo-dei-file-nello-storyboard); `{"voce": true}`: `giv story run` trascrive ogni voce generata e la confronta col testo (xai, a pagamento, nel tetto) |
 
 Ogni scena ha un `id` (lettere, cifre, `_` e `-`, al massimo 64 caratteri), un `tipo`, una
 `durata` in secondi e, facoltativa, la `voce`: un file audio fuori campo, messo al
@@ -979,9 +979,12 @@ dopo l'inizio della scena; senza vale 0.
   `voice_cost_probable` (stima probabile, gemini), `voice_duration_est_s` e
   `voice_status` (`da_generare`, `fatto`, `cambiata` se testo o impostazioni sono
   cambiati dopo la generazione, `incerto`), con un avviso per una voce
-  incerta, cambiata o il cui file non c'è più;
-- **costi**: `cost_est_usd` (stime da listino, voci comprese: queste anche a parte in
-  `voice_cost_est_usd`), `cost_declared_usd` (costi dichiarati
+  incerta, cambiata o il cui file non c'è più; con `controllo.voce` anche
+  `voice_check_cost_est_usd` (trascrizione sulla durata stimata, già nei totali e nel
+  tetto) e `voice_check` (esito dell'ultima trascrizione: `ok`, `avviso`, `difetto`,
+  `incerto`);
+- **costi**: `cost_est_usd` (stime da listino, voci e trascrizioni comprese: queste anche a
+  parte in `voice_cost_est_usd` e `voice_check_cost_est_usd`), `cost_declared_usd` (costi dichiarati
   dall'autore dove la stima non c'è, per esempio i modelli a token come Seedance),
   `cost_total_usd`; le generazioni senza stima né costo dichiarato (compresi i
   fotogrammi chiave) sono in `not_estimated` e non contano come zero. Con
@@ -1069,7 +1072,7 @@ un avviso, e la stima è probabile, mai esatta (`voice_cost_probable` in `story 
 ### Controllo dei file nello storyboard
 
 ```json
-"controllo": {"tecnico": true}
+"controllo": {"tecnico": true, "voce": true}
 ```
 
 Con `controllo.tecnico` `giv story run`, a fine giro, e `giv story cut`, dopo il
@@ -1087,8 +1090,27 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
   story cut` esce sempre come prima.
 - Un controllo che non si può fare (ffmpeg o ffprobe assenti) è un avviso: il comando non
   cambia esito e il file non si scrive.
-- `controllo.voce` (trascrizione della voce confrontata col testo, a pagamento) non è
-  ancora disponibile: codice 2.
+- Con `controllo.voce` `giv story run` trascrive ogni voce **generata da giv** appena
+  fatta (prima dei video), o già fatta e mai trascritta, e la confronta col testo della
+  scena come [`giv qc --voice`](#controllo-della-voce-giv-qc---voice) (xai, lingua e
+  pronunce del blocco `parlato`; i file `voce` delle scene non si trascrivono: per quelli
+  `giv qc --voice`). Serve `XAI_API_KEY` (senza, codice 2 prima di ogni avvio). La riga
+  della voce in `voices[]` porta i controlli `voice` e `language`, `transcript` e
+  `comparison`; nelle esecuzioni dopo, e in `giv story cut`, l'esito registrato nello
+  stato. Ogni trascrizione è **a pagamento** (0,10 $ l'ora, al minuto per eccesso): la
+  stima entra nel piano e nel tetto (`voice_check_cost_est_usd` in `story check`), prima
+  della richiesta la spesa registrata più la trascrizione più le generazioni ancora da
+  fare non deve superare `tetto_costo_usd` (sul valore non arrotondato; altrimenti la
+  trascrizione si salta con un avviso: i video hanno la precedenza) e la trascrizione si
+  registra nello stato come incerta, con un addebito di tipo `trascrizione`. Una sola
+  richiesta, mai ripetuta: dall'esito incerto resta contata e **non si rilancia** (la voce
+  si ritrascrive solo se cambia il file, con `--new-voice`, o a mano con `giv qc
+  --voice`); rifiutata (4xx) o col caricamento non completo non conta e si riprova al
+  giro dopo. Nello stato la scena ha `voice_check` (`file`, `status` `fatto` o
+  `incerto`, `result`, `message`, `at`). Anche qui il controllo avvisa e basta: una voce
+  con parole diverse non si rigenera; con `strict` un difetto (meno di metà delle parole
+  sentite uguali) fa uscire con 1. `controllo.voce` senza `controllo.tecnico` controlla
+  solo le voci.
 
 ### Generazione: `giv story run`
 
@@ -1165,7 +1187,8 @@ stderr, `removed_scenes` e `removed_spent_usd`, e nel messaggio di rifiuto del t
 Il JSON su stdout ha `state`, le `scenes` (per scena `status`, `file`, `keyframe`, `takes`:
 le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `voice` e
 `voice_this_run` per la voce dal testo, `cost_est_usd`, `cost_usd`), `jobs_started`,
-`jobs_recovered`, `keyframes`, `voices` (voci generate) e i totali `cost_est_usd`
+`jobs_recovered`, `keyframes`, `voices` (voci generate), `voice_checks` (voci trascritte,
+con `controllo.voce`) e i totali `cost_est_usd`
 (stime e costi dichiarati delle scene), `cost_usd` (addebito riportato dai provider),
 `spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `removed_scenes` e
 `removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`.

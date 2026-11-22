@@ -147,6 +147,23 @@ func (sc *storyChecker) checkVoice(scene *story.Scene, c *sceneCheck) error {
 		usd := v.est.USD
 		c.VoiceCostEstUSD = &usd
 	}
+	if voiceControlOn(sc.s) {
+		// trascrizione della voce generata, sulla durata stimata dai caratteri
+		if est, why := speech.EstimateTranscribe(voiceCheckProvider, voiceDuration(v.req), time.Now()); est != nil {
+			usd := est.USD
+			c.VoiceCheckCostEstUSD, c.voiceCheckExact = &usd, est.Exact
+		} else {
+			sc.notEstimated = append(sc.notEstimated, scene.ID+" (controllo della voce)")
+			c.Warnings = append(c.Warnings, "controllo della voce: stima del costo non disponibile: "+why)
+		}
+		if ss != nil && ss.Voice != nil && ss.VoiceCheck != nil && ss.VoiceCheck.File == ss.Voice.File {
+			c.VoiceCheck = ss.VoiceCheck.Result
+			if ss.VoiceCheck.Status == story.Incerto {
+				c.VoiceCheck = story.Incerto
+				c.Warnings = append(c.Warnings, voiceCheckUncertain(ss.Voice.File))
+			}
+		}
+	}
 	if ss == nil {
 		return nil
 	}
@@ -345,6 +362,7 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 	ss.Voice = &story.Take{File: rel, Done: time.Now()}
 	ss.VoiceKey, ss.VoiceStatus, ss.VoiceError = v.key, story.Fatto, ""
 	r.voiceThisRun[scene.ID] = "generata"
+	r.voiceMade(scene.ID, res.DurationS)
 	man.Files, man.DurationS, man.CostUSD = files, res.DurationS, res.CostUSD
 	logRun(man)
 	if err := r.st.Save(); err != nil {
