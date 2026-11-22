@@ -44,12 +44,23 @@ func (c *Comparison) Same() bool {
 // torna la sua parola scritta. Errore solo se i testi sono troppo lunghi per
 // il confronto.
 func Compare(script, heard string, d Dictionary) (*Comparison, error) {
-	exp := compareWords(script)
-	got := compareWords(heard)
-	got = unpronounce(got, d)
+	tooLong := errors.New("testi troppo lunghi per il confronto parola per parola")
+	exp, ok := compareWords(script, maxCompareCells)
+	if !ok {
+		return nil, tooLong
+	}
+	// parole trascritte lette e sostituite solo fin dove la tabella ci sta
+	limit := maxCompareCells/(len(exp)+1) - 1
+	got, ok := compareWords(heard, limit)
+	if !ok {
+		return nil, tooLong
+	}
+	if got, ok = unpronounce(got, d, limit); !ok {
+		return nil, tooLong
+	}
 	n, m := len(exp), len(got)
 	if (n+1)*(m+1) > maxCompareCells {
-		return nil, errors.New("testi troppo lunghi per il confronto parola per parola")
+		return nil, tooLong
 	}
 	c := &Comparison{Words: n, Different: []WordDiff{}, Missing: []WordDiff{}, Extra: []WordDiff{}}
 	// distanza di modifica a parole, con la tabella intera per ricostruire
@@ -105,12 +116,35 @@ type cword struct{ text, key string }
 
 // compareWords divide un testo in parole (lettere e cifre; apostrofi e
 // trattini separano) con la forma normalizzata: minuscole, senza accenti.
-func compareWords(s string) []cword {
+// ok false, senza leggere oltre, se le parole sono più di limit.
+func compareWords(s string, limit int) ([]cword, bool) {
 	var out []cword
-	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return !wordRune(r) }) {
+	start := -1
+	add := func(end int) bool {
+		if len(out) >= limit {
+			return false
+		}
+		f := s[start:end]
 		out = append(out, cword{text: f, key: foldWord(f)})
+		start = -1
+		return true
 	}
-	return out
+	for i, r := range s {
+		switch {
+		case wordRune(r):
+			if start < 0 {
+				start = i
+			}
+		case start >= 0:
+			if !add(i) {
+				return nil, false
+			}
+		}
+	}
+	if start >= 0 && !add(len(s)) {
+		return nil, false
+	}
+	return out, true
 }
 
 // foldWord è la forma di confronto di una parola: minuscole e lettere latine
@@ -141,10 +175,11 @@ var accentFold = func() map[rune]rune {
 
 // unpronounce rimette nel testo trascritto le parole scritte del dizionario
 // al posto delle loro pronunce (a parola intera, la più lunga prima; le
-// pronunce IPA fra barre non si sentono come testo e si saltano).
-func unpronounce(got []cword, d Dictionary) []cword {
+// pronunce IPA fra barre non si sentono come testo e si saltano). ok false
+// se il risultato supera limit parole.
+func unpronounce(got []cword, d Dictionary, limit int) ([]cword, bool) {
 	if len(d) == 0 || len(got) == 0 {
-		return got
+		return got, true
 	}
 	type entry struct {
 		from []string // pronuncia, normalizzata
@@ -156,8 +191,8 @@ func unpronounce(got []cword, d Dictionary) []cword {
 		if strings.HasPrefix(v, "/") {
 			continue
 		}
-		from := compareWords(v)
-		to := compareWords(k)
+		from, _ := compareWords(v, maxCompareCells)
+		to, _ := compareWords(k, maxCompareCells)
 		if len(from) == 0 || len(to) == 0 {
 			continue
 		}
@@ -183,6 +218,9 @@ func unpronounce(got []cword, d Dictionary) []cword {
 				}
 			}
 			if ok {
+				if len(out)+len(e.to) > limit {
+					return nil, false
+				}
 				out = append(out, e.to...)
 				i += len(e.from)
 				matched = true
@@ -190,11 +228,14 @@ func unpronounce(got []cword, d Dictionary) []cword {
 			}
 		}
 		if !matched {
+			if len(out) >= limit {
+				return nil, false
+			}
 			out = append(out, got[i])
 			i++
 		}
 	}
-	return out
+	return out, true
 }
 
 // LanguageMatches dice se la lingua rilevata dalla trascrizione corrisponde a
