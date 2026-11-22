@@ -59,7 +59,7 @@ func hasScheme(p string) bool {
 // da controllare: montaggio (logo, stile dei testi coi colori, cartello
 // finale, musica, volume), personaggi come insiemi di riferimenti (uno con lo
 // stesso nome nello storyboard vince) e voce. I campi presi dal kit vanno in
-// Ereditati.
+// Ereditati. Logo, cartello e musica in montaggio.senza non si prendono.
 func (s *Storyboard) applyKit(file string) error {
 	k, err := kit.Load(file)
 	if err != nil {
@@ -114,7 +114,7 @@ func (s *Storyboard) applyKit(file string) error {
 		if c := mk.Colori; c != nil {
 			primario, testo = c.Primario, c.Testo
 		}
-		if kl := mk.Logo; kl != nil {
+		if kl := mk.Logo; kl != nil && !s.Without("logo") {
 			l := m.Logo
 			if l == nil {
 				l = &Logo{}
@@ -152,7 +152,7 @@ func (s *Storyboard) applyKit(file string) error {
 				m.StileTesti = st
 			}
 		}
-		if kc := mk.CartelloFinale; kc != nil || (m.CartelloFinale != nil && primario != "") {
+		if kc := mk.CartelloFinale; (kc != nil || (m.CartelloFinale != nil && primario != "")) && !s.Without("cartello") {
 			if kc == nil {
 				kc = &kit.Cartello{}
 			}
@@ -171,7 +171,7 @@ func (s *Storyboard) applyKit(file string) error {
 			str(&c.Sottotesto, kc.Sottotesto, "montaggio.cartello_finale.sottotesto")
 			m.CartelloFinale = c
 		}
-		if km := mk.Musica; km != nil {
+		if km := mk.Musica; km != nil && !s.Without("musica") {
 			mu := m.Musica
 			if mu == nil {
 				mu = &Musica{}

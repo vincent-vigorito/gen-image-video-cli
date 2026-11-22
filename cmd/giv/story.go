@@ -97,7 +97,12 @@ rilanciarli e genera solo le scene mancanti. Con tetto_costo_usd, prima di ogni 
 a pagamento la spesa registrata (anche di scene non più nello storyboard) più le stime
 ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii. Alla
 fine riscrive foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
-non farlo).
+non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
+(<nome>.controllo.json e campo controllo): avvisa e basta, con strict un difetto esce
+con 1. Con controllo.voce trascrive ogni voce generata (appena fatta o mai trascritta)
+e la confronta col testo come giv qc --voice: xai, a pagamento, riserva e tetto come
+ogni richiesta, una sola richiesta mai rilanciata (incerta: resta contata); avvisa e
+basta, i video proseguono.
 
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
@@ -125,13 +130,15 @@ Flag (anche dopo il file):
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
 clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce (il
 file della scena o la voce generata dal testo), musica e sottotitoli del blocco montaggio
-(col kit, logo, cartello e musica del kit), e taglio, velocita e fuoco delle scene. La
+(sottotitoli "auto": dai testi delle scene coi tempi delle voci; col kit, logo, cartello
+e musica del kit, salvo montaggio.senza), e taglio, velocita e fuoco delle scene. La
 voce di una scena avatar è già nella sua clip e non si aggiunge una seconda volta.
 Nessuna generazione e nessuna rete; il file d'uscita (montaggio.uscita, altrimenti
 <nome>.mp4) si riscrive a ogni montaggio. Con montaggio.formati un file per formato,
 <nome>-9x16.mp4…, adattato come dice montaggio.adatta (bande, ritaglio, sfocato).
 Riscrive anche foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
-non farlo).
+non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
+(<nome>.controllo.json e campo controllo; avvisa e basta).
 
 Flag (anche dopo il file):
   --formato <r>       monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra
@@ -219,7 +226,9 @@ type storyCheck struct {
 	CapUSD          *float64       `json:"cap_usd,omitempty"`            // tetto_costo_usd
 	Warnings        []string       `json:"warnings,omitempty"`           // avvisi del montaggio (titoli)
 	VoiceCostEstUSD float64        `json:"voice_cost_est_usd,omitempty"` // voci dai testi, già in cost_est_usd
-	Kit             *storyKitCheck `json:"kit,omitempty"`
+	// trascrizioni delle voci (controllo.voce), già in cost_est_usd
+	VoiceCheckCostEstUSD float64        `json:"voice_check_cost_est_usd,omitempty"`
+	Kit                  *storyKitCheck `json:"kit,omitempty"`
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
@@ -255,7 +264,7 @@ func removedSpend(s *story.Storyboard, st *story.State) ([]removedScene, float64
 		var v float64
 		n := 0
 		for _, c := range ss.Charges {
-			if sc == nil || c.Kind != story.ChargeVoice {
+			if sc == nil || !c.OfVoice() {
 				v += c.Spent()
 				n++
 			}
@@ -296,13 +305,19 @@ type sceneCheck struct {
 	VoiceStatus string         `json:"voice_status,omitempty"`  // voce dal testo: da_generare, fatto, cambiata, incerto
 	// voce dal testo da generare: stima del costo e durata stimata dai caratteri
 	VoiceCostEstUSD   *float64 `json:"voice_cost_est_usd,omitempty"`
+	VoiceCostProbable bool     `json:"voice_cost_probable,omitempty"` // stima probabile, non un massimo (gemini)
 	VoiceDurationEstS float64  `json:"voice_duration_est_s,omitempty"`
-	CostEstUSD        *float64 `json:"cost_est_usd,omitempty"`
-	CostSource        string   `json:"cost_source,omitempty"`
-	CostDeclaredUSD   *float64 `json:"cost_declared_usd,omitempty"`
-	Warnings          []string `json:"warnings,omitempty"`
+	// controllo.voce: stima della trascrizione della voce generata ed esito
+	// dell'ultima (ok, avviso, difetto, incerto)
+	VoiceCheckCostEstUSD *float64 `json:"voice_check_cost_est_usd,omitempty"`
+	VoiceCheck           string   `json:"voice_check,omitempty"`
+	CostEstUSD           *float64 `json:"cost_est_usd,omitempty"`
+	CostSource           string   `json:"cost_source,omitempty"`
+	CostDeclaredUSD      *float64 `json:"cost_declared_usd,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
 
-	length float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
+	length          float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
+	voiceCheckExact float64 // VoiceCheckCostEstUSD non arrotondata
 }
 
 // keyframeCheck è il fotogramma chiave di una scena: un'immagine generata prima
@@ -444,12 +459,18 @@ func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, err
 			out.VoiceCostEstUSD += v.est.USD
 			out.exactUSD += v.est.Exact
 		}
+		if c.VoiceCheckCostEstUSD != nil {
+			out.CostEstUSD += *c.VoiceCheckCostEstUSD
+			out.VoiceCheckCostEstUSD += *c.VoiceCheckCostEstUSD
+			out.exactUSD += c.voiceCheckExact
+		}
 	}
 	if len(rejects) > 0 {
 		return nil, storyError(path, errors.Join(rejects...))
 	}
 	out.NotEstimated = sc.notEstimated
 	out.CostEstUSD, out.CostDeclaredUSD, out.VoiceCostEstUSD = round4(out.CostEstUSD), round4(out.CostDeclaredUSD), round4(out.VoiceCostEstUSD)
+	out.VoiceCheckCostEstUSD = math.Round(out.VoiceCheckCostEstUSD*1e6) / 1e6
 	out.CostTotalUSD = round4(out.CostEstUSD + out.CostDeclaredUSD)
 	return out, nil
 }

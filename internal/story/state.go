@@ -32,7 +32,15 @@ const (
 	ChargeClip     = "clip"
 	ChargeKeyframe = "fotogramma"
 	ChargeVoice    = "voce" // voce fuori campo dal testo della scena
+	// trascrizione della voce generata (controllo.voce), della scena come la voce
+	ChargeTranscribe = "trascrizione"
 )
+
+// OfVoice: l'addebito è della voce della scena (la voce o la sua
+// trascrizione), non della sua clip.
+func (c Charge) OfVoice() bool {
+	return c.Kind == ChargeVoice || c.Kind == ChargeTranscribe
+}
 
 // TakeJob è il kind, in previous, di un job partito lasciato con --new-job:
 // solo id ed errore, senza file (il suo addebito resta in charges).
@@ -70,7 +78,24 @@ type SceneState struct {
 	VoiceKey    string `json:"voice_key,omitempty"`
 	VoiceStatus string `json:"voice_status,omitempty"` // fatto, incerto, da_fare; vuoto: mai chiesta
 	VoiceError  string `json:"voice_error,omitempty"`
+	// controllo della voce generata (controllo.voce): l'ultima trascrizione
+	VoiceCheck *VoiceCheck `json:"voice_check,omitempty"`
 }
+
+// VoiceCheck è la trascrizione di una voce generata, confrontata col testo
+// della scena (controllo.voce). Una trascrizione incerta (forse addebitata)
+// non si rilancia: la voce si controlla di nuovo solo se cambia il file
+// (--new-voice) o a mano con giv qc --voice.
+type VoiceCheck struct {
+	File    string    `json:"file"`              // voce trascritta, relativa alla cartella dello storyboard
+	Status  string    `json:"status"`            // fatto o incerto
+	Result  string    `json:"result,omitempty"`  // fatto: ok, avviso o difetto (parole e lingua)
+	Message string    `json:"message,omitempty"` // esito del confronto, o errore della trascrizione incerta
+	At      time.Time `json:"at"`
+}
+
+// Esiti di VoiceCheck.Result (gli stessi di giv qc).
+var voiceCheckResults = []string{"ok", "avviso", "difetto"}
 
 // VoiceTakes sono le voci generate della scena: quelle sostituite più quella in uso.
 func (sc *SceneState) VoiceTakes() int {
@@ -121,7 +146,7 @@ type Job struct {
 // Charge è una generazione avviata: per il tetto conta l'addebito riportato
 // dal provider, altrimenti la stima, altrimenti il costo dichiarato.
 type Charge struct {
-	Kind            string    `json:"kind"` // clip, fotogramma o voce
+	Kind            string    `json:"kind"` // clip, fotogramma, voce o trascrizione
 	JobID           string    `json:"job_id,omitempty"`
 	CostEstUSD      *float64  `json:"cost_est_usd,omitempty"`
 	CostDeclaredUSD *float64  `json:"cost_declared_usd,omitempty"`
@@ -317,6 +342,23 @@ func (st *State) validate() error {
 		if k := sc.VoiceKey; k != "" && !voiceKeyRe.MatchString(k) {
 			fail("%s: voice_key non valida", where)
 		}
+		if vc := sc.VoiceCheck; vc != nil {
+			if err := localPath(vc.File); vc.File == "" || err != nil {
+				fail("%s voice_check: file %q non valido", where, vc.File)
+			}
+			switch vc.Status {
+			case Fatto:
+				if !slices.Contains(voiceCheckResults, vc.Result) {
+					fail("%s voice_check: result %q sconosciuto (ok, avviso, difetto)", where, vc.Result)
+				}
+			case Incerto:
+				if vc.Result != "" {
+					fail("%s voice_check: result vale solo per una trascrizione fatta", where)
+				}
+			default:
+				fail("%s voice_check: status %q sconosciuto (fatto, incerto)", where, vc.Status)
+			}
+		}
 		takeOK(where+" clip", sc.Clip)
 		takeOK(where+" keyframe", sc.Keyframe)
 		takeOK(where+" voice", sc.Voice)
@@ -330,7 +372,7 @@ func (st *State) validate() error {
 		}
 		for i, c := range sc.Charges {
 			w := fmt.Sprintf("%s charges n. %d", where, i+1)
-			if c.Kind != ChargeClip && c.Kind != ChargeKeyframe && c.Kind != ChargeVoice {
+			if c.Kind != ChargeClip && c.Kind != ChargeKeyframe && c.Kind != ChargeVoice && c.Kind != ChargeTranscribe {
 				fail("%s: kind %q sconosciuto", w, c.Kind)
 			}
 			for _, v := range []*float64{c.CostEstUSD, c.CostDeclaredUSD, &c.CostUSD} {
