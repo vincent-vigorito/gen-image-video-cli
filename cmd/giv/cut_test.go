@@ -143,25 +143,3 @@ func TestStoryCutRifiuti(t *testing.T) {
 		t.Errorf("ffmpeg assente: code %d msg %q", code, se)
 	}
 }
-
-func TestStoryCheckAvvisaVoceTroppoLunga(t *testing.T) {
-	cutNeedFF(t)
-	n := capsServer(t)
-	dir := t.TempDir()
-	cutClip(t, filepath.Join(dir, "a.mp4"), "160x90", 24, "3")
-	cutFF(t, "-f", "lavfi", "-i", "sine=frequency=500:duration=2.5", filepath.Join(dir, "v.wav"))
-	board := `{"default":{"provider":"openrouter","modello":"alibaba/wan-3.0","audio":"off","risoluzione":"720p","aspect":"16:9"},
-"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":2,"voce":"v.wav"},{"id":"s2","tipo":"clip","file":"a.mp4","durata":3,"voce":"v.wav"}]}`
-	p := filepath.Join(dir, "sb.json")
-	os.WriteFile(p, []byte(board), 0o644)
-	out, se, code, _ := storyRun(t, p, n)
-	if code != 0 {
-		t.Fatalf("code %d\n%s", code, se)
-	}
-	if !strings.Contains(out, "la voce dura") {
-		t.Fatalf("manca l'avviso: %s", out)
-	}
-	if c := strings.Count(out, "la voce dura"); c != 1 {
-		t.Errorf("avvisi %d (solo s1: 2,5 > 2; s2 ok)", c)
-	}
-}

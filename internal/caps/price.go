@@ -14,6 +14,10 @@ type Estimate struct {
 	USD    float64 // arrotondato a 4 decimali, per il piano
 	Exact  float64 // non arrotondato: è il valore confrontato col tetto
 	Source string
+	// Uncovered è una configurazione plausibile (audio o risoluzione non
+	// indicati) senza tariffa nel listino: la stima vale solo per quelle
+	// coperte e non basta per un tetto di spesa. "" = tutte coperte.
+	Uncovered string
 }
 
 // tariffa al secondo letta dal nome di una sku del listino
@@ -149,9 +153,19 @@ func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
 		resolutions = m.knownResolutions(rates)
 	}
 	var best *rate
+	uncovered := ""
 	for _, a := range audios {
 		for _, res := range resolutions {
-			if r := bestRate(rates, a, res, wantMode); r != nil && (best == nil || r.usd > best.usd) {
+			r := bestRate(rates, a, res, wantMode)
+			if r == nil {
+				// le risoluzioni solo del listino (di un'altra modalità) non
+				// sono per forza ammesse dal modello
+				if uncovered == "" && (wantRes != "" || len(m.Resolutions) == 0 || containsFold(m.Resolutions, res)) {
+					uncovered = configText(a, res, wantMode)
+				}
+				continue
+			}
+			if best == nil || r.usd > best.usd {
 				best = r
 			}
 		}
@@ -185,7 +199,28 @@ func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
 	if math.IsNaN(total) || math.IsInf(total, 0) {
 		return nil, "stima non valida per " + m.ID
 	}
-	return &Estimate{USD: math.Round(total*1e4) / 1e4, Exact: total, Source: src}, ""
+	est := &Estimate{USD: math.Round(total*1e4) / 1e4, Exact: total, Source: src}
+	if uncovered != "" {
+		var flags []string
+		if wantAudio == "" {
+			flags = append(flags, "--audio")
+		}
+		if wantRes == "" {
+			flags = append(flags, "--resolution")
+		}
+		est.Uncovered = fmt.Sprintf("nessuna tariffa nel listino di %s per %s: indica %s", m.ID, uncovered, strings.Join(flags, " e "))
+	}
+	return est, ""
+}
+
+// configText descrive una configurazione nei messaggi: "senza audio, 1080p, da testo".
+func configText(audio, res, mode string) string {
+	parts := []string{map[string]string{"with": "con audio", "without": "senza audio"}[audio]}
+	if res != "" {
+		parts = append(parts, res)
+	}
+	parts = append(parts, map[string]string{"t2v": "da testo", "i2v": "da immagine"}[mode])
+	return strings.Join(parts, ", ")
 }
 
 // bestRate è la tariffa che vale per una configurazione: escluse quelle di

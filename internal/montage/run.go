@@ -511,7 +511,8 @@ func (t Tool) LastFrame(ctx context.Context, clip, out string, overwrite bool) e
 }
 
 // Montage esegue il piano: controlla file e tracce, completa le durate mancanti
-// dei video con quella del file, converte un .srt in .ass, monta in una
+// dei video con quella del file, converte un .srt in .ass, sposta i
+// sottotitoli delle clip con la voce ritardata (VoiceAt), monta in una
 // cartella privata e porta il file al nome finale solo a lavoro riuscito.
 // Tutto (letture con ffprobe, conversione, montaggio) sta entro Tool.Timeout.
 func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
@@ -611,6 +612,13 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 			return nil, probeErr("sottotitoli "+p.Subtitles, err)
 		}
 		p.Subtitles = ass
+	}
+	if p.Subtitles != "" && voiceDelayed(clips) {
+		shifted := filepath.Join(work, "sottotitoli-voce"+strings.ToLower(filepath.Ext(p.Subtitles)))
+		if err := shiftSubtitles(p.Subtitles, shifted, starts, clips); err != nil {
+			return nil, err
+		}
+		p.Subtitles = shifted
 	}
 
 	final := p.Output

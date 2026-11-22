@@ -208,10 +208,13 @@ type sceneCheck struct {
 	Keyframe        *keyframeCheck `json:"keyframe,omitempty"`
 	File            string         `json:"file,omitempty"`
 	Voice           string         `json:"voice,omitempty"`
+	VoiceDelayS     *float64       `json:"voice_delay_s,omitempty"` // ritardo_voce
 	CostEstUSD      *float64       `json:"cost_est_usd,omitempty"`
 	CostSource      string         `json:"cost_source,omitempty"`
 	CostDeclaredUSD *float64       `json:"cost_declared_usd,omitempty"`
 	Warnings        []string       `json:"warnings,omitempty"`
+
+	length float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
 }
 
 // keyframeCheck è il fotogramma chiave di una scena: un'immagine generata prima
@@ -249,10 +252,12 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 	if err != nil {
 		return nil, usageError("%v", err)
 	}
-	out, err := newStoryChecker(s).plan(path, nil)
+	chk := newStoryChecker(s)
+	out, err := chk.plan(path, nil)
 	if err != nil {
 		return nil, err
 	}
+	chk.voiceOverlaps(out)
 	out.RemovedScenes, out.removedExact = removedSpend(s, st)
 	out.RemovedSpentUSD = round4(out.removedExact)
 	if len(out.RemovedScenes) > 0 {
@@ -338,7 +343,6 @@ type storyChecker struct {
 	s            *story.Storyboard
 	clients      map[string]*storyClient
 	notEstimated []string
-	probeUntil   time.Time // scadenza delle letture della voce (voiceWarning)
 
 	// giv story run: cartella e nome dei file per scena, job pronti a partire
 	out    string
@@ -386,12 +390,9 @@ func (sc *storyChecker) client(name string) (*storyClient, error) {
 }
 
 func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
-	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce}
+	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce, VoiceDelayS: scene.RitardoVoce}
 	if scene.Tipo != story.Video {
-		c.File = scene.File
-		if w := sc.voiceWarning(scene, float64(scene.Durata)); w != "" {
-			c.Warnings = append(c.Warnings, w)
-		}
+		c.File, c.length = scene.File, float64(scene.Durata)
 		return c, nil
 	}
 	o, err := sc.videoOptions(scene)
@@ -408,9 +409,7 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	plan := job.plan
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
-	if w := sc.voiceWarning(scene, float64(max(job.req.Duration, scene.Durata))); w != "" {
-		c.Warnings = append(c.Warnings, w)
-	}
+	c.length = float64(max(job.req.Duration, scene.Durata))
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource

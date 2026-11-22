@@ -660,6 +660,10 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 		if est == nil {
 			return nil, usageError("--max-cost: costo non stimabile (%s)", why)
 		}
+		// un default del provider senza tariffa può costare più della stima
+		if est.Uncovered != "" {
+			return nil, usageError("--max-cost: costo non stimabile (%s)", est.Uncovered)
+		}
 		// il tetto vale sul valore non arrotondato
 		if est.Exact > *opt.maxCost {
 			return nil, usageError("costo stimato %.4f $ oltre --max-cost %.4f $ (%s)", est.USD, *opt.maxCost, est.Source)

@@ -50,6 +50,9 @@ type Plan struct {
 	Music  *Music // musica sotto tutto il montato, facoltativa
 	// Subtitles è il file dei sottotitoli da incidere (.ass, .ssa o .srt),
 	// facoltativo. Args accetta solo .ass e .ssa: un .srt lo converte Montage.
+	// In Montage le righe che iniziano durante una clip con la voce ritardata
+	// (VoiceAt, fino all'inizio della clip successiva) si spostano dello
+	// stesso tempo, in una copia: il file non cambia.
 	Subtitles string
 	Output    string // file finale .mp4
 	// Root è la cartella che deve contenere Output, facoltativa. Con Root la
