@@ -54,8 +54,8 @@ func TestStoryCutRitardoVocePiano(t *testing.T) {
 			graph = args[i+1]
 		}
 	}
-	if !strings.Contains(graph, "adelay=delays=") {
-		t.Errorf("manca adelay nel grafo: %s", graph)
+	if !strings.Contains(graph, "anullsrc") || !strings.Contains(graph, "concat=n=2:v=0:a=1") {
+		t.Errorf("manca il silenzio iniziale (anullsrc+concat) nel grafo: %s", graph)
 	}
 	// senza il campo: stesso piano di oggi (VoiceAt 0 ovunque)
 	plain := ritardoPlan(t, ritardoBoard(""))
