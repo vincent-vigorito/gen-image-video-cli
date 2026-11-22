@@ -20,7 +20,7 @@ func TestHelpFlagsMatchReadme(t *testing.T) {
 		t.Fatal(err)
 	}
 	// i comandi locali (decisione 8) hanno nell'help generale una riga sola: ne unisco gli help
-	for _, c := range docCommands0110 {
+	for _, c := range append(append([][]string{}, docCommands0110...), docCommands0120...) {
 		so, se, hc, _ := runGiv(t, nil, append(append([]string{}, c...), "--help")...)
 		if hc != 0 {
 			t.Fatalf("giv %v --help: exit %d", c, hc)

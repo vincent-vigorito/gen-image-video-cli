@@ -101,10 +101,7 @@ func TestR8ChangelogEVersione(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^## \[0\.11\.0\]`).Match(b) {
 		t.Error("CHANGELOG senza la voce 0.11.0")
 	}
-	so, _, code, _ := runGiv(t, nil, "--version")
-	if code != 0 || strings.TrimSpace(so) != "giv 0.11.0" {
-		t.Errorf("giv --version: code=%d out=%q", code, so)
-	}
+	// la versione corrente e' verificata da TestV9ChangelogEVersione
 }
 
 // lo storyboard di examples/spot passa story check (catalogo finto, nessun avvio).
