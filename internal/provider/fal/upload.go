@@ -43,7 +43,10 @@ func (c *Client) uploadAudio(ctx context.Context, path string, n int) (string, e
 	return c.put(ctx, path, mime, data, n)
 }
 
-// put carica data (di tipo mime, letto da path) in due passi e restituisce file_url.
+// put carica data (di tipo mime, letto da path) in due passi e restituisce
+// file_url. Un solo tentativo per passo, nessun redirect seguito: un errore
+// (anche un 5xx dopo la ricezione o un 3xx) ferma il comando prima di ogni
+// avvio. I byte vanno solo a un upload_url dello storage di fal.
 func (c *Client) put(ctx context.Context, path, mime string, data []byte, n int) (string, error) {
 	body, _ := json.Marshal(map[string]string{"file_name": fmt.Sprintf("giv-%d%s", n, uploadExt[mime]), "content_type": mime})
 	header := http.Header{
@@ -54,34 +57,29 @@ func (c *Client) put(ctx context.Context, path, mime string, data []byte, n int)
 		UploadURL string `json:"upload_url"`
 		FileURL   string `json:"file_url"`
 	}
-	if err := c.do(ctx, httpx.Retry, http.MethodPost, c.rest.String()+"/storage/upload/initiate?storage_type=fal-cdn-v3", body, header, &init); err != nil {
+	if err := c.do(ctx, httpx.NoRetry, http.MethodPost, c.rest.String()+"/storage/upload/initiate?storage_type=fal-cdn-v3", body, header, &init); err != nil {
 		return "", fmt.Errorf("caricamento di %s su fal: %w", path, err)
 	}
-	if err := checkExternal(init.UploadURL); err != nil {
+	if err := falStorage(init.UploadURL); err != nil {
 		return "", fmt.Errorf("caricamento di %s su fal: upload_url: %w", path, err)
 	}
 	if err := checkExternal(init.FileURL); err != nil {
 		return "", fmt.Errorf("caricamento di %s su fal: file_url: %w", path, err)
 	}
-	err := httpx.Retry(ctx, func() error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, init.UploadURL, bytes.NewReader(data))
-		if err != nil {
-			return fmt.Errorf("upload_url %s non valido", redact(init.UploadURL))
-		}
-		req.Header.Set("Content-Type", mime)
-		resp, err := c.ext.Do(req)
-		if err != nil {
-			return fmt.Errorf("PUT su %s: %w", redact(init.UploadURL), netError(err))
-		}
-		defer resp.Body.Close()
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return &httpx.Error{Prefix: name, Status: resp.StatusCode, Msg: "PUT su " + redact(init.UploadURL) + " rifiutato"}
-		}
-		return nil
-	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, init.UploadURL, bytes.NewReader(data))
 	if err != nil {
-		return "", fmt.Errorf("caricamento di %s su fal: %w", path, err)
+		return "", fmt.Errorf("caricamento di %s su fal: upload_url %s non valido", path, redact(init.UploadURL))
+	}
+	req.Header.Set("Content-Type", mime)
+	resp, err := c.ext.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("caricamento di %s su fal: PUT su %s: %w", path, redact(init.UploadURL), netError(err))
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("caricamento di %s su fal: %w", path,
+			&httpx.Error{Prefix: name, Status: resp.StatusCode, Msg: "PUT su " + redact(init.UploadURL) + " rifiutato"})
 	}
 	return init.FileURL, nil
 }

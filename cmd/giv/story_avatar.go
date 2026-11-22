@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -42,6 +43,17 @@ func (r *storyRunner) launchAvatar(ctx context.Context, i int, scene *story.Scen
 	}
 	if req.Audio, err = r.privateAudio(scene.Voce, work); err != nil {
 		return fail(fmt.Errorf("voce: %w", err))
+	}
+	if want := req.Source.AudioDuration; want > 0 {
+		// la stima e il tetto valgono per la voce misurata nel controllo: si
+		// rimisura la copia che parte, se è cambiata la scena non parte
+		info, err := mediaTool.Probe(ctx, req.Audio)
+		if err != nil || info.Audio == nil {
+			return fail(usageError("voce: %s non leggibile con ffprobe dopo la copia", scene.Voce))
+		}
+		if math.Abs(info.Duration-want) > 0.01 {
+			return fail(usageError("voce: %s cambiata dopo il controllo (%.2f s invece di %.2f s): rilancia giv story run", scene.Voce, info.Duration, want))
+		}
 	}
 	c, err := r.sc.client(job.provider)
 	if err != nil {

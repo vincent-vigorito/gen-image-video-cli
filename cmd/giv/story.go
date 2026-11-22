@@ -457,6 +457,11 @@ func (sc *storyChecker) avatar(scene *story.Scene, c sceneCheck) (sceneCheck, er
 	if err != nil {
 		return c, err
 	}
+	// con un tetto la stima dell'avatar vuole la durata misurata della voce:
+	// un costo dichiarato non basta, la spesa dipende dalla misura (decisione 15)
+	if job.plan.CostEstUSD == nil && s.TettoCostoUSD != nil {
+		return c, usageError("con tetto_costo_usd la scena avatar vuole la durata della voce misurata con ffprobe: costo non stimabile, costo_dichiarato_usd non basta")
+	}
 	sc.clips[scene.ID] = job
 	plan := job.plan
 	c.Provider, c.Model, c.PromptFinal, c.Warnings = plan.Provider, plan.Model, plan.Prompt, plan.Warnings
