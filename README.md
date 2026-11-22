@@ -733,7 +733,9 @@ Come monta:
   musica).
 - **sottotitoli**: un file `.ass`, `.ssa` o `.srt`, inciso nel video. Con `ritardo_voce`
   le righe che iniziano in una scena si spostano dello stesso ritardo, in una copia (il
-  file dei sottotitoli non cambia).
+  file dei sottotitoli non cambia). Con `montaggio.formati` o `--formato` un `.srt` sta
+  dentro i margini sicuri del formato (nel 9:16 sopra il 35% in basso, coperto dai Reels);
+  un `.ass` o `.ssa` resta col suo stile.
 - **uscita**: `montaggio.uscita`, altrimenti `<nome dello storyboard>.mp4`, sempre dentro
   la cartella dello storyboard anche seguendo i link. Si riscrive a ogni `giv story cut`;
   il file compare solo a montaggio riuscito. Tutto il montaggio sta entro 30 minuti.

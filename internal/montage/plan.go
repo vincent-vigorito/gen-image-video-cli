@@ -54,7 +54,11 @@ type Plan struct {
 	// (VoiceAt, fino all'inizio della clip successiva) si spostano dello
 	// stesso tempo, in una copia: il file non cambia.
 	Subtitles string
-	Output    string // file finale .mp4
+	// SafeSubtitles: un .srt, convertito da Montage, sta dentro i margini
+	// sicuri (Margins, o SafeMargins del formato) invece che nei margini di
+	// default di ffmpeg; un .ass o .ssa resta col suo stile.
+	SafeSubtitles bool
+	Output        string // file finale .mp4
 	// Root è la cartella che deve contenere Output, facoltativa. Con Root la
 	// cartella d'uscita si crea e il file si pubblica solo con operazioni
 	// vincolate a Root (os.Root): un link o una cartella sostituita durante il
