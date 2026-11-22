@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -39,13 +41,22 @@ type storyCutResult struct {
 	VideoCodec string   `json:"video_codec"`
 	AudioCodec string   `json:"audio_codec,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
+	Format     string   `json:"format,omitempty"` // con più formati: il formato del file
+}
+
+// storyCutFormats è l'uscita di giv story cut con montaggio.formati o
+// --formato: un risultato per formato, nell'ordine dello storyboard.
+type storyCutFormats struct {
+	Storyboard string           `json:"storyboard"`
+	Scenes     int              `json:"scenes"`
+	Formats    []storyCutResult `json:"formats"`
 }
 
 // runStoryCut è giv story cut: monta con ffmpeg le clip già presenti, senza
 // generazione e senza rete; il file d'uscita dello storyboard si riscrive a
 // ogni montaggio.
 func runStoryCut(args []string) error {
-	path, err := storyArg("cut", args)
+	path, only, err := storyCutArgs(args)
 	if err != nil {
 		return err
 	}
@@ -64,34 +75,57 @@ func runStoryCut(args []string) error {
 	if err != nil {
 		return err
 	}
-	plan, err := cutPlan(s, path)
+	formats, err := cutFormats(s, only)
 	if err != nil {
-		return err
+		return usageError("%s: %v", path, err)
 	}
-	plan.RootDir = root
+	// tutti i piani prima di montare: un problema in un formato ferma tutto
+	plans := make([]montage.Plan, len(formats))
+	for i, f := range formats {
+		if plans[i], err = cutPlanFor(s, path, f); err != nil {
+			return err
+		}
+		plans[i].RootDir = root
+	}
 	tool := montage.Tool{}
 	if err := tool.Check(); err != nil {
 		return &cliError{code: exitError, msg: err.Error()}
 	}
-	// una sola scadenza per le letture delle clip e per il montaggio
+	multi := &storyCutFormats{Storyboard: path, Scenes: len(plans[0].Clips), Formats: []storyCutResult{}}
+	for i := range plans {
+		out, err := cutOne(tool, path, &plans[i], formats[i])
+		if err != nil {
+			return err
+		}
+		if formats[i] == "" {
+			return output.PrintJSON(out)
+		}
+		multi.Formats = append(multi.Formats, *out)
+	}
+	return output.PrintJSON(multi)
+}
+
+// cutOne monta un formato (format vuoto: quello dello storyboard), con una
+// scadenza sola per le letture delle clip e per il montaggio.
+func cutOne(tool montage.Tool, path string, plan *montage.Plan, format string) (*storyCutResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), montage.DefaultTimeout)
 	defer cancel()
 	if err := keepAudio(ctx, tool, plan.Clips); err != nil {
 		if ctx.Err() != nil {
-			return err
+			return nil, err
 		}
-		return usageError("%s: %v", path, err)
+		return nil, usageError("%s: %v", path, err)
 	}
 	fmt.Fprintf(os.Stderr, "montaggio di %d scene in %s\n", len(plan.Clips), plan.Output)
-	res, err := tool.Montage(ctx, plan)
+	res, err := tool.Montage(ctx, *plan)
 	if err != nil {
 		if errors.Is(err, montage.ErrInvalid) {
-			return usageError("%s: %v", path, err)
+			return nil, usageError("%s: %v", path, err)
 		}
-		return err
+		return nil, err
 	}
 	out := storyCutResult{Storyboard: path, Output: res.Output, Scenes: len(plan.Clips),
-		ExpectedS: round3(res.Duration), Warnings: res.Warnings}
+		ExpectedS: round3(res.Duration), Warnings: res.Warnings, Format: format}
 	if i := res.Info; i != nil {
 		out.DurationS = round3(i.Duration)
 		if v := i.Video; v != nil {
@@ -104,7 +138,59 @@ func runStoryCut(args []string) error {
 	for _, w := range res.Warnings {
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
 	}
-	return output.PrintJSON(out)
+	return &out, nil
+}
+
+// storyCutArgs legge gli argomenti di giv story cut: il file dello storyboard
+// e --formato (anche dopo il file).
+func storyCutArgs(args []string) (path, format string, err error) {
+	fl := flag.NewFlagSet("story cut", flag.ExitOnError)
+	only := fl.String("formato", "", "monta solo questo formato")
+	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["cut"]) }
+	const use = "uso: giv story cut [--formato <r>] <storyboard.json>"
+	if err := fl.Parse(args); err != nil {
+		return "", "", usageError("%v", err)
+	}
+	rest := fl.Args()
+	if len(rest) == 0 {
+		return "", "", usageError(use)
+	}
+	path = rest[0]
+	if err := fl.Parse(rest[1:]); err != nil {
+		return "", "", usageError("%v", err)
+	}
+	if fl.NArg() > 0 {
+		return "", "", usageError(use)
+	}
+	set := false
+	fl.Visit(func(f *flag.Flag) { set = set || f.Name == "formato" })
+	if set && strings.TrimSpace(*only) == "" {
+		return "", "", usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
+	}
+	return path, *only, nil
+}
+
+// cutFormats sono i formati da montare: con only quello solo (fra
+// montaggio.formati, se ci sono), altrimenti montaggio.formati; senza
+// nessuno dei due un solo formato vuoto, quello dello storyboard come prima.
+func cutFormats(s *story.Storyboard, only string) ([]string, error) {
+	var declared []string
+	if s.Montaggio != nil {
+		declared = s.Montaggio.Formati
+	}
+	if only == "" {
+		if len(declared) == 0 {
+			return []string{""}, nil
+		}
+		return declared, nil
+	}
+	if !slices.Contains(story.Formati, only) {
+		return nil, fmt.Errorf("--formato %q sconosciuto (%s)", only, strings.Join(story.Formati, ", "))
+	}
+	if len(declared) > 0 && !slices.Contains(declared, only) {
+		return nil, fmt.Errorf("--formato %s non è fra montaggio.formati (%s)", only, strings.Join(declared, ", "))
+	}
+	return []string{only}, nil
 }
 
 func round3(v float64) float64 { return float64(int64(v*1000+0.5)) / 1000 }
@@ -113,8 +199,14 @@ func round3(v float64) float64 { return float64(int64(v*1000+0.5)) / 1000 }
 // scena (file della scena, o la clip generata da giv story run), voce,
 // transizione, musica, sottotitoli e uscita. Ogni problema è un errore d'uso.
 func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
+	return cutPlanFor(s, path, "")
+}
+
+// cutPlanFor è cutPlan per il formato aspect ("9:16"…; vuoto: quello dello
+// storyboard): stesso lato corto, file <uscita>-<WxH>.mp4.
+func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) {
 	var p montage.Plan
-	w, h, fps, err := cutFormat(s)
+	w, h, fps, err := cutFormatFor(s, aspect)
 	if err != nil {
 		return p, usageError("%s: %v", path, err)
 	}
@@ -122,6 +214,14 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 	m := s.Montaggio
 	if m == nil {
 		m = &story.Montaggio{}
+	}
+	switch m.Adatta {
+	case "ritaglio":
+		p.Fit = montage.FitCrop
+	case "sfocato":
+		p.Fit = montage.FitBlur
+	case "bande":
+		p.Fit = montage.FitPad
 	}
 	trans := montage.Transition{Kind: montage.Cut}
 	if m.Transizione == "dissolvenza" {
@@ -158,6 +258,7 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 		if sc.Voce != "" && sc.Tipo != story.Avatar {
 			c.Voice, c.VoiceAt = s.Path(sc.Voce), sc.Ritardo()
 		}
+		sceneCut(&c, sc)
 		p.Clips = append(p.Clips, c)
 	}
 	if len(missing) > 0 {
@@ -180,6 +281,10 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 	if out == "" {
 		out = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ".mp4"
 	}
+	if aspect != "" {
+		ext := filepath.Ext(out)
+		out = strings.TrimSuffix(out, ext) + "-" + strings.ReplaceAll(aspect, ":", "x") + ext
+	}
 	p.Output, p.Root = s.Path(out), s.Dir
 	// controllo anticipato, per un errore d'uso prima del montaggio; la
 	// pubblicazione resta comunque vincolata a Root
@@ -189,6 +294,52 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 	// il montato è il prodotto dello storyboard: rifare cut lo riscrive
 	p.Overwrite = true
 	return p, nil
+}
+
+// sceneCut porta nella clip fuoco, taglio e velocità della scena. Una scena
+// video o avatar tagliata o accelerata dura quanto il pezzo usato (la sua
+// durata è quella chiesta al modello), una clip la sua durata se c'è.
+func sceneCut(c *montage.Clip, sc *story.Scene) {
+	if f := sc.Fuoco; f != nil {
+		x, y := f.XY()
+		c.Focus = &montage.Focus{X: x, Y: y}
+	}
+	if sc.Taglio == nil && sc.Velocita == nil {
+		return
+	}
+	if t := sc.Taglio; t != nil {
+		c.TrimStart = t.Da
+		if t.A != nil {
+			c.TrimEnd = *t.A
+		}
+	}
+	if v := sc.Velocita; v != nil {
+		c.Speed = *v
+	}
+	if sc.Generata() {
+		c.Duration = 0
+	}
+}
+
+// retimedLength è la durata nel montaggio di una scena lunga length secondi
+// (0: ignota) con taglio e velocità; 0 se non si può sapere.
+func retimedLength(sc *story.Scene, length float64) float64 {
+	if sc.Taglio == nil && sc.Velocita == nil {
+		return length
+	}
+	if t := sc.Taglio; t != nil {
+		if t.A != nil && (length == 0 || *t.A < length) {
+			length = *t.A
+		}
+		if length == 0 {
+			return 0
+		}
+		length -= t.Da
+	}
+	if v := sc.Velocita; v != nil && *v > 0 {
+		length /= *v
+	}
+	return max(length, 0)
 }
 
 // keepAudio tiene l'audio delle clip che ne hanno uno (riprese vere, video
@@ -211,11 +362,17 @@ func keepAudio(ctx context.Context, tool montage.Tool, clips []montage.Clip) err
 // cutFormat ricava risoluzione e fps del montato: formato dello storyboard,
 // poi blocco default, poi 16:9 720p 30 fps. La risoluzione è il lato corto.
 func cutFormat(s *story.Storyboard) (w, h, fps int, err error) {
+	return cutFormatFor(s, "")
+}
+
+// cutFormatFor è cutFormat col rapporto forced ("9:16"…) al posto di quello
+// dello storyboard, se non è vuoto.
+func cutFormatFor(s *story.Storyboard, forced string) (w, h, fps int, err error) {
 	var f story.Formato
 	if s.Formato != nil {
 		f = *s.Formato
 	}
-	aspect := firstOf(f.Aspect, s.Default.Aspect, cutAspect)
+	aspect := firstOf(forced, f.Aspect, s.Default.Aspect, cutAspect)
 	res := firstOf(f.Risoluzione, s.Default.Risoluzione, cutResolution)
 	fps = f.FPS
 	if fps == 0 {
@@ -342,7 +499,7 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 		l := out.Scenes[i].length
 		if l == 0 && s.Scene[i].Tipo == story.Clip && ctx.Err() == nil {
 			if info, err := tool.Probe(ctx, s.Path(s.Scene[i].File)); err == nil {
-				l = info.Duration
+				l = retimedLength(&s.Scene[i], info.Duration)
 			}
 		}
 		if l <= 0 {
@@ -366,6 +523,37 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 		} else if d := end - starts[n]; d > cutVoiceSlack {
 			warn(i, fmt.Sprintf("la voce supera di %s s la fine del montaggio e viene tagliata: finisce a %s s, il montaggio dura %s s",
 				secs(d), secs(end), secs(starts[n])))
+		}
+	}
+}
+
+// titleWarnings avvisa dei titoli che escono dalla loro scena (durata
+// prevista nota) o che stanno in basso come i sottotitoli: in out.Warnings e
+// su stderr.
+func titleWarnings(s *story.Storyboard, out *storyCheck) {
+	m := s.Montaggio
+	if m == nil || len(m.Titoli) == 0 {
+		return
+	}
+	warn := func(w string) {
+		out.Warnings = append(out.Warnings, w)
+		fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
+	}
+	length := map[string]float64{}
+	for _, c := range out.Scenes {
+		length[c.ID] = c.length
+	}
+	for i, t := range m.Titoli {
+		d := 3.0
+		if t.Durata != nil {
+			d = *t.Durata
+		}
+		if l := length[t.Scena]; t.Scena != "" && l > 0 && t.Da+d > l+cutVoiceSlack {
+			warn(fmt.Sprintf("titolo n. %d: finisce a %s s della scena %s, che dura %s s", i+1,
+				strconv.FormatFloat(round3(t.Da+d), 'f', -1, 64), t.Scena, strconv.FormatFloat(round3(l), 'f', -1, 64)))
+		}
+		if pos := t.Posizione; m.Sottotitoli != "" && (pos == "" || strings.HasPrefix(pos, "basso")) {
+			warn(fmt.Sprintf("titolo n. %d: in basso come i sottotitoli, possono sovrapporsi (posizione alto o centro)", i+1))
 		}
 	}
 }

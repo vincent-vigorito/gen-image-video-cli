@@ -99,16 +99,20 @@ Flag (anche dopo il file):
                      con la stessa riserva e lo stesso tetto delle altre
   -h, --help         questo aiuto
 `,
-	"cut": `uso: giv story cut <storyboard.json>
+	"cut": `uso: giv story cut [--formato <r>] <storyboard.json>
 
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
 clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce,
-musica e sottotitoli del blocco montaggio. La voce di una scena avatar è già nella sua clip
-e non si aggiunge una seconda volta. Nessuna generazione e nessuna rete; il file
-d'uscita (montaggio.uscita, altrimenti <nome>.mp4) si riscrive a ogni montaggio.
+musica e sottotitoli del blocco montaggio, e taglio, velocita e fuoco delle scene. La
+voce di una scena avatar è già nella sua clip e non si aggiunge una seconda volta.
+Nessuna generazione e nessuna rete; il file d'uscita (montaggio.uscita, altrimenti
+<nome>.mp4) si riscrive a ogni montaggio. Con montaggio.formati un file per formato,
+<nome>-9x16.mp4…, adattato come dice montaggio.adatta (bande, ritaglio, sfocato).
 
-Flag:
-  -h, --help   questo aiuto
+Flag (anche dopo il file):
+  --formato <r>   monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra montaggio.formati,
+                  se ci sono): file <nome>-<WxH>.mp4
+  -h, --help      questo aiuto
 `,
 }
 
@@ -157,7 +161,8 @@ type storyCheck struct {
 	NotEstimated    []string       `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"` // spesa nello stato di scene non più nello storyboard: conta nel tetto
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
-	CapUSD          *float64       `json:"cap_usd,omitempty"` // tetto_costo_usd
+	CapUSD          *float64       `json:"cap_usd,omitempty"`  // tetto_costo_usd
+	Warnings        []string       `json:"warnings,omitempty"` // avvisi del montaggio (titoli)
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
@@ -260,6 +265,7 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		return nil, err
 	}
 	chk.voiceOverlaps(out)
+	titleWarnings(s, out)
 	out.RemovedScenes, out.removedExact = removedSpend(s, st)
 	out.RemovedSpentUSD = round4(out.removedExact)
 	if len(out.RemovedScenes) > 0 {
@@ -419,6 +425,10 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
 	c.length = float64(max(job.req.Duration, scene.Durata))
+	if t := scene.Taglio; t != nil && c.length > 0 && t.Da >= c.length {
+		return c, usageError("taglio.da %g s: la scena dura %g s", t.Da, c.length)
+	}
+	c.length = retimedLength(scene, c.length)
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
@@ -467,7 +477,7 @@ func (sc *storyChecker) avatar(scene *story.Scene, c sceneCheck) (sceneCheck, er
 	c.Provider, c.Model, c.PromptFinal, c.Warnings = plan.Provider, plan.Model, plan.Prompt, plan.Warnings
 	c.Inputs = map[string]any{"image": plan.Inputs.Image.Path, "audio": plan.Inputs.Audio.Path}
 	if d := job.req.Source.AudioDuration; d > 0 {
-		c.Params, c.length = map[string]any{"audio_duration_s": d}, d
+		c.Params, c.length = map[string]any{"audio_duration_s": d}, retimedLength(scene, d)
 	}
 	switch {
 	case plan.CostEstUSD != nil:

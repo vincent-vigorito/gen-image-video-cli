@@ -148,7 +148,8 @@ giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
 giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
 giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
                                               # genera le scene video (a pagamento), riprende da dove si era fermato
-giv story cut <storyboard.json>               # monta con ffmpeg le scene già pronte in un solo video
+giv story cut [--formato <r>] <storyboard.json>
+                                              # monta con ffmpeg le scene già pronte, un file per formato
 giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
@@ -178,7 +179,7 @@ prima o dopo.
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 | `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
-| `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
+| `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):

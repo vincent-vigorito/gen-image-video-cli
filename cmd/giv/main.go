@@ -205,7 +205,7 @@ Uso:
                    [--tutela prodotto|illustrazione] [--strict]
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
-                                   run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
+                                   run: --scene <id> [--new-keyframe] [--new-job]; cut: [--formato <r>]; aiuto: giv story help)
   giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv post <operazione> --video <file> [--out <dir>] [--name <nome>] [--dry-run]  rifinitura in locale con ffmpeg, gratuita (operazioni: giv post help)

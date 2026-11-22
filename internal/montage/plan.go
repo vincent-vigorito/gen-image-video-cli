@@ -45,7 +45,7 @@ type Plan struct {
 	Width  int    // larghezza finale in pixel, pari
 	Height int    // altezza finale in pixel, pari
 	FPS    int    // fotogrammi al secondo dell'uscita
-	Fit    string // FitPad (default) o FitCrop
+	Fit    string // FitPad (default), FitCrop o FitBlur
 	Clips  []Clip // in ordine di montaggio, almeno una
 	Music  *Music // musica sotto tutto il montato, facoltativa
 	// Subtitles è il file dei sottotitoli da incidere (.ass, .ssa o .srt),
@@ -83,6 +83,55 @@ type Clip struct {
 	VoiceAt   float64 // inizio della voce, in secondi dall'inizio della scena
 	// Transition è il passaggio dalla clip precedente; sulla prima si ignora.
 	Transition Transition
+	// Taglio e velocità di un video (non delle immagini): del file si usa il
+	// pezzo da TrimStart a TrimEnd secondi (TrimEnd 0: fino alla fine), a
+	// velocità Speed (da MinSpeed a MaxSpeed; 0 vale 1), audio compreso; la
+	// durata 0 in Montage è quella del pezzo divisa per Speed.
+	TrimStart float64
+	TrimEnd   float64
+	Speed     float64
+	// Focus è il punto da tenere quando FitCrop taglia; nil: il centro.
+	Focus *Focus
+}
+
+// retimed dice se la clip ha taglio o velocità.
+func (c Clip) retimed() bool {
+	return c.TrimStart != 0 || c.TrimEnd != 0 || (c.Speed != 0 && c.Speed != 1)
+}
+
+// speed è la velocità effettiva della clip.
+func (c Clip) speed() float64 {
+	if c.Speed == 0 {
+		return 1
+	}
+	return c.Speed
+}
+
+// checkRetime controlla taglio, velocità e fuoco della clip.
+func (c Clip) checkRetime() error {
+	if c.Focus != nil {
+		if err := c.Focus.Check(); err != nil {
+			return err
+		}
+	}
+	if !c.retimed() {
+		return nil
+	}
+	if c.Image {
+		return errors.New("taglio e velocità valgono per i video, non per le immagini")
+	}
+	if !finite(c.TrimStart) || c.TrimStart < 0 {
+		return fmt.Errorf("inizio del taglio %v: secondi da 0 in su", c.TrimStart)
+	}
+	if !finite(c.TrimEnd) || c.TrimEnd < 0 || (c.TrimEnd > 0 && c.TrimEnd <= c.TrimStart) {
+		return fmt.Errorf("fine del taglio %v: secondi dopo l'inizio (%s)", c.TrimEnd, num(c.TrimStart))
+	}
+	if c.Speed != 0 {
+		if err := (Speed{Factor: c.Speed}).Check(); err != nil {
+			return errors.New(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+		}
+	}
+	return nil
 }
 
 // Transition è il passaggio fra due clip.
@@ -138,8 +187,8 @@ func (p Plan) checkStatic(durations bool) error {
 	if p.FPS < 1 || p.FPS > maxFPS {
 		return invalid("fps %d: da 1 a %d", p.FPS, maxFPS)
 	}
-	if p.Fit != "" && p.Fit != FitPad && p.Fit != FitCrop {
-		return invalid("adattamento %q: valori ammessi %s, %s", p.Fit, FitPad, FitCrop)
+	if p.Fit != "" && p.Fit != FitPad && p.Fit != FitCrop && p.Fit != FitBlur {
+		return invalid("adattamento %q: valori ammessi %s, %s, %s", p.Fit, FitPad, FitCrop, FitBlur)
 	}
 	if len(p.Clips) == 0 {
 		return invalid("nessuna clip")
@@ -162,6 +211,9 @@ func (p Plan) checkStatic(durations bool) error {
 		}
 		if c.Image && c.KeepAudio {
 			return invalid("clip %d: un'immagine non ha audio da tenere", i+1)
+		}
+		if err := c.checkRetime(); err != nil {
+			return invalid("clip %d: %v", i+1, err)
 		}
 		if c.Voice != "" {
 			if err := checkPath(c.Voice); err != nil {
@@ -384,6 +436,13 @@ func Args(p Plan) ([]string, error) {
 		if c.Image {
 			err = addInput(c.Path, "-loop", "1", "-framerate", strconv.Itoa(p.FPS), "-t", num(c.Duration),
 				"-protocol_whitelist", "file", "-f", "image2", "-pattern_type", "none")
+		} else if c.TrimStart > 0 || c.TrimEnd > 0 {
+			// il pezzo della clip: -ss e -t sull'ingresso valgono per video e audio
+			opts := []string{"-ss", num(c.TrimStart)}
+			if c.TrimEnd > 0 {
+				opts = append(opts, "-t", num(c.TrimEnd-c.TrimStart))
+			}
+			err = addInput(c.Path, append(opts, inputOpts(videoFormats)...)...)
 		} else {
 			err = addInput(c.Path, inputOpts(videoFormats)...)
 		}
@@ -422,13 +481,39 @@ func Args(p Plan) ([]string, error) {
 	var g []string
 	for i, c := range p.Clips {
 		d := num(c.Duration)
+		// velocità prima del formato: tempi del video divisi per Speed
+		var pre string
+		if sp := c.speed(); sp != 1 {
+			pre = "setpts=(PTS-STARTPTS)/" + num(sp) + ","
+		}
 		// formato comune, poi durata esatta: l'ultimo fotogramma si allunga se
 		// la clip è corta e il taglio toglie l'eccesso; fps alla fine, perché
 		// tpad e trim perdono la frequenza che xfade vuole uguale sui due lati.
-		g = append(g, fmt.Sprintf("[%d:v:0]%s,setsar=1,format=yuv420p,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=%s,trim=duration=%s,setpts=PTS-STARTPTS,fps=%d[v%d]",
-			i, fit, d, d, fps, i))
+		tail := fmt.Sprintf("format=yuv420p,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=%s,trim=duration=%s,setpts=PTS-STARTPTS,fps=%d[v%d]", d, d, fps, i)
+		switch {
+		case p.Fit == FitBlur:
+			// due rami (Reframe.Graph): fondo sfocato e video intero
+			in := fmt.Sprintf("%d:v:0", i)
+			if pre != "" {
+				g = append(g, fmt.Sprintf("[%d:v:0]%s[s%d]", i, strings.TrimSuffix(pre, ","), i))
+				in = fmt.Sprintf("s%d", i)
+			}
+			rg, err := Reframe{Width: w, Height: h, Fit: FitBlur}.Graph(in, fmt.Sprintf("r%d", i))
+			if err != nil {
+				return nil, fmt.Errorf("clip %d: %w", i+1, err)
+			}
+			g = append(g, rg, fmt.Sprintf("[r%d]%s", i, tail))
+		case p.Fit == FitCrop && c.Focus != nil && *c.Focus != FocusCenter:
+			g = append(g, fmt.Sprintf("[%d:v:0]%s%s,setsar=1,%s", i, pre, cropChain(w, h, *c.Focus), tail))
+		default:
+			g = append(g, fmt.Sprintf("[%d:v:0]%s%s,setsar=1,%s", i, pre, fit, tail))
+		}
 		if c.KeepAudio {
-			g = append(g, fmt.Sprintf("[%d:a:0]%s,apad,atrim=duration=%s,asetpts=PTS-STARTPTS[a%d]", i, audioFmt, d, i))
+			var tempo string
+			if sp := c.speed(); sp != 1 {
+				tempo = "asetpts=PTS-STARTPTS," + atempo(sp) + ","
+			}
+			g = append(g, fmt.Sprintf("[%d:a:0]%s,%sapad,atrim=duration=%s,asetpts=PTS-STARTPTS[a%d]", i, audioFmt, tempo, d, i))
 		} else {
 			g = append(g, fmt.Sprintf("anullsrc=r=%d:cl=stereo,atrim=duration=%s[a%d]", sampleRate, d, i))
 		}

@@ -566,14 +566,27 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 			if c.KeepAudio && info.Audio == nil {
 				return nil, invalid("clip %d: %s non ha una traccia audio da tenere", i+1, c.Path)
 			}
+			length := info.Duration // secondi della clip nel montato, a velocità normale
+			if c.retimed() && length > 0 {
+				if c.TrimStart >= length {
+					return nil, invalid("clip %d: il taglio parte a %s s, il file %s dura %s s", i+1, num(c.TrimStart), c.Path, num(length))
+				}
+				if c.TrimEnd > length+0.05 {
+					res.Warnings = append(res.Warnings, fmt.Sprintf("clip %d: il taglio finisce a %s s, il file dura %s s", i+1, num(c.TrimEnd), num(length)))
+				}
+				if c.TrimEnd > 0 {
+					length = min(length, c.TrimEnd)
+				}
+				length = (length - c.TrimStart) / c.speed()
+			}
 			if c.Duration == 0 {
-				if info.Duration <= 0 {
+				if length <= 0 {
 					return nil, invalid("clip %d: durata di %s ignota, indicala nel piano", i+1, c.Path)
 				}
-				c.Duration = info.Duration
-			} else if info.Duration > 0 && info.Duration+0.05 < c.Duration {
+				c.Duration = length
+			} else if length > 0 && length+0.05 < c.Duration {
 				res.Warnings = append(res.Warnings, fmt.Sprintf("clip %d: il file dura %s s, la scena %s s: l'ultimo fotogramma resta fermo",
-					i+1, num(info.Duration), num(c.Duration)))
+					i+1, num(length), num(c.Duration)))
 			}
 		}
 		if c.Voice != "" {
