@@ -159,6 +159,9 @@ giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1
                                               # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                               # personaggio che parla (fal, job asincrono, a pagamento)
+giv post <operazione> --video <file> [flag dell'operazione] [--out D] [--name S] [--dry-run]
+                                              # rifinitura in locale con ffmpeg, gratuita: trim, speed, freeze,
+                                              # reframe, overlay, mix (giv post help)
 giv version
 ```
 
@@ -179,6 +182,7 @@ prima o dopo.
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 | `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
 | `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
+| `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -500,6 +504,94 @@ giv job fetch --provider xai --timeout 30m --name s2 <id>
 - `--timeout` (di `giv video` e di `job fetch`) copre l'attesa, i controlli dello stato e
   lo scaricamento.
 
+## Rifinitura in locale: `giv post`
+
+`giv post <operazione>` rifinisce un video che c'è già con `ffmpeg` e `ffprobe` (da
+installare e nel PATH): niente rete, nessuna chiave, nessuna spesa.
+
+```bash
+giv post help                                     # operazioni disponibili; giv post <operazione> --help
+giv post trim    --video spot.mp4 --start 0.5 --end 6
+giv post speed   --video spot.mp4 --factor 0.5
+giv post freeze  --video spot.mp4 --at 4 --duration 2
+giv post reframe --video spot.mp4 --aspect 9:16 --fit crop --focus 0.4
+giv post overlay --video spot.mp4 --logo img/logo.png --logo-pos alto-destra --logo-width 0.12 \
+                 --title "Crema alle erbe" --from 1 --duration 3 --pos basso \
+                 --end-card img/sfondo.png --end-text "Swerpify" --end-duration 3
+giv post mix     --video spot.mp4 --music musica.mp3 --music-volume 0.25 --duck \
+                 --voice voce.wav --voice-at 0.5 --loudness -14
+```
+
+Comune a tutte le operazioni:
+
+- **flag comuni**: `--video <file>` (obbligatorio, file locale con una traccia video),
+  `--out <dir>` (default `out`, creata se manca), `--name <nome>` (nome del file senza
+  cartelle; default `<nome del video>-<operazione>`), `--dry-run` (solo controlli e piano
+  in JSON, nessun file);
+- **mai sovrascrivere**: l'ingresso non si modifica mai; se il nome d'uscita è già preso
+  il file nuovo prende `-2`, `-3`… (leggere il percorso dal JSON); un'uscita che è il file
+  in ingresso esce con codice 2. Il file compare in `--out` solo a lavoro riuscito;
+- **controlli**: un valore non valido (numero fuori intervallo, `NaN`, flag vuoto, flag che
+  dipende da un altro assente, posizione o colore fuori elenco) esce con codice 2 prima di
+  lanciare ffmpeg; ffmpeg o ffprobe mancanti danno codice 1. Tutto entro 30 minuti;
+- **uscita**: su stdout solo il JSON del risultato (`command`, per esempio `post trim`;
+  `provider` `local`, `model` `ffmpeg`; `inputs` per ruolo col percorso e l'impronta;
+  `params`; `files`; `duration_s`, `width`, `height`, `fps`, `video_codec`, `audio_codec`;
+  `cost_usd` 0; `warnings`), avvisi ed errori su stderr; una riga a costo zero in
+  `giv-log.jsonl`. Video H.264, audio AAC 48 kHz, `moov` in testa.
+
+| Operazione | Flag | Cosa fa |
+|---|---|---|
+| `trim` | `--start <s>` (default 0) · `--end <s>` (default: la fine) | tiene solo il tratto fra i due istanti |
+| `speed` | `--factor <0.25-4>` obbligatorio | 2 = due volte più veloce (metà durata), 0.5 = rallentato; l'audio segue alla stessa velocità senza cambiare tono (`atempo`) |
+| `freeze` | `--at <s>` (default 0) · `--duration <s>` obbligatorio (fino a 60) | ferma il fotogramma a `--at` per `--duration` secondi, poi il video riprende; l'audio fa una pausa di silenzio; tempi arrotondati al fotogramma |
+| `reframe` | `--aspect 9:16\|1:1\|4:5\|16:9` obbligatorio · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` | cambio formato: il lato corto resta quello del video (da 1920×1080: 1080×1920, 1080×1080, 1080×1350); `crop` riempie il quadro tagliando i bordi, `pad` mette bande nere, `blur` mette il video intero sopra lo stesso video sfocato; `--focus` (solo `crop`, da 0 a 1, default 0.5,0.5) dice quale punto tenere. Nome di default `<video>-9x16.mp4`… |
+| `overlay` | vedi sotto | logo, titolo e cartello finale |
+| `mix` | vedi sotto | musica, voce fuori campo e volume finale |
+
+Con `reframe` l'inquadratura è **fissa**: un soggetto che si sposta può uscire dal quadro;
+controllare l'uscita (o scegliere `pad`/`blur`).
+
+**`giv post overlay`** posa sul video, dentro i **margini sicuri** del formato (14% in
+alto, 35% in basso e 6% ai lati per i 9:16, dalla guida annunci Meta per i Reels; 5% per
+lato per gli altri formati):
+
+- un **logo**: `--logo <png|jpg|webp>` (la trasparenza resta), `--logo-pos` (default
+  `alto-destra`), `--logo-width` (frazione della larghezza del video, default 0.12),
+  `--logo-opacity` (da 0 a 1, default 1), `--logo-from` e `--logo-to` (secondi; default
+  tutto il video). Un logo che non sta nei margini esce con codice 2;
+- un **titolo**: `--title "<testo>"`, `--from <s>` (default 0), `--duration <s>`
+  (default 3, dentro la durata del video), `--pos` (default `basso`), con una dissolvenza
+  di 0,3 s;
+- un **cartello finale** accodato dopo il video, lungo `--end-duration` secondi (default
+  3, al più 60; sotto il cartello l'audio è muto): `--end-color <#RRGGBB>` (sfondo, default
+  nero), `--end-card <immagine>` (sfondo, contenuta nel quadro sul colore), `--end-logo
+  <immagine>` (al centro, o sopra il testo), `--end-text` (al centro), `--end-subtext` (in
+  basso, più piccolo). Basta uno di questi flag per avere il cartello;
+- per titolo e cartello: `--font <ttf|otf|ttc>` (default DejaVu Sans, se installato) e
+  `--color <#RRGGBB>` (default bianco, col bordo nero).
+
+Posizioni: `alto-sinistra`, `alto`, `alto-destra`, `sinistra`, `centro`, `destra`,
+`basso-sinistra`, `basso`, `basso-destra`. I testi si scrivono **alla lettera** (graffe,
+barre inverse e `\N` compresi; un a capo va a riga nuova) in un file `.ass` generato da
+giv, mai nella stringa dei filtri di ffmpeg. Il JSON riporta in `params` il riquadro del
+logo in pixel (`logo.box`, `end_card.logo_box`), i margini e `duration_out`.
+
+**`giv post mix`** lavora sull'audio:
+
+- `--music <file>` (wav, mp3, m4a, ogg, flac…): ripetuta da capo se è più corta del video,
+  tagliata alla fine; `--music-volume` (moltiplicatore oltre 0 e fino a 4, default 0.25);
+  `--duck` abbassa la musica mentre parla la voce (servono `--music` e `--voice`);
+- `--voice <file>`: voce fuori campo sommata all'audio del video, da `--voice-at <s>`
+  (default 0); la parte oltre la fine del video si taglia;
+- `--loudness <LUFS>`: volume finale in LUFS integrati, da -70 a -5, misurato e corretto in
+  due passate (`loudnorm`); default **-14**, la convenzione dei social (nessuna fonte
+  ufficiale, quindi impostabile); `off` lascia il volume com'è.
+
+L'audio del video resta e si somma a voce e musica (senza audio si parte dal silenzio); il
+video si copia senza ricodifica se è già H.264. Serve almeno uno fra `--music`, `--voice` e
+un `--loudness` diverso da `off`.
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -751,7 +843,8 @@ Da quel momento qualsiasi sessione sa usare il CLI: contratto di output, matrice
 provider, ricette (reference di stile, image-to-video, spot da foto di prodotto, mascotte
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
-allungare, modificare e ingrandire una clip, personaggio che parla),
+allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
+con `giv post`),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -778,7 +871,7 @@ internal/caps/            capacità e prezzi dei modelli video (OpenRouter /vide
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
-internal/montage/         montaggio con ffmpeg e ffprobe, per giv story cut
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto

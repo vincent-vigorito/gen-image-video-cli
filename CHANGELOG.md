@@ -4,6 +4,38 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.11.0]
+
+> **Tutto in locale**: i comandi nuovi lavorano con `ffmpeg` e `ffprobe` sui file che ci
+> sono già, senza rete, chiavi né spesa. **Convenzioni, non valori ufficiali**: il volume
+> finale di -14 LUFS di `giv post mix` (nessuna fonte ufficiale dei canali: è
+> impostabile con `--loudness`) e i margini sicuri dei formati diversi dal 9:16 (5% per
+> lato); ufficiali solo i margini del 9:16 (guida annunci Meta per i Reels: 14% in alto,
+> 35% in basso, 6% ai lati).
+
+### Aggiunto
+
+- **`giv post <operazione>`**: rifinitura di un video in locale, gratuita. Flag comuni
+  `--video`, `--out`, `--name`, `--dry-run`; l'ingresso non si sovrascrive mai (un nome
+  preso dà `-2`, `-3`…, un'uscita uguale all'ingresso esce con codice 2), il file compare
+  a lavoro riuscito; JSON su stdout con `command` (`post trim`…), `provider` `local`,
+  `model` `ffmpeg`, `inputs`, `params`, misure del file e `cost_usd` 0, e una riga a costo
+  zero in `giv-log.jsonl`; valori non validi con codice 2 prima di lanciare ffmpeg.
+  - `trim` (`--start`, `--end`), `speed` (`--factor` da 0,25 a 4, audio alla stessa
+    velocità con `atempo`), `freeze` (`--at`, `--duration` fino a 60 s, audio in pausa).
+  - `reframe --aspect 9:16|1:1|4:5|16:9 [--fit crop|pad|blur] [--focus <x>[,<y>]]`: il lato
+    corto resta quello del video; `--focus` sceglie il punto da tenere nel ritaglio
+    (inquadratura fissa).
+  - `overlay`: logo (`--logo`, `--logo-pos`, `--logo-width`, `--logo-opacity`,
+    `--logo-from`, `--logo-to`), titolo (`--title`, `--from`, `--duration`, `--pos`) e
+    cartello finale accodato (`--end-card`, `--end-color`, `--end-logo`, `--end-text`,
+    `--end-subtext`, `--end-duration`), con `--font` e `--color`; tutto dentro i margini
+    sicuri; testi resi alla lettera in un file `.ass` generato, mai nei filtri di ffmpeg.
+  - `mix`: musica (`--music`, `--music-volume`, ripetuta o tagliata sulla durata del
+    video), `--duck` che la abbassa sotto la voce, voce fuori campo (`--voice`,
+    `--voice-at`), volume finale in due passate (`--loudness`, default -14 LUFS, `off`
+    per lasciarlo com'è).
+
 ## [0.10.0] - 2026-11-22
 
 > **Non ancora provati dal vivo**: il provider fal (`giv avatar`, Kling 3 Pro, Kling 4.0 con

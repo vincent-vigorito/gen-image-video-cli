@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -61,6 +61,9 @@ giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1
                                                 # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                                 # personaggio che parla (fal, a pagamento)
+giv post <operazione> --video <file> [flag] [--out D] [--name S] [--dry-run]
+                                                # rifinitura in locale con ffmpeg, gratis: trim, speed,
+                                                # freeze, reframe, overlay, mix (giv post help)
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
@@ -105,6 +108,14 @@ gemini, `--image` e `--audio` per avatar), `--duration` (extend), `--factor` e `
 (upscale; `--mode` e prompt solo openrouter), `--model` (avatar `standard|pro`),
 `--dry-run`, `--max-cost`, `--strict`, `--timeout`, `--out`, `--name`; ogni altro flag di
 `giv video` è rifiutato con codice 2.
+`post <operazione>` (locale, nessuna chiave né spesa): `--video <file>` obbligatorio,
+`--out`, `--name`, `--dry-run`; `trim --start --end` · `speed --factor 0.25-4` ·
+`freeze --at --duration` · `reframe --aspect 9:16|1:1|4:5|16:9 --fit crop|pad|blur --focus
+<x>[,<y>]` · `overlay --logo --logo-pos --logo-width --logo-opacity --logo-from --logo-to
+--title --from --duration --pos --end-card --end-color --end-logo --end-text --end-subtext
+--end-duration --font --color` · `mix --music --music-volume --duck --voice --voice-at
+--loudness -14|off`. JSON con `command` `post <operazione>`, `provider` `local`,
+`cost_usd` 0; l'ingresso non si sovrascrive mai (nome preso → `-2`, `-3`…).
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -403,6 +414,28 @@ file già pronti):
    farla partire dopo. I tempi delle frasi per i sottotitoli (`montaggio.sottotitoli`) si
    ricavano dalla trascrizione automatica del WAV, a partire dall'inizio della scena:
    `giv story cut` sposta da solo le righe del `ritardo_voce`.
+
+**Rifinire uno spot in locale** (gratis, nessuna chiamata; ogni passo scrive un file nuovo
+in `--out` e ne dà il percorso in `files[0].path` del JSON):
+
+```bash
+./bin/giv post trim    --video out/spot.mp4 --start 0.4 --name spot-a          # via l'inizio fermo
+./bin/giv post reframe --video out/spot-a.mp4 --aspect 9:16 --focus 0.45       # → out/spot-a-9x16.mp4
+./bin/giv post overlay --video out/spot-a-9x16.mp4 --logo img/logo.png \
+  --title "Crema alle erbe" --from 1 --duration 3 \
+  --end-color "#1E3A2B" --end-logo img/logo.png --end-text "Swerpify" --end-subtext "swerpify.it"
+./bin/giv post mix     --video out/spot-a-9x16-overlay.mp4 --music musica.mp3 --duck \
+  --voice voce.wav --voice-at 0.5                                               # volume finale -14 LUFS
+```
+
+- Prima `--dry-run` se serve vedere il piano: stessi controlli, nessun file.
+- `reframe` ha l'inquadratura fissa: controllare i fotogrammi (il soggetto può uscire dal
+  quadro) e spostare `--focus`, o usare `--fit blur`.
+- `overlay` tiene logo e titolo dentro i margini sicuri del formato (9:16: 14% alto, 35%
+  basso, 6% lati); i testi sono resi alla lettera (niente tag `.ass`). Il cartello finale
+  allunga il video di `--end-duration` (default 3 s) con audio muto: per una musica che
+  copra anche il cartello fare `mix` **dopo** `overlay`.
+- `mix --loudness -14` è una convenzione dei social, non un requisito ufficiale.
 
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
 per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)
