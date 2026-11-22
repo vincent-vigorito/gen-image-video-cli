@@ -203,6 +203,7 @@ type sceneCheck struct {
 	Keyframe        *keyframeCheck `json:"keyframe,omitempty"`
 	File            string         `json:"file,omitempty"`
 	Voice           string         `json:"voice,omitempty"`
+	VoiceDelayS     *float64       `json:"voice_delay_s,omitempty"` // ritardo_voce
 	CostEstUSD      *float64       `json:"cost_est_usd,omitempty"`
 	CostSource      string         `json:"cost_source,omitempty"`
 	CostDeclaredUSD *float64       `json:"cost_declared_usd,omitempty"`
@@ -381,12 +382,10 @@ func (sc *storyChecker) client(name string) (*storyClient, error) {
 }
 
 func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
-	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce}
+	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce, VoiceDelayS: scene.RitardoVoce}
 	if scene.Tipo != story.Video {
 		c.File = scene.File
-		if w := sc.voiceWarning(scene, float64(scene.Durata)); w != "" {
-			c.Warnings = append(c.Warnings, w)
-		}
+		c.voiceWarning(sc, scene, float64(scene.Durata))
 		return c, nil
 	}
 	o, err := sc.videoOptions(scene)
@@ -403,9 +402,7 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	plan := job.plan
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
-	if w := sc.voiceWarning(scene, float64(max(job.req.Duration, scene.Durata))); w != "" {
-		c.Warnings = append(c.Warnings, w)
-	}
+	c.voiceWarning(sc, scene, float64(max(job.req.Duration, scene.Durata)))
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
@@ -426,6 +423,14 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 		}
 	}
 	return c, nil
+}
+
+// voiceWarning aggiunge alla scena l'avviso sulla voce, se c'è, e lo scrive su stderr.
+func (c *sceneCheck) voiceWarning(sc *storyChecker, scene *story.Scene, sceneSeconds float64) {
+	if w := sc.voiceWarning(scene, sceneSeconds); w != "" {
+		c.Warnings = append(c.Warnings, w)
+		fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", scene.ID, w)
+	}
 }
 
 // videoOptions traduce una scena video nei parametri di giv video: la scena

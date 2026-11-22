@@ -142,7 +142,7 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 			return p, usageError("%s: scena %s: tipo %q non montabile", path, sc.ID, sc.Tipo)
 		}
 		if sc.Voce != "" {
-			c.Voice = s.Path(sc.Voce)
+			c.Voice, c.VoiceAt = s.Path(sc.Voce), sc.Ritardo()
 		}
 		p.Clips = append(p.Clips, c)
 	}
@@ -268,8 +268,8 @@ func insideDir(root, dir string) error {
 	return nil
 }
 
-// voiceWarning confronta la durata della voce con quella della scena (0 =
-// ignota, nessun confronto); restituisce l'avviso o "". Le letture con
+// voiceWarning confronta ritardo_voce più la durata della voce con la durata
+// della scena (0 = ignota, nessun confronto); restituisce l'avviso o "". Le letture con
 // ffprobe di tutto lo story check stanno entro montage.ProbeTimeout, dalla
 // prima.
 func (chk *storyChecker) voiceWarning(sc *story.Scene, sceneSeconds float64) string {
@@ -302,11 +302,17 @@ func (chk *storyChecker) voiceWarning(sc *story.Scene, sceneSeconds float64) str
 			sceneSeconds = info.Duration
 		}
 	}
-	if sceneSeconds > 0 && voice.Duration > sceneSeconds+cutVoiceSlack {
-		return fmt.Sprintf("la voce dura %s s, più della scena (%s s): continua sulla scena dopo o viene tagliata a fine montaggio",
-			strconv.FormatFloat(round3(voice.Duration), 'f', -1, 64), strconv.FormatFloat(round3(sceneSeconds), 'f', -1, 64))
+	at := sc.Ritardo()
+	if sceneSeconds == 0 || at+voice.Duration <= sceneSeconds+cutVoiceSlack {
+		return ""
 	}
-	return ""
+	secs := func(v float64) string { return strconv.FormatFloat(round3(v), 'f', -1, 64) }
+	if at > 0 {
+		return fmt.Sprintf("la voce parte a %s s e dura %s s, fino a %s s: oltre la fine della scena (%s s), continua sulla scena dopo o viene tagliata a fine montaggio",
+			secs(at), secs(voice.Duration), secs(at+voice.Duration), secs(sceneSeconds))
+	}
+	return fmt.Sprintf("la voce dura %s s, più della scena (%s s): continua sulla scena dopo o viene tagliata a fine montaggio",
+		secs(voice.Duration), secs(sceneSeconds))
 }
 
 // sceneMissing descrive una scena video senza clip da montare: l'errore di
