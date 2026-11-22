@@ -54,14 +54,16 @@ Flag:
   --name <nome>          base dei nomi: <nome>.wav e <nome>.tempi.json (default dal testo)
   --dry-run              nessuna chiamata: stampa richiesta e costo stimato (JSON)
   --max-cost <usd>       rifiuta (codice 2) se il costo stimato supera il tetto o non è stimabile
+                         (gemini sempre: il suo costo non ha un massimo garantito)
   --voices               elenca le voci invece di generare
 
 Testo al massimo 15000 caratteri (gemini 6000, pronunce comprese). Prezzi: xai 15 $ per
 milione di caratteri del testo inviato (le pronunce non cambiano il conto); gemini 0,50 $
 per milione di token di testo e 9 $ (flash-lite 6 $) per milione di token audio, 25 al
-secondo, il doppio dal 01/01/2027; la stima di gemini, su cui vale --max-cost, è il massimo
-per richiesta dai limiti del modello (circa 0,15 $, 0,30 $ dal 2027), il costo viene dai
-token riportati o dalla durata. Uscita: il WAV, i tempi per carattere se il provider li dà
+secondo, il doppio dal 01/01/2027. Gemini non ha un massimo garantito: con --max-cost esce
+con codice 2 (usa xai o togli il tetto); senza tetto parte con un avviso e una stima
+probabile sul limite di token della richiesta (circa 0,15 $, 0,30 $ dal 2027); il costo
+viene dai token riportati o dalla durata. Uscita: il WAV, i tempi per carattere se il provider li dà
 (xai), e su stdout il JSON con file, durata misurata, caratteri e costo.
 `
 
@@ -256,6 +258,10 @@ func prepareVoice(o voiceOptions) (*voiceJob, error) {
 		plan.CostEstUSD, plan.CostSource = &est.USD, est.Source
 	}
 	if o.MaxCost != nil {
+		// gemini: nessun massimo garantito, con un tetto non parte (decisione 22)
+		if r := speech.CapRefusal(req.Provider); r != "" {
+			return nil, usageError("--max-cost: costo non stimabile (%s)", r)
+		}
 		if est == nil {
 			return nil, usageError("--max-cost: costo non stimabile (%s)", why)
 		}
@@ -264,8 +270,15 @@ func prepareVoice(o voiceOptions) (*voiceJob, error) {
 			return nil, usageError("costo stimato %.6f $ oltre --max-cost %.6f $ (%s)", est.USD, *o.MaxCost, est.Source)
 		}
 	}
-	if est == nil {
-		msg := "stima del costo non disponibile: " + why
+	var msg string
+	switch {
+	case est == nil:
+		msg = "stima del costo non disponibile: " + why
+	case est.Probable:
+		msg = fmt.Sprintf("il costo della voce %s non ha un massimo garantito: stima probabile %.6f $ (%d token d'uscita al massimo nella richiesta)",
+			req.Provider, est.USD, speech.MaxGeminiOutputTokens)
+	}
+	if msg != "" {
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", msg)
 		plan.Warnings = append(plan.Warnings, msg)
 	}
