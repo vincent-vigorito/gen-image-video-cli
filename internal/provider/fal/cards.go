@@ -19,6 +19,7 @@ type card struct {
 }
 
 var cards = map[string]*card{
+	"kling-4.0":        {endpoint: "kling/v4/image-to-video", body: klingV4Body},
 	"kling-v3-pro":     {endpoint: "fal-ai/kling-video/v3/pro/image-to-video", body: klingV3Body},
 	"seedance-2.0-ref": {endpoint: "bytedance/seedance-2.0/reference-to-video", body: seedanceBody},
 }
@@ -84,11 +85,58 @@ func klingV3Body(req provider.VideoRequest, up func(string) (string, error)) (ma
 		}
 		b["elements"] = []map[string]any{{"frontal_image_url": urls[0], "reference_image_urls": urls[1:]}}
 	}
+	if len(req.Shots) > 0 {
+		shots := make([]map[string]any, len(req.Shots))
+		for i, s := range req.Shots {
+			shots[i] = map[string]any{"prompt": s.Prompt, "duration": strconv.Itoa(s.Duration)}
+		}
+		b["multi_prompt"] = shots
+	}
 	if req.Duration > 0 {
 		b["duration"] = strconv.Itoa(req.Duration)
 	}
 	if req.Audio != nil {
 		b["generate_audio"] = *req.Audio
+	}
+	return b, nil
+}
+
+// klingV4Body: kling/v4/image-to-video. Durata intera; fotogrammi intermedi
+// in ordine in middle_image_urls; con le inquadrature (multi_prompt) niente
+// prompt libero e durata = somma; risoluzione sempre indicata (la scheda in
+// caps mette il default).
+func klingV4Body(req provider.VideoRequest, up func(string) (string, error)) (map[string]any, error) {
+	b := base(req)
+	if req.Prompt != "" {
+		b["prompt"] = req.Prompt
+	}
+	start, err := up(req.Image)
+	if err != nil {
+		return nil, err
+	}
+	b["start_image_url"] = start
+	if len(req.Keyframes) > 0 {
+		if b["middle_image_urls"], err = uploadAll(req.Keyframes, up); err != nil {
+			return nil, err
+		}
+	}
+	if req.LastFrame != "" {
+		if b["end_image_url"], err = up(req.LastFrame); err != nil {
+			return nil, err
+		}
+	}
+	if len(req.Shots) > 0 {
+		shots := make([]map[string]any, len(req.Shots))
+		for i, s := range req.Shots {
+			shots[i] = map[string]any{"prompt": s.Prompt, "duration": s.Duration}
+		}
+		b["multi_prompt"] = shots
+	}
+	if req.Duration > 0 {
+		b["duration"] = req.Duration
+	}
+	if req.Resolution != "" {
+		b["resolution"] = strings.ToLower(req.Resolution)
 	}
 	return b, nil
 }

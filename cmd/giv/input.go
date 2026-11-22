@@ -34,6 +34,11 @@ var inputHTTP = &http.Client{
 		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 			return errRedirectScheme
 		}
+		if req.URL.User != nil {
+			return errRedirectUser
+		}
+		// percorso e query degli URL firmati non passano all'host successivo
+		req.Header.Del("Referer")
 		return nil
 	},
 }
@@ -41,6 +46,7 @@ var inputHTTP = &http.Client{
 var (
 	errRedirects      = errors.New("troppi redirect")
 	errRedirectScheme = errors.New("redirect verso uno schema diverso da http(s)")
+	errRedirectUser   = errors.New("redirect verso un URL con credenziali")
 	errTooBig         = errors.New("oltre il limite")
 )
 
@@ -96,6 +102,16 @@ func isURL(p string) bool {
 	return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
 }
 
+// withUser dice se l'URL p porta credenziali (utente@host): mai inviate.
+func withUser(p string) bool {
+	u, err := url.Parse(p)
+	return err == nil && u.User != nil
+}
+
+func userURLError(flag, p string) error {
+	return usageError("%s %s: URL con credenziali (utente@host) non ammesso", flag, redactURL(p))
+}
+
 // redactURL lascia negli errori solo schema e host: percorso e query degli URL
 // firmati possono contenere token.
 func redactURL(p string) string {
@@ -141,6 +157,8 @@ func downloadError(shown string, err error) error {
 		msg = errRedirects.Error()
 	case errors.Is(err, errRedirectScheme):
 		msg = errRedirectScheme.Error()
+	case errors.Is(err, errRedirectUser):
+		msg = errRedirectUser.Error()
 	case errors.As(err, &dns):
 		msg = "host non risolto"
 	case errors.As(err, &ne) && ne.Timeout():
@@ -166,6 +184,9 @@ func (t *tempInputs) resolve(p string) (string, error) {
 // leggendo al massimo limit byte (errTooBig oltre); restituisce file e byte.
 func (t *tempInputs) download(p string, limit int64) (string, int64, error) {
 	shown := redactURL(p)
+	if withUser(p) {
+		return "", 0, userURLError("download input", p)
+	}
 	resp, err := inputHTTP.Get(p)
 	if err != nil {
 		return "", 0, downloadError(shown, err)
@@ -230,6 +251,9 @@ func videoInputs(req *provider.VideoRequest) []videoInput {
 	for i := range req.Refs {
 		list = append(list, videoInput{"--ref", &req.Refs[i]})
 	}
+	for i := range req.Keyframes {
+		list = append(list, videoInput{"--keyframe", &req.Keyframes[i]})
+	}
 	return list
 }
 
@@ -247,8 +271,19 @@ func localInputsSize(req *provider.VideoRequest) (int64, error) {
 	if len(req.Refs) > provider.MaxRefs {
 		return 0, usageError("--ref: al massimo %d immagini di riferimento, non %d", provider.MaxRefs, len(req.Refs))
 	}
+	if len(req.Keyframes) > provider.MaxKeyframes {
+		return 0, usageError("--keyframe: al massimo %d fotogrammi intermedi, non %d", provider.MaxKeyframes, len(req.Keyframes))
+	}
+	for i, k := range req.Keyframes {
+		if strings.TrimSpace(k) == "" {
+			return 0, usageError("--keyframe n. %d: file o URL mancante", i+1)
+		}
+	}
 	var total int64
 	for _, in := range videoInputs(req) {
+		if isURL(*in.path) && withUser(*in.path) {
+			return 0, userURLError(in.flag, *in.path)
+		}
 		if *in.path == "" || isURL(*in.path) {
 			continue
 		}
@@ -272,12 +307,17 @@ func totalTooBig() error {
 // download si ferma al minimo fra il limite per immagine e i byte che restano
 // del limite totale, file locali compresi.
 func (t *tempInputs) resolveVideo(req *provider.VideoRequest) error {
+	return t.resolveURLs(req, "")
+}
+
+// resolveURLs è resolveVideo per i soli input di flag (tutti con flag vuoto).
+func (t *tempInputs) resolveURLs(req *provider.VideoRequest, flag string) error {
 	used, err := localInputsSize(req)
 	if err != nil {
 		return err
 	}
 	for _, in := range videoInputs(req) {
-		if *in.path == "" || !isURL(*in.path) {
+		if *in.path == "" || !isURL(*in.path) || flag != "" && in.flag != flag {
 			continue
 		}
 		limit := min(int64(provider.MaxInputBytes), int64(provider.MaxInputTotal)-used)

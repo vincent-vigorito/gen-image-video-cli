@@ -30,9 +30,20 @@ func Fal() []Model {
 	}
 	return []Model{
 		{
+			// l'audio non ha un campo nella scheda (se c'è e quanto costa è da
+			// verificare con la prova): --audio rifiutato, stima senza audio
+			ID: "kling-4.0", Durations: seconds(3, 30), DefaultDuration: 5,
+			Resolutions: []string{"720p", "1080p", "4k"},
+			Frames:      []string{"first_frame", "last_frame"}, Seed: ptr(false),
+			MaxRefs: ptr(0), MaxKeyframes: ptr(8), Shots: ptr(true),
+			Pricing: map[string]float64{"duration_seconds_720p": 0.157, "duration_seconds_1080p": 0.235, "duration_seconds_4k": 0.549},
+			Source:  falSource("kling/v4/image-to-video"),
+			check:   checkKlingV4,
+		},
+		{
 			ID: "kling-v3-pro", Durations: seconds(3, 15), DefaultDuration: 5,
 			Frames: []string{"first_frame", "last_frame"}, Audio: ptr(true), Seed: ptr(false),
-			MaxRefs: ptr(4), Passthrough: []string{"cfg_scale", "negative_prompt"},
+			MaxRefs: ptr(4), Shots: ptr(true), Passthrough: []string{"cfg_scale", "negative_prompt"},
 			// la scheda dice 0,112 $/s senza audio, il listino generale 0,14:
 			// fonti discordi, vale la più alta finché la prova non lo chiarisce
 			Pricing: map[string]float64{"duration_seconds_with_audio": 0.168, "duration_seconds_without_audio": 0.14},
@@ -64,6 +75,41 @@ func checkKlingV3(req *provider.VideoRequest) error {
 		return reject("--aspect non supportato da kling-v3-pro: il formato segue --image")
 	case utf8.RuneCountInString(req.Prompt) > 2500:
 		return reject("prompt di %d caratteri: kling-v3-pro ne accetta al massimo 2500", utf8.RuneCountInString(req.Prompt))
+	}
+	return checkShots("kling-v3-pro", req.Shots, 15, 2500)
+}
+
+// KlingV4Resolution è la risoluzione di Kling 4.0 senza --resolution (default
+// della scheda): giv la invia sempre, così la stima vale per quella generata.
+const KlingV4Resolution = "1080p"
+
+func checkKlingV4(req *provider.VideoRequest) error {
+	switch {
+	case req.Image == "":
+		return reject("kling-4.0 vuole --image (primo fotogramma)")
+	case req.Aspect != "":
+		return reject("--aspect non supportato da kling-4.0: il formato segue --image")
+	case req.Audio != nil:
+		return reject("--audio non supportato da kling-4.0: la scheda di fal non ha un campo per l'audio")
+	case utf8.RuneCountInString(req.Prompt) > 26000:
+		return reject("prompt di %d caratteri: kling-4.0 ne accetta al massimo 26000", utf8.RuneCountInString(req.Prompt))
+	}
+	if req.Resolution == "" {
+		req.Resolution = KlingV4Resolution
+	}
+	return checkShots("kling-4.0", req.Shots, 30, 512)
+}
+
+// checkShots controlla le inquadrature sui limiti della scheda: secondi interi
+// da 1 a maxS, testo di al massimo maxChars caratteri.
+func checkShots(model string, shots []provider.Shot, maxS, maxChars int) error {
+	for i, s := range shots {
+		if s.Duration < 1 || s.Duration > maxS {
+			return reject("--shot n. %d: %d s, %s vuole da 1 a %d s per inquadratura", i+1, s.Duration, model, maxS)
+		}
+		if n := utf8.RuneCountInString(s.Prompt); n > maxChars {
+			return reject("--shot n. %d: testo di %d caratteri, %s ne accetta al massimo %d", i+1, n, model, maxChars)
+		}
 	}
 	return nil
 }

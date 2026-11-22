@@ -222,6 +222,9 @@ giv video:
   --image <file>     frame iniziale (image-to-video)
   --last-frame <file|url>  ultimo fotogramma (xai 1.5, openrouter dove il modello lo prevede)
   --ref <file|url>   immagine di riferimento, ripetibile (xai reference_images, openrouter input_references)
+  --keyframe <file|url>  fotogramma intermedio, ripetibile in ordine (fal kling-4.0, al massimo 8)
+  --shot "<s>:<testo>"   inquadratura di s secondi, ripetibile (fal kling-4.0 e kling-v3-pro):
+                     senza prompt né --preset, il video dura la somma
   --duration <s>     durata in secondi (valori ammessi dal modello)
   --audio on|off     audio nativo (default del modello)
   --seed <n>         seed (openrouter dove il modello lo rispetta; xai ignorato con avviso)
@@ -284,11 +287,20 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
 // parsePrompt accetta i flag sia prima che dopo il prompt (quotato).
 func parsePrompt(fs *flag.FlagSet, args []string) (string, error) {
+	return parsePromptIf(fs, args, nil)
+}
+
+// parsePromptIf è parsePrompt dove il prompt può mancare: optional, chiamata a
+// flag letti, dice se è così (giv video con --shot); "" senza prompt.
+func parsePromptIf(fs *flag.FlagSet, args []string, optional func() bool) (string, error) {
 	if err := fs.Parse(args); err != nil {
 		return "", usageError("%v", err)
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
+		if optional != nil && optional() {
+			return "", nil
+		}
 		return "", usageError("manca il prompt")
 	}
 	prompt := rest[0]
@@ -581,7 +593,15 @@ func cmdVideo(args []string) error {
 	var presetNames stringList
 	fs.Var(&presetNames, "preset", "preset di camera o effetto (ripetibile)")
 	protect := fs.String("tutela", "", "clausola di tutela coi preset: prodotto, illustrazione, no")
-	prompt, err := parsePrompt(fs, args)
+	var keyframes, shotList stringList
+	fs.Var(&keyframes, "keyframe", "fotogramma intermedio, file o URL (ripetibile, in ordine)")
+	fs.Var(&shotList, "shot", `inquadratura "<secondi>:<testo>" (ripetibile): niente prompt, durata = somma`)
+	// con --shot il testo è nelle inquadrature: il prompt può mancare
+	prompt, err := parsePromptIf(fs, args, func() bool { return len(shotList) > 0 })
+	if err != nil {
+		return err
+	}
+	shots, err := parseShots(shotList)
 	if err != nil {
 		return err
 	}
@@ -595,7 +615,7 @@ func cmdVideo(args []string) error {
 	job, err := prepareVideo(videoOptions{
 		Provider: *prov, Model: *model, Prompt: prompt,
 		Aspect: *aspect, Resolution: *resolution, Negative: *negative,
-		Image: *image, LastFrame: *lastFrame, Refs: refs,
+		Image: *image, LastFrame: *lastFrame, Refs: refs, Keyframes: keyframes, Shots: shots,
 		Duration: *duration, Seed: *seed, Audio: *audio, Params: params, Timeout: *timeout,
 		Presets: presetNames, Protect: *protect,
 		MaxCost: costCap, Strict: *strict, DryRun: *dryRun,
@@ -669,6 +689,10 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 			}
 		}
 	}
+	// senza capacità note nessun provider li invierebbe: rifiuto, non avviso
+	if m == nil && (len(req.Keyframes) > 0 || len(req.Shots) > 0) {
+		return nil, usageError("--keyframe e --shot valgono solo coi modelli che li dichiarano, capacità di %s/%s non note (giv models --provider fal --kind video --caps)", c.Name(), req.Model)
+	}
 	why := "capacità del modello non note"
 	var est *caps.Estimate
 	if m != nil {
@@ -715,6 +739,9 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 	if len(req.Params) > 0 {
 		params["passthrough"] = req.Params
 	}
+	if len(req.Shots) > 0 {
+		params["shots"] = req.Shots
+	}
 	if len(params) > 0 {
 		plan.Params = params
 	}
@@ -732,6 +759,13 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 			refs[i] = shownInput(r)
 		}
 		inputs["refs"] = refs
+	}
+	if len(req.Keyframes) > 0 {
+		kf := make([]string, len(req.Keyframes))
+		for i, k := range req.Keyframes {
+			kf[i] = shownInput(k)
+		}
+		inputs["keyframes"] = kf
 	}
 	if len(inputs) > 0 {
 		plan.Inputs = inputs
