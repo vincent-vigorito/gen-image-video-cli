@@ -28,6 +28,11 @@ type manifestInputs struct {
 	Image     *inputFile  `json:"image,omitempty"`
 	LastFrame *inputFile  `json:"last_frame,omitempty"`
 	Refs      []inputFile `json:"refs,omitempty"`
+
+	// comandi sulle clip (giv extend, edit, upscale, avatar)
+	Video *inputFile `json:"video,omitempty"`
+	Audio *inputFile `json:"audio,omitempty"`
+	From  string     `json:"from,omitempty"` // job di partenza
 }
 
 // newManifestInputs prende gli ingressi di req prima dei download; nil se non ce ne sono.
@@ -124,7 +129,10 @@ func logFailedJob(man manifest, err error, timedOut bool) {
 	if !errors.As(err, &je) {
 		return
 	}
-	man.Command, man.JobID, man.Status = "video", je.ID, "failed"
+	if man.Command == "" {
+		man.Command = "video"
+	}
+	man.JobID, man.Status = je.ID, "failed"
 	if timedOut {
 		man.Status = "timeout"
 	}
