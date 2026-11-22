@@ -251,10 +251,12 @@ const (
 const xaiUnmeasured = "durata del sorgente non misurata (video da URL o ffprobe assente)"
 
 // XAIOps è la tabella fissa delle operazioni sulle clip di xAI: giv extend e
-// giv edit, solo grok-imagine-video. Finché non è verificato cosa si paga
-// (solo i secondi aggiunti o tutta la clip d'uscita, la risoluzione
-// d'uscita) la stima prende il caso più caro e lo scrive; senza la durata
-// misurata del sorgente non c'è stima (con --max-cost è un rifiuto).
+// giv edit, solo grok-imagine-video. L'estensione si paga sui secondi aggiunti
+// più il sorgente in ingresso, non su tutta la clip d'uscita: prova CLI-929 del
+// 22/11/2026, 3 s aggiunti a un sorgente di 6 s, stima 0,69 $ e addebito
+// 0,27 $ = 3 × 0,07 + 6 × 0,01. Resta prudente la risoluzione d'uscita (720p, la
+// più cara) e il sorgente si conta a secondi interi per eccesso. Senza la
+// durata misurata del sorgente non c'è stima (con --max-cost è un rifiuto).
 func XAIOps() []Op {
 	pricing := map[string]float64{"input_video_per_s": xaiClipIn, "output_480p_per_s": 0.05, "output_720p_per_s": xaiClipOut}
 	return []Op{
@@ -273,10 +275,10 @@ func XAIOps() []Op {
 				if add <= 0 {
 					add = 6
 				}
-				out := src + float64(add)
-				usd := (out*xaiClipOutCents + src*xaiClipInCents) / 100
-				return usd, fmt.Sprintf("uscita %.2f s (sorgente + %d s) × %g $/s a 720p + ingresso %.2f s × %g $/s; caso più caro: tutta l'uscita a pagamento (non verificato)",
-					out, add, xaiClipOut, src, xaiClipIn), ""
+				in := math.Ceil(src)
+				usd := (float64(add)*xaiClipOutCents + in*xaiClipInCents) / 100
+				return usd, fmt.Sprintf("%d s aggiunti × %g $/s a 720p + ingresso %.2f s (contati %g) × %g $/s; prudente: uscita a 720p",
+					add, xaiClipOut, src, in, xaiClipIn), ""
 			},
 		},
 		{
