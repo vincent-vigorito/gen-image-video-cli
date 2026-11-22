@@ -32,7 +32,7 @@ type fakeXAI struct {
 
 func newFakeXAI(t *testing.T) *fakeXAI {
 	f := &fakeXAI{bodies: map[string]map[string]any{}}
-	f.cdn = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cdn = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.cdnAuth = append(f.cdnAuth, r.Header.Get("Authorization"))
 		f.mu.Unlock()
@@ -68,7 +68,10 @@ func newFakeXAI(t *testing.T) *fakeXAI {
 			http.NotFound(w, r)
 		}
 	}))
-	t.Cleanup(func() { f.api.Close(); f.cdn.Close() })
+	// la CDN è https: gli scaricamenti fuori origine passano dal suo trasporto
+	old := resultTransport
+	resultTransport = f.cdn.Client().Transport
+	t.Cleanup(func() { resultTransport = old; f.api.Close(); f.cdn.Close() })
 	return f
 }
 
