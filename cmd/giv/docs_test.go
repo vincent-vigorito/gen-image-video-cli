@@ -36,7 +36,8 @@ func TestHelpFlagsMatchReadme(t *testing.T) {
 		return m
 	}
 	h, r := set(help), set(string(readme))
-	delete(r, "--help") // flag standard, non elencato nell'help
+	delete(r, "--help") // flag standard
+	delete(h, "--help")
 	for f := range h {
 		if !r[f] {
 			t.Errorf("flag nell'help ma non nel README: %s", f)
