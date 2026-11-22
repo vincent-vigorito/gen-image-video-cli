@@ -129,9 +129,12 @@ type manifest struct {
 	CostUSD     float64           `json:"cost_usd,omitempty"`     // riportato dal provider
 	CostEstUSD  float64           `json:"cost_est_usd,omitempty"` // stimato da listino, se il provider non lo riporta
 	CostSource  string            `json:"cost_source,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
+	// stima dai consumi riportati (gemini), informativa accanto a quella da listino
+	CostUsageUSD    float64  `json:"cost_usage_usd,omitempty"`
+	CostUsageSource string   `json:"cost_usage_source,omitempty"`
+	Warnings        []string `json:"warnings,omitempty"`
 
-	usageEstUSD float64 // stima dai consumi riportati, non arrotondata (conto del tetto di story run)
+	usageEstUSD float64 // CostUsageUSD non arrotondata (conto del tetto di story run)
 }
 
 func main() {

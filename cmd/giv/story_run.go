@@ -990,9 +990,9 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	for i := range ss.Charges {
 		if c := &ss.Charges[i]; c.Kind == story.ChargeClip && c.JobID != "" && c.JobID == man.JobID {
 			c.CostUSD = man.CostUSD
-			if man.CostUSD <= 0 && man.usageEstUSD > 0 {
-				// stima dai consumi riportati (gemini): prende il posto della
-				// riserva, a piena precisione, prima della scena seguente
+			if man.CostUSD <= 0 && c.CostEstUSD != nil && man.usageEstUSD >= *c.CostEstUSD {
+				// stima dai consumi riportati (gemini, contatori validati): prende
+				// il posto della riserva solo se non è più bassa, a piena precisione
 				v := man.usageEstUSD
 				c.CostEstUSD = &v
 			}
