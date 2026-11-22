@@ -19,8 +19,8 @@ import (
 // nella cartella d'uscita a lavoro riuscito, senza mai sostituire un file che
 // c'è già (ingressi compresi): se il nome è preso si usa <nome>-2, <nome>-3…
 
-// imageFormats sono i formati ammessi in lettura per le immagini (logo,
-// cartello, fotogrammi).
+// imageFormats sono i formati di un'immagine letta (logo, cartello,
+// fotogrammi): in lettura valgono alla lettera (readOpts), mai come sequenza.
 const imageFormats = "image2,png_pipe,jpeg_pipe,webp_pipe"
 
 // outputFormats sono i formati ammessi nella lettura del file scritto.
@@ -41,6 +41,11 @@ type Op struct {
 	// Root è la cartella d'uscita (--out), creata se manca: Output deve
 	// starci dentro, altrimenti ErrInvalid. Vuota: la cartella di Output.
 	Root string
+	// Replace sostituisce Output se c'è già, a lavoro riuscito e senza
+	// seguire link, invece di scegliere un nome libero: per i file che giv
+	// riscrive ogni volta (il foglio di contatto di giv story). Mai un
+	// ingresso: un'uscita che è uno degli ingressi è ErrInvalid.
+	Replace bool
 	// Build scrive il risultato in staged, un file nella cartella privata
 	// w.Dir con l'estensione di Output, lanciando ffmpeg con w.FFmpeg (anche
 	// più passate, con gli intermedi in w.Dir). Non scrive altrove.
@@ -183,6 +188,15 @@ func (t Tool) RunOp(ctx context.Context, op Op) (*OpResult, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("cartella d'uscita %s: %w", root, err)
 	}
+	if op.Replace {
+		if err := sameAsInput(op.Output, op.Inputs); err != nil {
+			return nil, err
+		}
+		if err := publish(ctx, staged, root, nil, op.Output, true); err != nil {
+			return nil, err
+		}
+		return &OpResult{Output: op.Output, Info: info}, nil
+	}
 	for _, out := range OutputNames(op.Output) {
 		err = publish(ctx, staged, root, nil, out, false)
 		if errors.Is(err, ErrExists) {
@@ -242,7 +256,7 @@ func probeArgsFormats(path, formats string) ([]string, error) {
 		return nil, invalid("%s: %v", path, err)
 	}
 	args := []string{"-hide_banner", "-loglevel", "error"}
-	args = append(args, inputOpts(formats)...)
+	args = append(args, readOpts(path, formats)...)
 	args = append(args, "-show_entries",
 		"format=format_name,duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,duration",
 		"-of", "json", "-i", f)
@@ -272,7 +286,7 @@ func inputArgs(path, formats string, opts ...string) ([]string, error) {
 		return nil, invalid("ingresso %s: %v", path, err)
 	}
 	args := append([]string(nil), opts...)
-	args = append(args, inputOpts(formats)...)
+	args = append(args, readOpts(path, formats)...)
 	return append(args, "-i", f), nil
 }
 

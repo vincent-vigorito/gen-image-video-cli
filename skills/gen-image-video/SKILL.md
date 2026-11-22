@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -77,7 +77,9 @@ giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
 giv story run [--scene <id> [--new-keyframe | --new-job]] <storyboard.json>
                                                 # genera le scene video e avatar, a pagamento; riprende da dove si era fermato
-giv story cut <storyboard.json>                 # monta con ffmpeg le scene pronte in un solo video, gratis
+giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+                                                # monta con ffmpeg le scene pronte, un file per formato
+                                                # di montaggio.formati, gratis; --export come giv export --for
 giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
@@ -366,6 +368,10 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    - `clip` per un video già pronto, `immagine` con `durata` per cartelli e chiusura;
    - `voce` sulle scene con la voce fuori campo; `ritardo_voce` (secondi) la fa partire
      dopo l'inizio della scena;
+   - per il montaggio, facoltativi: `fuoco` (0-1, o `{"x": …, "y": …}`: il punto da
+     tenere quando un altro formato ritaglia la scena), `taglio` (`{"da": 0.5, "a": 4}`,
+     il pezzo della clip da usare) e `velocita` (0.25-4); `durata` resta quella chiesta
+     al modello, quindi la stima non cambia;
    - `avatar` per un personaggio che parla in scena (fal): `immagine` e `voce`
      obbligatorie, `prompt`, `modello` `standard` o `pro` (default nel blocco
      `"avatar": {"modello": …}`); dura quanto la voce, niente `durata` né `ritardo_voce`.
@@ -412,6 +418,24 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    0,5 s), `musica` in loop (`volume` 0,25 se non indicato), `sottotitoli` (`.srt`,
    `.ass`), `uscita` nella cartella dello spot, riscritta a ogni cut. Sul JSON confrontare
    `duration_s` con `expected_duration_s` e leggere i `warnings`, poi la verifica visiva.
+   Dalla 0.11.0, tutti facoltativi (senza, il montaggio di prima):
+   - `formati` (`["16:9", "9:16", "1:1", "4:5"]`, nessuno predefinito): un file per
+     formato, `spot-9x16.mp4`…; `adatta` `bande` (default), `ritaglio` (col `fuoco` della
+     scena) o `sfocato`; `--formato 9:16` ne monta uno solo;
+   - `logo` (`file`, `posizione` default `alto-destra`, `larghezza` 0.12, `opacita`, `da`,
+     `a`), `titoli` (`[{"testo": …, "scena": "s1", "da": 0.5, "durata": 3, "posizione":
+     "basso"}]`, tempi dall'inizio della scena), `cartello_finale` (`durata` 3, `sfondo`
+     `#RRGGBB`, `logo`, `testo`, `sottotesto`, accodato muto: la musica continua),
+     `stile_testi` (`font` nella cartella, `colore`, `bordo` o `"nessuno"`,
+     `dimensione`), tutti nei margini sicuri del formato e coi testi alla lettera;
+   - `musica.sotto_voce: true` (la abbassa sotto le voci), `musica.sfuma_fine` (secondi),
+     `volume` finale in LUFS (es. -14);
+   - `--export instagram,tiktok,youtube` dopo il montaggio un file per canale dal montato
+     nel formato del canale (`spot-instagram-9x16.mp4`; il formato deve essere fra quelli
+     montati);
+   - `giv story run` e `giv story cut` riscrivono `foglio-contatto.jpg` accanto allo
+     storyboard (una riga per scena): guardarlo per primo; `"foglio_contatto": false`
+     per non farlo.
 
 **Voce fuori campo** (sintesi locale, nessun costo; giv non sintetizza la voce, riceve i
 file già pronti):

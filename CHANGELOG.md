@@ -42,6 +42,15 @@ versioning [SemVer](https://semver.org/lang/it/).
   sua miniatura, in locale.
 - **`giv gif --video <file> [--start] [--end] [--width] [--fps]`**: GIF animata in locale
   con la palette calcolata in due passate (default 480 px, 12 fps, al più 60 s).
+- **Storyboard, campi nuovi del montaggio** (tutti facoltativi: gli storyboard di prima
+  danno lo stesso video): `montaggio.formati` (un file per formato, `<uscita>-9x16.mp4`…,
+  nessun formato predefinito), `adatta` (`bande`, `ritaglio`, `sfocato`), `logo`,
+  `titoli` (tempi relativi a una scena), `cartello_finale`, `stile_testi`, `volume` (LUFS),
+  `musica.sotto_voce` e `musica.sfuma_fine`; per scena `fuoco`, `taglio` e `velocita`;
+  `foglio_contatto`. `giv story cut --formato <r>` monta un solo formato, `--export
+  <canali>` esporta per canale dal montato. `giv story run` e `giv story cut` riscrivono
+  `foglio-contatto.jpg` accanto allo storyboard. `examples/spot` usa i campi nuovi (con un
+  segnaposto in `musica/`).
 - **`giv export --video <file> --for <canali>`**: un file per canale (`instagram`,
   `tiktok`, `youtube`, `linkedin`, ognuno con `:<formato>` facoltativo; predefiniti 9:16
   per Instagram Reel e TikTok, 16:9 per YouTube e LinkedIn) col profilo del canale

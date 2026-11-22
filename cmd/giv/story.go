@@ -83,7 +83,9 @@ volta: prima l'eventuale fotogramma chiave, poi la clip, in clip/ accanto allo s
 spesa sono in <nome>.stato.json: una nuova esecuzione recupera i job già partiti senza
 rilanciarli e genera solo le scene mancanti. Con tetto_costo_usd, prima di ogni richiesta
 a pagamento la spesa registrata (anche di scene non più nello storyboard) più le stime
-ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii.
+ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii. Alla
+fine riscrive foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
+non farlo).
 
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
@@ -99,16 +101,26 @@ Flag (anche dopo il file):
                      con la stessa riserva e lo stesso tetto delle altre
   -h, --help         questo aiuto
 `,
-	"cut": `uso: giv story cut <storyboard.json>
+	"cut": `uso: giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
 
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
 clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce,
-musica e sottotitoli del blocco montaggio. La voce di una scena avatar è già nella sua clip
-e non si aggiunge una seconda volta. Nessuna generazione e nessuna rete; il file
-d'uscita (montaggio.uscita, altrimenti <nome>.mp4) si riscrive a ogni montaggio.
+musica e sottotitoli del blocco montaggio, e taglio, velocita e fuoco delle scene. La
+voce di una scena avatar è già nella sua clip e non si aggiunge una seconda volta.
+Nessuna generazione e nessuna rete; il file d'uscita (montaggio.uscita, altrimenti
+<nome>.mp4) si riscrive a ogni montaggio. Con montaggio.formati un file per formato,
+<nome>-9x16.mp4…, adattato come dice montaggio.adatta (bande, ritaglio, sfocato).
+Riscrive anche foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
+non farlo).
 
-Flag:
-  -h, --help   questo aiuto
+Flag (anche dopo il file):
+  --formato <r>       monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra
+                      montaggio.formati, se ci sono): file <nome>-<WxH>.mp4
+  --export <canali>   dopo il montaggio, un file per canale come giv export
+                      (instagram, tiktok, youtube, linkedin, anche <canale>:<formato>)
+                      dal file montato nel suo formato: <nome>-<canale>-<WxH>.mp4,
+                      volume montaggio.volume o -14 LUFS
+  -h, --help          questo aiuto
 `,
 }
 
@@ -157,7 +169,8 @@ type storyCheck struct {
 	NotEstimated    []string       `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"` // spesa nello stato di scene non più nello storyboard: conta nel tetto
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
-	CapUSD          *float64       `json:"cap_usd,omitempty"` // tetto_costo_usd
+	CapUSD          *float64       `json:"cap_usd,omitempty"`  // tetto_costo_usd
+	Warnings        []string       `json:"warnings,omitempty"` // avvisi del montaggio (titoli)
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
@@ -260,6 +273,10 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		return nil, err
 	}
 	chk.voiceOverlaps(out)
+	if err := titleWarnings(s, path, out); err != nil {
+		return nil, err
+	}
+	focusWarnings(s, out)
 	out.RemovedScenes, out.removedExact = removedSpend(s, st)
 	out.RemovedSpentUSD = round4(out.removedExact)
 	if len(out.RemovedScenes) > 0 {
@@ -395,6 +412,16 @@ func (sc *storyChecker) client(name string) (*storyClient, error) {
 	return c, nil
 }
 
+// sceneRetime porta in c.length (durata prevista, 0 se ignota) taglio e
+// velocità della scena: taglio.da oltre la durata è un errore d'uso.
+func sceneRetime(scene *story.Scene, c *sceneCheck) error {
+	if t := scene.Taglio; t != nil && c.length > 0 && t.Da >= c.length {
+		return usageError("taglio.da %g s: la scena dura %g s", t.Da, c.length)
+	}
+	c.length = retimedLength(scene, c.length)
+	return nil
+}
+
 func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce, VoiceDelayS: scene.RitardoVoce}
 	if scene.Tipo == story.Avatar {
@@ -402,7 +429,7 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	}
 	if scene.Tipo != story.Video {
 		c.File, c.length = scene.File, float64(scene.Durata)
-		return c, nil
+		return c, sceneRetime(scene, &c)
 	}
 	o, err := sc.videoOptions(scene)
 	if err != nil {
@@ -419,6 +446,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
 	c.length = float64(max(job.req.Duration, scene.Durata))
+	if err := sceneRetime(scene, &c); err != nil {
+		return c, err
+	}
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
@@ -467,7 +497,7 @@ func (sc *storyChecker) avatar(scene *story.Scene, c sceneCheck) (sceneCheck, er
 	c.Provider, c.Model, c.PromptFinal, c.Warnings = plan.Provider, plan.Model, plan.Prompt, plan.Warnings
 	c.Inputs = map[string]any{"image": plan.Inputs.Image.Path, "audio": plan.Inputs.Audio.Path}
 	if d := job.req.Source.AudioDuration; d > 0 {
-		c.Params, c.length = map[string]any{"audio_duration_s": d}, d
+		c.Params, c.length = map[string]any{"audio_duration_s": d}, retimedLength(scene, d)
 	}
 	switch {
 	case plan.CostEstUSD != nil:

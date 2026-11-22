@@ -148,7 +148,8 @@ giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
 giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
 giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
                                               # genera le scene video (a pagamento), riprende da dove si era fermato
-giv story cut <storyboard.json>               # monta con ffmpeg le scene già pronte in un solo video
+giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+                                              # monta con ffmpeg le scene già pronte, un file per formato
 giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
@@ -189,7 +190,7 @@ prima o dopo.
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 | `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
-| `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
+| `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS |
 | `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
 | `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
 | `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
@@ -697,22 +698,33 @@ errori vanno su stderr. `giv story help` (o `giv story --help`) e `giv story <so
   "riferimenti": { "prodotto": ["img/prodotto.png"] },
   "scene": [
     { "id": "s1", "tipo": "video", "durata": 5, "immagine": "img/prodotto.png",
-      "preset": ["dolly-in"], "prompt": "il vasetto di crema su un piano di legno chiaro…",
-      "voce": "voce/s1.wav" },
+      "preset": ["dolly-in"], "fuoco": 0.4,
+      "prompt": "il vasetto di crema su un piano di legno chiaro…", "voce": "voce/s1.wav" },
     { "id": "s2", "tipo": "video", "durata": 5, "continua_da": "s1", "preset": ["orbit"],
       "prompt": "la camera gira attorno al vasetto…", "voce": "voce/s2.wav" },
     { "id": "s3", "tipo": "video", "durata": 5, "usa": ["prodotto"], "preset": ["static"],
-      "prompt": "una mano apre il vasetto e mostra la crema…" },
+      "taglio": { "da": 0.5 }, "prompt": "una mano apre il vasetto e mostra la crema…" },
     { "id": "chiusura", "tipo": "immagine", "durata": 3, "file": "img/logo.png",
       "voce": "voce/chiusura.wav" }
   ],
-  "montaggio": { "transizione": "dissolvenza", "uscita": "spot.mp4" }
+  "montaggio": {
+    "transizione": "dissolvenza", "uscita": "spot.mp4",
+    "formati": ["16:9", "9:16"], "adatta": "ritaglio",
+    "musica": { "file": "musica/musica.wav", "volume": 0.2, "sotto_voce": true, "sfuma_fine": 2 },
+    "logo": { "file": "img/logo.png", "posizione": "alto-destra", "larghezza": 0.12 },
+    "titoli": [ { "testo": "Crema alle erbe", "scena": "s1", "da": 0.5, "durata": 3 } ],
+    "cartello_finale": { "durata": 3, "sfondo": "#1E3A2B", "testo": "Crema alle erbe",
+                         "sottotesto": "in erboristeria" },
+    "stile_testi": { "colore": "#FFFFFF", "bordo": "#000000" },
+    "volume": -14
+  }
 }
 ```
 
 Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost_total_usd`
-1,5. I file in `examples/spot/img/` e `voce/` sono segnaposto (tinte piatte e silenzio):
-sostituirli con la foto del prodotto, il logo e la voce vera.
+1,5 (il `taglio` di s3 cambia solo il montaggio, non la durata chiesta al modello). I file in
+`examples/spot/img/`, `voce/` e `musica/` sono segnaposto (tinte piatte e silenzio):
+sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
 
 | Campo | Cosa contiene |
 |---|---|
@@ -724,7 +736,8 @@ sostituirli con la foto del prodotto, il logo e la voce vera.
 | `riferimenti` | insiemi di immagini per nome (`"prodotto": ["img/prodotto.png"]`), richiamati dalle scene con `usa` |
 | `scene` | le scene, in ordine |
 | `avatar` | `modello` (`standard`, default, o `pro`) delle scene avatar che non lo indicano |
-| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1), `sottotitoli` (file), `uscita` (file finale) |
+| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1, `sotto_voce`, `sfuma_fine`), `sottotitoli` (file), `uscita` (file finale); dalla 0.11.0 `formati`, `adatta`, `logo`, `titoli`, `cartello_finale`, `stile_testi`, `volume`: vedi [Montaggio](#montaggio-giv-story-cut) |
+| `foglio_contatto` | `false` perché `giv story run` e `giv story cut` non scrivano `foglio-contatto.jpg` accanto allo storyboard (default: lo scrivono) |
 
 Ogni scena ha un `id` (lettere, cifre, `_` e `-`, al massimo 64 caratteri), un `tipo`, una
 `durata` in secondi e, facoltativa, la `voce`: un file audio fuori campo, messo al
@@ -750,6 +763,14 @@ montaggio. `ritardo_voce` (secondi, anche decimali, finito e non negativo; solo 
   un'illustrazione serve `"tutela": "illustrazione"`. Un valore sconosciuto esce con
   codice 2.
 - `clip`: un `file` video già pronto (ripresa vera, screencast).
+- campi di montaggio di una scena (facoltativi, usati solo da `giv story cut`): `fuoco`, il
+  punto da tenere quando il montaggio ritaglia la scena per un altro formato (`"adatta":
+  "ritaglio"`): un numero da 0 (sinistra) a 1 (destra) oppure `{"x": …, "y": …}` (y da 0 in
+  alto a 1 in basso), default 0.5 cioè il centro; per le scene `video`, `clip` e `avatar`
+  anche `taglio` (`{"da": 0.5, "a": 4}`: il pezzo della clip da usare, in secondi dall'inizio
+  del file; senza `a` fino alla fine) e `velocita` (da 0.25 a 4, 2 = due volte più veloce,
+  l'audio della clip segue). Con `taglio` o `velocita` la scena dura nel montaggio quanto
+  il pezzo usato diviso la velocità; `durata` resta la lunghezza chiesta al modello.
 - `immagine`: un `file` immagine fermo, con `durata` obbligatoria (cartelli, chiusure).
 - `avatar`: un personaggio che parla, generato da `giv story run` come `giv avatar` (fal).
   `immagine` (un file della cartella dello storyboard) e `voce` obbligatorie; poi
@@ -809,6 +830,9 @@ scaricano e si controllano prima del fotogramma chiave: uno non valido ferma la 
 senza spesa. Le clip vanno in `clip/` nella cartella
 dello storyboard (`<id>-r<N>-<data>.mp4`, mai sovrascritte) e ogni clip entra nel
 registro di `giv log` con `command` `story video` (`story avatar` per le scene avatar).
+Alla fine riscrive `foglio-contatto.jpg` accanto allo storyboard, come `giv sheet
+storyboard.json --labels` (salvo `"foglio_contatto": false`; un problema col foglio è solo
+un avviso).
 L'attesa di ogni video ha un tetto di 15 minuti.
 
 **Stato.** Lo stato delle scene sta in un solo file accanto allo storyboard,
@@ -870,10 +894,13 @@ le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `cost_
 ### Montaggio: `giv story cut`
 
 ```bash
-giv story cut examples/spot/storyboard.json       # JSON su stdout: file scritto, durata, formato
+giv story cut examples/spot/storyboard.json       # JSON su stdout: file scritti, durata, formato
+giv story cut --formato 9:16 examples/spot/storyboard.json          # solo spot-9x16.mp4
+giv story cut --export instagram,youtube examples/spot/storyboard.json
+                                                  # in più un file per canale dal montato
 ```
 
-`giv story cut` monta in un solo video le scene già pronte, con `ffmpeg` e `ffprobe` (da
+`giv story cut` monta in un video le scene già pronte, con `ffmpeg` e `ffprobe` (da
 installare e nel PATH, per esempio `apt install ffmpeg`): niente rete, niente generazione,
 nessuna chiave. Ogni scena dà al montaggio:
 
@@ -899,6 +926,57 @@ Come monta:
 - **uscita**: `montaggio.uscita`, altrimenti `<nome dello storyboard>.mp4`, sempre dentro
   la cartella dello storyboard anche seguendo i link. Si riscrive a ogni `giv story cut`;
   il file compare solo a montaggio riuscito. Tutto il montaggio sta entro 30 minuti.
+  Un'uscita non sostituisce mai lo storyboard, il suo stato, i file che nomina né le clip
+  generate (codice 2 prima di montare).
+- **foglio di contatto**: dopo il montaggio riscrive `foglio-contatto.jpg` accanto allo
+  storyboard (una riga per scena con id e ripresa, come `giv sheet`), salvo
+  `"foglio_contatto": false`.
+
+Dalla 0.11.0 il blocco `montaggio` ha anche questi campi, tutti facoltativi (senza, il
+montaggio resta quello di prima):
+
+- **`formati`**: i formati da montare, un file per formato (`"16:9"`, `"9:16"`, `"1:1"`,
+  `"4:5"`): `<uscita>-16x9.mp4`, `<uscita>-9x16.mp4`… Nessun formato predefinito: senza il
+  campo un solo file nel formato dello storyboard, come prima. Il lato corto resta quello
+  della `risoluzione` (720p in 9:16 è 720×1280). `--formato <r>` monta solo quel formato
+  (che deve essere fra `formati`, se ci sono).
+- **`adatta`**: come una scena entra in un formato diverso dal suo: `bande` (default,
+  bande nere), `ritaglio` (riempie il quadro tenendo il `fuoco` della scena) o `sfocato`
+  (la scena intera sopra la stessa sfocata).
+- **`logo`**: `file` (`.png`, `.jpg` o `.webp` nella cartella, la trasparenza resta),
+  `posizione` (default `alto-destra`; le posizioni di `giv post overlay`), `larghezza`
+  (frazione della larghezza del quadro, default 0.12), `opacita` (default 1), `da` e `a`
+  (secondi dall'inizio del montato; default dall'inizio alla fine delle scene, non sul
+  cartello). Sta dentro i margini sicuri di ogni formato, come in `giv post overlay`.
+- **`titoli`**: elenco (al più 50) di `{"testo": …}` con `scena` (id: i tempi contano
+  dall'inizio di quella scena; senza, dall'inizio del montato), `da` (secondi, default 0),
+  `durata` (default 3), `posizione` (default `basso`) e `stile` (al posto di
+  `stile_testi`), con una dissolvenza di 0,3 s.
+- **`cartello_finale`**: accodato dopo l'ultima scena a taglio netto, senza audio suo (la
+  musica continua): `durata` (default 3, al più 60), `sfondo` (`#RRGGBB`, default nero),
+  `logo` (immagine al centro), `testo` e `sottotesto`; serve almeno uno fra logo, testo e
+  sottotesto.
+- **`stile_testi`**: stile di titoli e cartello: `font` (file `.ttf`, `.otf` o `.ttc`
+  nella cartella dello storyboard; default DejaVu Sans, se installato), `colore`
+  (`#RRGGBB`, default bianco), `bordo` (colore del contorno, default nero, o `"nessuno"`),
+  `dimensione` (altezza dei caratteri in frazione dell'altezza del quadro, da 0.01 a
+  0.25).
+- **`musica`**: oltre a `file` e `volume`, `sotto_voce: true` abbassa la musica mentre
+  parlano le voci (serve almeno una scena con `voce`) e `sfuma_fine` sono i secondi di
+  dissolvenza in chiusura (da 0 a 60).
+- **`volume`**: volume finale in LUFS integrati, da -70 a -5 (es. -14, la convenzione dei
+  social), misurato e corretto in due passate; senza il campo il volume resta com'è.
+
+Testi di titoli e cartello: alla lettera (al più 2000 byte, UTF-8), in un file `.ass`
+generato da giv, mai nella stringa dei filtri di ffmpeg. Font, logo e musica devono stare
+nella cartella dello storyboard.
+
+`--export <canali>` (come `giv export --for`: `instagram`, `tiktok`, `youtube`,
+`linkedin`, anche `<canale>:<formato>`) esporta dopo il montaggio un file per canale dal
+montato nel formato del canale: `<uscita>-<canale>-<formato>.mp4` (es.
+`spot-instagram-9x16.mp4`), col profilo di [`giv export`](#esportazione-per-canale-giv-export),
+ritaglio al centro e volume `montaggio.volume` o -14 LUFS. Il formato del canale deve
+essere fra quelli montati, altrimenti codice 2 prima di montare.
 - **cartella di lavoro**: privata, nella cartella temporanea del sistema (come per le
   scene avatar di `giv story run`). Se `TMPDIR` o una cartella sopra è scrivibile da altri
   utenti senza sticky bit, `giv` si ferma prima e chiede di impostare `TMPDIR` su una
@@ -907,7 +985,9 @@ Come monta:
 Il JSON su stdout ha `storyboard`, `output`, `scenes`, `duration_s` (letta dal file
 scritto), `expected_duration_s` (dalle durate delle scene), `width`, `height`, `fps`,
 `video_codec`, `audio_codec` e `warnings` (per esempio una clip più corta della sua
-durata o una voce tagliata). Esce con codice 2 per clip mancanti, file illeggibili,
+durata o una voce tagliata); con `--export`, `exports` come in `giv export`. Con
+`formati` o `--formato` il JSON ha `storyboard`, `scenes`, `formats` (un risultato come
+sopra per formato, con `format`) ed `exports`. Esce con codice 2 per clip mancanti, file illeggibili,
 storyboard o formato non validi e uscita fuori dalla cartella; con codice 1 se mancano
 `ffmpeg` o `ffprobe` o il montaggio fallisce.
 

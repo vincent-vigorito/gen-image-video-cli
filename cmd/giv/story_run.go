@@ -66,6 +66,11 @@ func cmdStoryRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	man, err := runStory(ctx, path, *only, *newKeyframe, *newJob)
+	if man != nil && ctx.Err() == nil {
+		if s, lerr := story.Load(path); lerr == nil {
+			contactSheet(s, path)
+		}
+	}
 	if man != nil {
 		// scene fallite sul provider: manifest delle altre, poi l'errore con l'elenco
 		if perr := output.PrintJSON(man); err == nil {
