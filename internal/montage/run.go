@@ -303,19 +303,54 @@ func sameAsInput(out string, inputs []string) error {
 // stagingDir crea la cartella privata (0700, nella cartella temporanea del
 // sistema) dove ffmpeg scrive: nessun altro utente può sostituirvi i file.
 func stagingDir(prefix string) (string, error) {
-	return os.MkdirTemp("", prefix)
+	return TempDir(prefix)
+}
+
+// TempDir crea una cartella privata (0700) nella cartella temporanea del
+// sistema, rifiutando una cartella temporanea scrivibile da altri utenti
+// senza sticky bit (TMPDIR condivisa senza protezione): lì un altro utente
+// potrebbe rinominare la cartella privata e metterne un'altra al suo posto.
+func TempDir(prefix string) (string, error) {
+	tmp := os.TempDir()
+	fi, err := os.Stat(tmp)
+	if err != nil {
+		return "", fmt.Errorf("cartella temporanea %s: %w", tmp, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("cartella temporanea %s: non è una cartella", tmp)
+	}
+	if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&fs.ModeSticky == 0 {
+		return "", fmt.Errorf("cartella temporanea %s scrivibile da altri utenti senza sticky bit: imposta TMPDIR su una cartella tua", tmp)
+	}
+	return os.MkdirTemp(tmp, prefix)
+}
+
+// ctxReader interrompe la lettura alla scadenza o all'annullamento di ctx.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // publish copia il file preparato nella cartella privata al nome finale, con
-// sole operazioni vincolate a una radice aperta una volta (os.Root): root, o
-// la cartella di out se root è vuota. Nessun passo segue un link o una
-// cartella sostituita che porti fuori dalla radice. Senza overwrite il nome
-// finale si crea con O_EXCL, che fallisce se esiste (anche come link
-// simbolico): un file comparso nel frattempo non viene mai sostituito. Con
-// overwrite si scrive in un temporaneo nuovo accanto (O_EXCL, tenuto aperto),
-// i permessi si cambiano dal descrittore e la rinomina sostituisce la voce
+// sole operazioni vincolate a una radice aperta una volta (os.Root): opened se
+// il chiamante l'ha già aperta (root ne è il percorso), altrimenti root, o la
+// cartella di out se root è vuota. Nessun passo segue un link o una cartella
+// sostituita che porti fuori dalla radice. La copia va sempre in un
+// temporaneo nuovo accanto (O_EXCL, tenuto aperto), entro la scadenza di ctx:
+// il nome finale compare solo col file completo. Senza overwrite il
+// temporaneo si collega al nome finale con un link fisso, che fallisce se il
+// nome esiste (anche come link simbolico): un file comparso nel frattempo non
+// viene mai sostituito; dove i link fissi non ci sono si crea il nome finale
+// con O_EXCL e ci si copia. Con overwrite la rinomina sostituisce la voce
 // della cartella senza seguire link.
-func publish(src, root, out string, overwrite bool) error {
+func publish(ctx context.Context, src, root string, opened *os.Root, out string, overwrite bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -331,31 +366,32 @@ func publish(src, root, out string, overwrite bool) error {
 	if err != nil {
 		return fmt.Errorf("%w: uscita %s: %v", ErrInvalid, out, err)
 	}
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return err
+	r := opened
+	if r == nil {
+		if r, err = os.OpenRoot(root); err != nil {
+			return err
+		}
+		defer r.Close()
 	}
-	defer r.Close()
 	if dir := filepath.Dir(rel); dir != "." {
 		if err := r.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("cartella d'uscita di %s: %w", out, err)
 		}
 	}
-	var f *os.File
-	name := rel
-	if overwrite {
-		f, name, err = createTemp(r, rel)
-	} else {
-		f, err = r.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("%w: %s (chiedi la sovrascrittura per sostituirlo)", ErrExists, out)
+	exists := func() error {
+		return fmt.Errorf("%w: %s (chiedi la sovrascrittura per sostituirlo)", ErrExists, out)
+	}
+	if !overwrite {
+		if _, err := r.Lstat(rel); err == nil {
+			return exists()
 		}
 	}
+	f, name, err := createTemp(r, rel)
 	if err != nil {
 		return fmt.Errorf("scrittura di %s: %w", out, err)
 	}
-	_, err = io.Copy(f, in)
-	if err == nil && overwrite {
+	_, err = io.Copy(f, ctxReader{ctx, in})
+	if err == nil {
 		err = f.Chmod(0o644)
 	}
 	if cerr := f.Close(); err == nil {
@@ -364,6 +400,20 @@ func publish(src, root, out string, overwrite bool) error {
 	if err == nil && overwrite {
 		err = r.Rename(name, rel)
 	}
+	if err == nil && !overwrite {
+		err = r.Link(name, rel)
+		switch {
+		case errors.Is(err, fs.ErrExist):
+			r.Remove(name)
+			return exists()
+		case err != nil:
+			err = copyNew(ctx, r, name, rel) // cartella senza link fissi
+		}
+		r.Remove(name)
+		if errors.Is(err, fs.ErrExist) {
+			return exists()
+		}
+	}
 	if err != nil {
 		r.Remove(name)
 		return fmt.Errorf("scrittura di %s: %w", out, err)
@@ -371,8 +421,30 @@ func publish(src, root, out string, overwrite bool) error {
 	return nil
 }
 
+// copyNew copia il temporaneo name nel nome finale rel creato con O_EXCL
+// (mai un file che c'è già), entro la scadenza di ctx; a errore lo toglie.
+func copyNew(ctx context.Context, r *os.Root, name, rel string) error {
+	in, err := r.Open(name)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	f, err := r.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, ctxReader{ctx, in})
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		r.Remove(rel)
+	}
+	return err
+}
+
 // createTemp crea nella radice, accanto a rel, un temporaneo nuovo (O_EXCL,
-// 0600) per la pubblicazione con sovrascrittura.
+// 0600) per la pubblicazione.
 func createTemp(r *os.Root, rel string) (*os.File, string, error) {
 	dir, base := filepath.Split(rel)
 	for range 10 {
@@ -435,7 +507,7 @@ func (t Tool) LastFrame(ctx context.Context, clip, out string, overwrite bool) e
 	if st, err := os.Stat(staged); err != nil || st.Size() == 0 {
 		return fmt.Errorf("ultimo fotogramma di %s: nessun fotogramma video", clip)
 	}
-	return publish(staged, "", out, overwrite)
+	return publish(ctx, staged, "", nil, out, overwrite)
 }
 
 // Montage esegue il piano: controlla file e tracce, completa le durate mancanti
@@ -555,7 +627,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("montato illeggibile: %w", err)
 	}
-	if err := publish(staged.Output, p.Root, final, p.Overwrite); err != nil {
+	if err := publish(ctx, staged.Output, p.Root, p.RootDir, final, p.Overwrite); err != nil {
 		return nil, err
 	}
 	res.Output, res.Duration, res.Info = final, total, info

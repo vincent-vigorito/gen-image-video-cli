@@ -49,6 +49,17 @@ func runStoryCut(args []string) error {
 	if err != nil {
 		return err
 	}
+	// la cartella dello storyboard si apre prima di leggerlo e resta aperta
+	// fino alla pubblicazione: una cartella sostituita nel frattempo (rinomina
+	// e link) non porta altrove il file montato
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return usageError("%s: storyboard non trovato", path)
+		}
+		return usageError("%s: %v", path, err)
+	}
+	defer root.Close()
 	s, err := loadStory(path)
 	if err != nil {
 		return err
@@ -57,6 +68,7 @@ func runStoryCut(args []string) error {
 	if err != nil {
 		return err
 	}
+	plan.RootDir = root
 	tool := montage.Tool{}
 	if err := tool.Check(); err != nil {
 		return &cliError{code: exitError, msg: err.Error()}

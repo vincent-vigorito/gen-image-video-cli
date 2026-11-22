@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -57,6 +58,10 @@ type Plan struct {
 	// montaggio non portano la scrittura fuori. Senza Root il vincolo è la
 	// cartella di Output, aperta una volta al momento della pubblicazione.
 	Root string
+	// RootDir è Root già aperta dal chiamante, facoltativa: la pubblicazione
+	// usa questa invece di riaprire Root per nome (giv story cut la apre prima
+	// di leggere lo storyboard e la tiene fino alla pubblicazione).
+	RootDir *os.Root
 	// Overwrite false: se Output esiste già il montaggio si rifiuta prima di
 	// partire. true: il file esistente viene sostituito solo a montaggio riuscito.
 	Overwrite bool

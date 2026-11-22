@@ -514,7 +514,7 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 	}
 	// copie private degli ingressi: il provider legge solo file letti qui
 	// dentro la cartella dello storyboard e controllati
-	work, err := os.MkdirTemp("", "giv-story-")
+	work, err := montage.TempDir("giv-story-") // rifiuta una TMPDIR condivisa senza sticky bit
 	if err != nil {
 		return err
 	}
@@ -649,7 +649,8 @@ func (r *storyRunner) reserve(i int, ss *story.SceneState, ch story.Charge) erro
 // c'è; con --new-keyframe il precedente passa fra le riprese precedenti. La
 // generazione è già registrata come ultima di ss.Charges: se la risposta
 // arriva (addebitata) ma il file non si salva, o l'esito non si sa, la riserva
-// resta e la scena è incerta (si rifà solo con --scene).
+// resta e la scena è incerta (si rifà solo con --scene). Se lo stato col
+// fotogramma registrato non si salva, la scena si ferma prima del video.
 func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *story.SceneState, img *imageJob, inputs []string) error {
 	k := len(ss.Charges) - 1
 	received := false
@@ -694,7 +695,12 @@ func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *stor
 		r.renew = "" // generato: il tetto non lo conta più fra le richieste da fare
 	}
 	ss.Keyframe = &story.Take{File: rel, Done: time.Now()}
-	r.save()
+	// il costo reale del fotogramma entra nel file di stato prima del video:
+	// se non si salva il video non parte (launch riprova a salvare)
+	if err := r.st.Save(); err != nil {
+		return fmt.Errorf("fotogramma chiave %s generato (addebito %.4f $) ma stato non salvato, nessuna richiesta video inviata: %w",
+			rel, ss.Charges[k].CostUSD, err)
+	}
 	return nil
 }
 
