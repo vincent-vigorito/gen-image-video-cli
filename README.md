@@ -167,6 +167,8 @@ Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 | `--image <file\|url>` | primo fotogramma (image-to-video) |
 | `--last-frame <file\|url>` | ultimo fotogramma (xai 1.5 e 1.5-lite, openrouter dove il modello lo prevede) |
 | `--ref <file\|url>` | immagine di riferimento, ripetibile (xai `reference_images`, openrouter `input_references`) |
+| `--keyframe <file\|url>` | fotogramma intermedio, ripetibile e in ordine (fal kling-4.0, al massimo 8) |
+| `--shot "<s>:<testo>"` | inquadratura, ripetibile (fal kling-4.0 e kling-v3-pro): niente prompt né `--preset`, la durata è la somma |
 | `--audio on\|off` | audio nativo; senza flag il default del modello |
 | `--seed <n>` | seed (openrouter dove il modello lo rispetta; xai lo ignora con avviso) |
 | `--param k=v` | parametro passante del modello, ripetibile (openrouter; valore JSON o stringa): solo i parametri che il modello elenca |
