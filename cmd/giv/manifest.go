@@ -75,7 +75,7 @@ func (in *manifestInputs) fingerprint(req provider.VideoRequest) {
 	}
 	for i := range in.Keyframes {
 		if i < len(req.Keyframes) {
-			in.Keyframes[i].SHA256 = shortHash(req.Keyframes[i])
+			in.Keyframes[i].SHA256 = clipHash(req.Keyframes[i], provider.MaxInputBytes)
 		}
 	}
 }
