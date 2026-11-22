@@ -41,17 +41,22 @@ const maxVoices = 1000
 
 // VoiceBody è il corpo JSON della richiesta di voce di Gemini per req (già
 // passata da speech.Check): anche il piano di --dry-run. Il testo è quello
-// detto, con le pronunce sostituite; lo stile va come annotazione.
+// detto, con le pronunce sostituite; lo stile va come annotazione; i token
+// d'uscita sono limitati a speech.MaxGeminiOutputTokens.
 func VoiceBody(req speech.Request) map[string]any {
 	text := map[string]any{"type": "text", "text": req.Spoken()}
 	if req.Style != "" {
 		text["annotations"] = []any{map[string]any{"type": "speech_metadata", "style": req.Style}}
 	}
 	return map[string]any{
-		"model":             req.Model,
-		"input":             []any{map[string]any{"type": "user_input", "content": []any{text}}},
-		"response_format":   map[string]any{"type": "audio"},
-		"generation_config": map[string]any{"speech_config": []any{map[string]any{"voice": req.Voice}}},
+		"model":           req.Model,
+		"input":           []any{map[string]any{"type": "user_input", "content": []any{text}}},
+		"response_format": map[string]any{"type": "audio"},
+		"generation_config": map[string]any{
+			// limite d'uscita in ogni richiesta, quello della stima (decisione 22)
+			"max_output_tokens": speech.MaxGeminiOutputTokens,
+			"speech_config":     []any{map[string]any{"voice": req.Voice}},
+		},
 	}
 }
 
@@ -68,7 +73,7 @@ func (c *Client) Synthesize(ctx context.Context, req speech.Request) (*speech.Re
 	if err != nil {
 		return nil, httpx.Start(err)
 	}
-	res, err := parseVoice(data)
+	res, err := parseVoice(data, c.APIKey)
 	if err != nil {
 		// risposta 2xx: la voce è stata con ogni probabilità addebitata
 		return nil, httpx.Start(fmt.Errorf("gemini: %w", err))
@@ -160,10 +165,7 @@ func (c *Client) voiceCall(ctx context.Context, retry httpx.RetryFunc, method, r
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			msg := "redirect non seguito"
 			if resp.StatusCode < 300 || resp.StatusCode > 399 {
-				msg = videoAPIError(data)
-				if c.APIKey != "" {
-					msg = strings.ReplaceAll(msg, c.APIKey, "***")
-				}
+				msg = videoAPIError(hideKey(data, c.APIKey)) // la chiave via prima di accorciare
 			}
 			return &httpx.Error{Prefix: "gemini", Status: resp.StatusCode, Msg: msg,
 				RetryAfter: httpx.ParseRetryAfter(resp.Header.Get("Retry-After"))}
@@ -174,17 +176,35 @@ func (c *Client) voiceCall(ctx context.Context, retry httpx.RetryFunc, method, r
 	return out, err
 }
 
+// hideKey toglie la chiave da un corpo di risposta prima di leggerne i
+// messaggi (che poi si accorciano: una chiave tagliata a metà resterebbe).
+// Un JSON valido si riscrive prima senza gli escape superflui, così anche una
+// chiave scritta con gli escape Unicode (\u0041…) torna in chiaro e si toglie.
+func hideKey(data []byte, key string) []byte {
+	if key == "" {
+		return data
+	}
+	var v any
+	if json.Unmarshal(data, &v) == nil {
+		if plain, err := json.Marshal(v); err == nil {
+			data = plain
+		}
+	}
+	return bytes.ReplaceAll(data, []byte(key), []byte("***"))
+}
+
 // parseVoice legge la risposta della voce: l'ultimo audio prodotto dal
 // modello (steps, o outputs nello schema senza steps), in base64; WAV, oppure
-// PCM a 16 bit dichiarato (audio/L16, audio/pcm) avvolto in un WAV.
-func parseVoice(data []byte) (*speech.Result, error) {
+// PCM a 16 bit dichiarato (audio/L16, audio/pcm) avvolto in un WAV. I
+// messaggi d'errore sono senza la chiave apiKey.
+func parseVoice(data []byte, apiKey string) (*speech.Result, error) {
 	var it interaction
 	if json.Unmarshal(data, &it) != nil {
 		return nil, errors.New("risposta della voce non valida (JSON)")
 	}
 	switch it.Status {
 	case "failed", "cancelled":
-		msg := errorText(it.Error)
+		msg := errorText(hideKey(it.Error, apiKey))
 		if msg == "" {
 			msg = "nessun dettaglio"
 		}
