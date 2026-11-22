@@ -361,7 +361,8 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 		case d.B64JSON != "":
 			data, err = base64.StdEncoding.DecodeString(d.B64JSON)
 		case d.URL != "":
-			data, err = c.fetchResult(ctx, d.URL)
+			// sempre senza chiave, come nella 0.9.1, anche sull'origine dell'API
+			data, err = c.externalGet(ctx, d.URL)
 		default:
 			continue
 		}
