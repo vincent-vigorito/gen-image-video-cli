@@ -428,3 +428,87 @@ func TestV7CutSenzaVoceRifiuta(t *testing.T) {
 		t.Errorf("code=%d\n%s", code, se)
 	}
 }
+
+const v7Parlato = `,"parlato":{"provider":"xai","voce":"eve","lingua":"it"}`
+
+// voce incerta, poi --new-voice rifiutata dal provider (4xx): resta incerta e
+// contata (la riserva del tentativo si toglie); un run ordinario dopo resta a
+// codice 2 senza richieste.
+func TestV7NewVoiceRifiutataRestaIncerta(t *testing.T) {
+	e := newV7Env(t, v7Board(v7Parlato))
+	e.mode = "drop"
+	if _, _, code := e.story(t, "run", "--voices"); code != 5 {
+		t.Fatalf("code=%d", code)
+	}
+	e.mode = "400"
+	if _, _, code := e.story(t, "run", "--scene", "s1", "--new-voice"); code == 0 || e.tts != 2 {
+		t.Fatalf("code=%d tts=%d", code, e.tts)
+	}
+	ss := e.state(t)["s1"].(map[string]any)
+	if ss["voice_status"] != "incerto" {
+		t.Errorf("deve restare incerta: %v", ss)
+	}
+	if ch, _ := ss["charges"].([]any); len(ch) != 1 {
+		t.Errorf("riserva del tentativo non tolta o addebito perso: %v", ss["charges"])
+	}
+	e.mode = ""
+	if _, se, code := e.story(t, "run", "--voices"); code != 2 || e.tts != 2 {
+		t.Errorf("run ordinario: code=%d tts=%d\n%s", code, e.tts, se)
+	}
+}
+
+// un job pendente con indirizzo di attesa non valido ferma tutto a codice 2
+// prima di ogni voce.
+func TestV7JobPendenteNonValidoPrimaDelleVoci(t *testing.T) {
+	board := `{"default":{"provider":"openrouter","modello":"alibaba/wan-3.0","audio":"off","risoluzione":"720p","aspect":"16:9"}` + v7Parlato + `,
+"formato":{"aspect":"16:9","risoluzione":"144p","fps":25},
+"scene":[{"id":"s1","tipo":"immagine","file":"a.png","durata":3,"testo":"` + v7Text + `"},
+{"id":"s2","tipo":"video","durata":5,"prompt":"un gatto"}]}`
+	e := newV7Env(t, board)
+	st := `{"version":1,"scenes":{"s2":{"status":"partito","job":{"provider":"openrouter","id":"job-9","polling_url":"https://evil.example.com/videos/job-9","model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":"job-9","cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}}}`
+	os.WriteFile(filepath.Join(e.dir, "spot.stato.json"), []byte(st), 0o600)
+	if _, se, code := e.story(t, "run", "--voices"); code != 2 || e.tts != 0 || e.videos != 0 {
+		t.Fatalf("code=%d tts=%d video=%d\n%s", code, e.tts, e.videos, se)
+	}
+}
+
+// il percorso assoluto di un file del kit scritto a mano nello storyboard e'
+// rifiutato; i campi riempiti dal kit restano validi.
+func TestV7AssolutoDelKitScrittoAMano(t *testing.T) {
+	e := newV7Env(t, v7Board(""))
+	abs := filepath.Join(e.kitDir, "logo.png")
+	b := strings.Replace(v7Board(""), `"file":"a.png"`, `"file":"`+abs+`"`, 1)
+	b = strings.Replace(b, "KIT", mustRel(t, e), 1)
+	os.WriteFile(e.board, []byte(b), 0o644)
+	if _, se, code := e.story(t, "check"); code != 2 || !strings.Contains(se, "assoluto") {
+		t.Errorf("code=%d\n%s", code, se)
+	}
+	os.WriteFile(e.board, []byte(strings.Replace(v7Board(""), "KIT", mustRel(t, e), 1)), 0o644)
+	if _, se, code := e.story(t, "check"); code != 0 {
+		t.Errorf("storyboard valido col kit: code=%d\n%s", code, se)
+	}
+}
+
+// una voce registrata nello stato che e' un link fuori cartella: check non la
+// segue (avviso, nessun errore fatale).
+func TestV7VoceNelloStatoConLinkFuori(t *testing.T) {
+	e := newV7Env(t, v7Board(v7Parlato))
+	out := filepath.Join(filepath.Dir(e.dir), "fuori.wav")
+	os.WriteFile(out, v7WAV(1), 0o644)
+	os.MkdirAll(filepath.Join(e.dir, "voce"), 0o755)
+	if err := os.Symlink(out, filepath.Join(e.dir, "voce", "s1-v1.wav")); err != nil {
+		t.Skip(err)
+	}
+	st := `{"version":1,"scenes":{"s1":{"status":"","voice":{"file":"voce/s1-v1.wav","done":"2026-01-01T00:00:00Z"},"voice_status":"fatto","voice_key":"x","charges":[{"kind":"voce","cost_est_usd":0.0006,"at":"2026-01-01T00:00:00Z"}]}}}`
+	os.WriteFile(filepath.Join(e.dir, "spot.stato.json"), []byte(st), 0o600)
+	o, se, code := e.story(t, "check")
+	if code != 0 && code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+	if code == 0 && !strings.Contains(o+se, "voce") {
+		t.Errorf("nessun avviso sulla voce fuori cartella:\n%s\n%s", o, se)
+	}
+	if e.tts != 0 {
+		t.Errorf("richieste: %d", e.tts)
+	}
+}
