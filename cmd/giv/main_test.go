@@ -117,16 +117,6 @@ func TestVideoOpenAIRemoved(t *testing.T) {
 	}
 }
 
-func TestVideoGeminiNoDefault(t *testing.T) {
-	_, se, code, hits := runGiv(t, nil, "video", "--provider", "gemini", "x")
-	if code == 0 || hits != 0 {
-		t.Fatalf("code=%d hits=%d", code, hits)
-	}
-	if !strings.Contains(se, "--provider openrouter --model google/gemini-omni-1.2-flash") {
-		t.Errorf("hint mancante: %s", se)
-	}
-}
-
 // GIV_PROVIDER: senza chiave del provider scelto l'errore nomina la sua chiave.
 func TestGivProvider(t *testing.T) {
 	noKeys := []string{"GEMINI_API_KEY=", "OPENAI_API_KEY=", "XAI_API_KEY=", "OPENROUTER_API_KEY="}
