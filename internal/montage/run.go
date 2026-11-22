@@ -307,22 +307,16 @@ func stagingDir(prefix string) (string, error) {
 }
 
 // TempDir crea una cartella privata (0700) nella cartella temporanea del
-// sistema, rifiutando una cartella temporanea scrivibile da altri utenti
-// senza sticky bit (TMPDIR condivisa senza protezione): lì un altro utente
-// potrebbe rinominare la cartella privata e metterne un'altra al suo posto.
+// sistema, solo se quella e le cartelle sopra sono protette (tempBase): in
+// una TMPDIR condivisa senza protezione un altro utente potrebbe rinominare
+// la cartella privata e metterne un'altra al suo posto.
 func TempDir(prefix string) (string, error) {
 	tmp := os.TempDir()
-	fi, err := os.Stat(tmp)
+	base, err := tempBase(tmp)
 	if err != nil {
-		return "", fmt.Errorf("cartella temporanea %s: %w", tmp, err)
+		return "", fmt.Errorf("cartella temporanea %s: %w: imposta TMPDIR su una cartella tua", tmp, err)
 	}
-	if !fi.IsDir() {
-		return "", fmt.Errorf("cartella temporanea %s: non è una cartella", tmp)
-	}
-	if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&fs.ModeSticky == 0 {
-		return "", fmt.Errorf("cartella temporanea %s scrivibile da altri utenti senza sticky bit: imposta TMPDIR su una cartella tua", tmp)
-	}
-	return os.MkdirTemp(tmp, prefix)
+	return os.MkdirTemp(base, prefix)
 }
 
 // ctxReader interrompe la lettura alla scadenza o all'annullamento di ctx.
