@@ -185,6 +185,10 @@ type Text struct {
 	Pos   Position  // posizione nel quadro, dentro i margini
 	Style TextStyle // stile
 	Fade  float64   // dissolvenza in entrata e in uscita, secondi (0: nessuna)
+	// MarginV è la distanza in pixel dal bordo alto (posizioni in alto) o
+	// basso (in basso) al posto del margine sicuro; 0: quello dei margini.
+	// Al centro non conta.
+	MarginV int
 }
 
 // ASS genera il file .ass dei testi per un video w×h, coi margini sicuri m.
@@ -231,6 +235,9 @@ func ASS(w, h int, m Margins, texts []Text) ([]byte, error) {
 		if !finite(st.Border) || st.Border < 0 || st.Border > 100 {
 			return nil, invalid("testo %d: bordo %v: da 0 a 100 pixel", n, st.Border)
 		}
+		if t.MarginV < 0 || t.MarginV > h {
+			return nil, invalid("testo %d: margine verticale %d: da 0 a %d pixel", n, t.MarginV, h)
+		}
 		k := styleKey{st, t.Pos}
 		name, ok := names[k]
 		if !ok {
@@ -252,8 +259,8 @@ func ASS(w, h int, m Margins, texts []Text) ([]byte, error) {
 			ms := strconv.Itoa(int(math.Round(t.Fade * 1000)))
 			text = `{\fad(` + ms + "," + ms + ")}" + text
 		}
-		fmt.Fprintf(&events, "Dialogue: 0,%s,%s,%s,,0,0,0,,%s\n",
-			formatASSTime(centis(t.Start)), formatASSTime(centis(t.End)), name, text)
+		fmt.Fprintf(&events, "Dialogue: 0,%s,%s,%s,,0,0,%d,,%s\n",
+			formatASSTime(centis(t.Start)), formatASSTime(centis(t.End)), name, t.MarginV, text)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Script Info]\n; generato da giv\nScriptType: v4.00+\nPlayResX: %d\nPlayResY: %d\nWrapStyle: 0\nScaledBorderAndShadow: yes\nYCbCr Matrix: None\n\n", w, h)

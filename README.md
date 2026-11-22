@@ -580,7 +580,9 @@ lato per gli altri formati):
   3, al più 60; sotto il cartello l'audio è muto): `--end-color <#RRGGBB>` (sfondo, default
   nero), `--end-card <immagine>` (sfondo, contenuta nel quadro sul colore), `--end-logo
   <immagine>` (al centro, o sopra il testo), `--end-text` (al centro), `--end-subtext` (in
-  basso, più piccolo). Basta uno di questi flag per avere il cartello;
+  basso, più piccolo; nei 9:16, dove sotto il testo non restano due righe prima del
+  margine del 35%, subito sotto il testo, che sale un poco). Basta uno di questi flag per
+  avere il cartello;
 - per titolo e cartello: `--font <ttf|otf|ttc>` (default DejaVu Sans, se installato) e
   `--color <#RRGGBB>` (default bianco, col bordo nero).
 
@@ -954,8 +956,8 @@ montaggio resta quello di prima):
   `stile_testi`), con una dissolvenza di 0,3 s.
 - **`cartello_finale`**: accodato dopo l'ultima scena a taglio netto, senza audio suo (la
   musica continua): `durata` (default 3, al più 60), `sfondo` (`#RRGGBB`, default nero),
-  `logo` (immagine al centro), `testo` e `sottotesto`; serve almeno uno fra logo, testo e
-  sottotesto.
+  `logo` (immagine al centro), `testo` e `sottotesto` (in basso; nei 9:16 subito sotto il
+  testo, come in `giv post overlay`); serve almeno uno fra logo, testo e sottotesto.
 - **`stile_testi`**: stile di titoli e cartello: `font` (file `.ttf`, `.otf` o `.ttc`
   nella cartella dello storyboard; default DejaVu Sans, se installato), `colore`
   (`#RRGGBB`, default bianco), `bordo` (colore del contorno, default nero, o `"nessuno"`),
