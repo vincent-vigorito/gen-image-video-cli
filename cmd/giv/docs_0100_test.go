@@ -30,6 +30,16 @@ var docCommands = []struct {
 	{"edit", []string{"edit", "--help"}, nil, false},
 	{"upscale", []string{"upscale", "--help"}, nil, false},
 	{"avatar", []string{"avatar", "--help"}, nil, false},
+	{"post trim", []string{"post", "trim", "--help"}, nil, false},
+	{"post speed", []string{"post", "speed", "--help"}, nil, false},
+	{"post freeze", []string{"post", "freeze", "--help"}, nil, false},
+	{"post reframe", []string{"post", "reframe", "--help"}, nil, false},
+	{"post overlay", []string{"post", "overlay", "--help"}, nil, false},
+	{"post mix", []string{"post", "mix", "--help"}, nil, false},
+	{"sheet", []string{"sheet", "--help"}, nil, false},
+	{"frame", []string{"frame", "--help"}, nil, false},
+	{"gif", []string{"gif", "--help"}, nil, false},
+	{"export", []string{"export", "--help"}, nil, false},
 }
 
 // flag elencati da un help: "-nome" (pacchetto flag) o "--nome" (testo di giv story)
