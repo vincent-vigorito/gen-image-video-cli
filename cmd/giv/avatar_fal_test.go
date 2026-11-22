@@ -83,7 +83,7 @@ func TestAvatarFalCompleto(t *testing.T) {
 	}
 	iu, _ := start["image_url"].(string)
 	au, _ := start["audio_url"].(string)
-	if !strings.HasPrefix(iu, e.cdn.URL) || !strings.HasPrefix(au, e.cdn.URL) || iu == au {
+	if !strings.HasPrefix(iu, falStore) || !strings.HasPrefix(au, falStore) || iu == au {
 		t.Errorf("corpo avvio %v", start)
 	}
 	if n := e.count("POST", avatarEP); n != 1 {
@@ -240,5 +240,47 @@ func TestStoryAvatarRunSenzaChiave(t *testing.T) {
 	}
 	if _, err := os.Stat(strings.TrimSuffix(p, ".json") + ".stato.json"); err == nil {
 		t.Errorf("stato scritto senza chiave")
+	}
+}
+
+// fix security: caricamento senza ritentativi e solo verso lo storage di fal.
+func TestAvatarFalCaricamentoRifiuti(t *testing.T) {
+	e := newFalEnv(t)
+	img, wav := falPNG(t, "a.png"), avatarWav(t, "v.wav", "1")
+	e.initStatus = 503
+	if _, _, code := avatarCmd("--image", img, "--audio", wav); code == 0 {
+		t.Errorf("initiate 503 accettato")
+	}
+	if n := e.count("POST", "/storage/upload/initiate"); n != 1 {
+		t.Errorf("initiate %d (un solo tentativo)", n)
+	}
+	e.initStatus, e.badHost = 0, true
+	if _, se, code := avatarCmd("--image", img, "--audio", wav); code == 0 || !strings.Contains(se, "fuori dallo storage") {
+		t.Errorf("upload_url su altro host: code %d %q", code, se)
+	}
+	if len(e.other) != 0 {
+		t.Errorf("richieste all'host non fal: %d", len(e.other))
+	}
+	if n := e.count("POST", avatarEP); n != 0 {
+		t.Errorf("avvii %d", n)
+	}
+}
+
+// fix security: con un tetto e senza durata misurata (ffprobe assente) la scena
+// avatar non è stimabile: codice 2, anche con costo dichiarato, nessuno stato.
+func TestStoryAvatarTettoSenzaDurata(t *testing.T) {
+	cutNeedFF(t)
+	n := capsServer(t)
+	newFalEnv(t)
+	p := avatarProject(t, strings.Replace(avatarBoard(`,"tetto_costo_usd":5`), `"voce":"v.wav"`, `"voce":"v.wav","costo_dichiarato_usd":0.2`, 1))
+	t.Setenv("PATH", t.TempDir())
+	if _, se, code, _ := storyRun(t, p, n); code != 2 {
+		t.Errorf("check: code %d: %s", code, se)
+	}
+	if _, se, code := cutRun(t, "run", p); code != 2 {
+		t.Errorf("run: code %d: %s", code, se)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(p, ".json") + ".stato.json"); err == nil {
+		t.Errorf("stato scritto")
 	}
 }
