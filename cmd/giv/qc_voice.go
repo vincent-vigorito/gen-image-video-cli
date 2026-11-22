@@ -49,7 +49,8 @@ const qcVoiceHelp = `Controllo della voce (a pagamento: trascrizione con xai, 0,
   --dry-run              controlli tecnici, richiesta e stima, senza trascrizione
   --strict               un difetto fa uscire con codice 1 (il JSON esce comunque)
 
-  Stima dalla durata misurata (arrotondata al secondo per eccesso). Una trascrizione
+  Stima dalla durata misurata, arrotondata al minuto per eccesso (la granularità
+  dell'addebito non è documentata): 30 s contano 0,001667 $. Una trascrizione
   dall'esito incerto esce con codice 5 e una riga failed in giv-log.jsonl, senza
   rilancio; un caricamento non arrivato fino in fondo è un errore senza addebito.
 `

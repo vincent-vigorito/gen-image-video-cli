@@ -810,8 +810,9 @@ giv qc --voice out/s1-voce.wav --script-file testi/s1.txt --kit kit/argo.json --
 
 - Prima i controlli tecnici del file, come sopra (gratuiti, con l'audio atteso), poi la
   **trascrizione** con xAI (chiave `XAI_API_KEY`, `POST /v1/stt`), **a pagamento**: 0,10 $
-  per ora di audio, 30 secondi costano meno di 0,001 $. La stima viene dalla durata misurata
-  sul file (arrotondata al secondo per eccesso); `--max-cost` rifiuta con codice 2 se la
+  per ora di audio. La stima viene dalla durata misurata sul file, arrotondata al minuto
+  per eccesso perché la granularità dell'addebito non è documentata (30 secondi contano
+  0,001667 $, il vero è circa la metà); `--max-cost` rifiuta con codice 2 se la
   supera o se la durata non si misura; `--dry-run` fa i controlli tecnici e stampa la
   richiesta e la stima senza trascrivere.
 - Il file (`wav`, `mp3`, `ogg`, `flac`, `aac`, `m4a`, `mp4`, al massimo 100 MiB) va al

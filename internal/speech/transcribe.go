@@ -153,7 +153,9 @@ var TranscribePrices = []TranscribePrice{
 }
 
 // EstimateTranscribe stima il costo della trascrizione di durationS secondi
-// (misurati sul file, arrotondati al secondo per eccesso) alla data at. nil
+// (misurati sul file) alla data at, arrotondati al minuto per eccesso: la
+// granularità dell'addebito non è documentata, così la stima non sta sotto
+// il vero (30 s: 0,001667 $ invece di 0,000833 $). nil
 // col motivo se manca la tariffa o la durata: con un tetto la richiesta è
 // non stimabile e non parte.
 func EstimateTranscribe(provider string, durationS float64, at time.Time) (*Estimate, string) {
@@ -165,7 +167,8 @@ func EstimateTranscribe(provider string, durationS float64, at time.Time) (*Esti
 }
 
 // TranscribeCost è il costo di una trascrizione di durationS secondi alla data
-// at (giv lo calcola: il provider non riporta il costo). ok false senza
+// at, al minuto per eccesso come la stima (giv lo calcola: il provider non
+// riporta il costo). ok false senza
 // tariffa o senza una durata valida.
 func TranscribeCost(provider string, durationS float64, at time.Time) (usd float64, source string, ok bool) {
 	usd, src, why := transcribeCost(provider, durationS, at, "calcolato da giv")
@@ -186,12 +189,12 @@ func transcribeCost(provider string, durationS float64, at time.Time, what strin
 	if !found {
 		return 0, "", fmt.Sprintf("nessuna tariffa della trascrizione per %s nel listino di giv", provider)
 	}
-	secs := math.Ceil(durationS)
-	usd := secs * p.USDPerHour / 3600
+	mins := math.Ceil(durationS / 60)
+	usd := mins * p.USDPerHour / 60
 	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
 		return 0, "", "tariffa della trascrizione non valida"
 	}
-	return usd, fmt.Sprintf("%s %s: %g $ per ora di audio × %.0f s", what, provider, p.USDPerHour, secs), ""
+	return usd, fmt.Sprintf("%s %s: %g $ per ora di audio × %.0f min (%.1f s arrotondati al minuto per eccesso)", what, provider, p.USDPerHour, mins, durationS), ""
 }
 
 // CleanWord ripulisce una parola trascritta: UTF-8 valido, senza caratteri di
