@@ -321,11 +321,16 @@ func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*
 		}
 		body["input_references"] = refs
 	}
-	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati;
+	// ripetizioni come prima (httpx.Retry), nessun redirect
 	res := &provider.Result{}
 	for i := 0; i < max(req.N, 1); i++ {
 		var resp imagesResponse
-		if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images", body, &resp); err != nil {
+		if err := c.apiCall(ctx, httpx.Retry, http.MethodPost, c.baseURL+"/images", "application/json", payload, &resp); err != nil {
 			return nil, err
 		}
 		media, err := c.mediaFromImages(ctx, resp)
@@ -358,7 +363,7 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 		case d.B64JSON != "":
 			data, err = base64.StdEncoding.DecodeString(d.B64JSON)
 		case d.URL != "":
-			data, err = c.download(ctx, d.URL)
+			data, err = c.fetchResult(ctx, d.URL)
 		default:
 			continue
 		}
@@ -630,16 +635,21 @@ func (c *Client) routerStart(ctx context.Context, req provider.VideoRequest) (pr
 	var job struct {
 		ID         string `json:"id"`
 		PollingURL string `json:"polling_url"`
-		Status     string `json:"status"`
 	}
-	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
-	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return provider.Job{}, err
+	}
+	// l'avvio del job non si ripete né segue redirect: con un 3xx, un 5xx o un timeout potrebbe essere partito
+	if err := c.apiCall(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos", "application/json", payload, &job); err != nil {
 		return provider.Job{}, httpx.Start(err)
 	}
-	if job.PollingURL == "" {
-		return provider.Job{}, httpx.Start(fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status))
+	// id e indirizzo di attesa controllati prima di registrare il job
+	started := provider.Job{ID: job.ID, PollingURL: job.PollingURL}
+	if err := c.startedJob(started); err != nil {
+		return provider.Job{}, httpx.Start(err)
 	}
-	return provider.Job{ID: job.ID, PollingURL: job.PollingURL}, nil
+	return started, nil
 }
 
 // wait attende un job già partito fino al tetto e ne scarica il risultato; con
@@ -717,8 +727,11 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 	return nil, nil
 }
 
-// routerPoll controlla una volta lo stato di un job OpenRouter: risultato
-// scaricato, errore, oppure nil e nil se il job è ancora in corso.
+// routerPoll controlla una volta lo stato di un job OpenRouter (giv video,
+// giv story, giv upscale e il loro recupero con giv job fetch): risultato
+// scaricato, errore, oppure nil e nil se il job è ancora in corso. Stato e
+// risultati passano da apiCall e fetchResult; il motivo di un job fallito è
+// filtrato.
 func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Result, error) {
 	var st struct {
 		Status       string          `json:"status"`
@@ -728,7 +741,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 			Cost float64 `json:"cost"`
 		} `json:"usage"`
 	}
-	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.apiCall(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, "", nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -739,22 +752,17 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 		}
 		var media []provider.Media
 		for _, u := range st.UnsignedURLs {
-			// le content URL stanno sullo stesso host API e richiedono l'Authorization;
-			// un URL su un altro host si scarica senza chiave
-			get := c.download
-			if c.apiHost(u) {
-				get = c.downloadAuth
-			}
-			data, err := get(ctx, u)
+			// sull'host API con la chiave, altrove senza (fetchResult)
+			data, err := c.fetchResult(ctx, u)
 			if err != nil {
 				return nil, err
 			}
 			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 		}
 		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
-	case "failed", "cancelled", "error":
+	case "failed", "cancelled", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
 	return nil, nil
 }
@@ -825,11 +833,6 @@ func jobTimeout(d time.Duration) time.Duration {
 
 func (c *Client) download(ctx context.Context, url string) ([]byte, error) {
 	return c.get(ctx, url, false)
-}
-
-// downloadAuth è per le URL sull'host API del provider: mai usarla su CDN esterne.
-func (c *Client) downloadAuth(ctx context.Context, url string) ([]byte, error) {
-	return c.get(ctx, url, true)
 }
 
 func (c *Client) get(ctx context.Context, url string, auth bool) ([]byte, error) {

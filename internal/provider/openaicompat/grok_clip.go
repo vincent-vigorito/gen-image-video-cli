@@ -112,12 +112,15 @@ func shortURL(raw string) string {
 	return u.Scheme + "://" + u.Host + "/…"
 }
 
-// GenerateClip esegue un'operazione su una clip esistente; ogni dialetto ha il
-// suo caso (xAI qui).
+// GenerateClip esegue un'operazione su una clip esistente (avvio mai
+// ripetuto), la segnala al registro dei job, la attende e ne scarica il
+// risultato; ogni dialetto ha il suo caso.
 func (c *Client) GenerateClip(ctx context.Context, req provider.ClipRequest) (*provider.Result, error) {
 	switch {
 	case c.opts.Grok:
 		return c.grokClip(ctx, req)
+	case c.opts.Router:
+		return c.routerClip(ctx, req)
 	}
 	return nil, fmt.Errorf("%s: giv %s non supportato", c.name, req.Op)
 }
