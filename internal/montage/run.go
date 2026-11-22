@@ -678,12 +678,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 // cartello. Logo e cartello si copiano: il piano del chiamante non cambia.
 func (t Tool) prepareExtended(w *Work, p *Plan, starts []float64, total float64, res *Result) (float64, error) {
 	image := func(what, path string) (*Info, error) {
-		// letta alla lettera come nel montaggio: un file solo, mai una sequenza
-		args, err := imageProbeArgs(path)
-		if err != nil {
-			return nil, probeErr(what, err)
-		}
-		info, err := t.probeArgs(w.ctx, path, args)
+		info, err := t.Probe(w.ctx, path)
 		if err != nil {
 			return nil, probeErr(what, err)
 		}
