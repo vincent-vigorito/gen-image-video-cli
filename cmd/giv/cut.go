@@ -121,7 +121,7 @@ func runStoryCut(args []string) error {
 	multi := &storyCutFormats{Storyboard: path, Scenes: len(plans[0].Clips), Formats: []storyCutResult{}}
 	for i := range plans {
 		var clash []string
-		if plans[i].Height > plans[i].Width {
+		if plans[i].Height >= plans[i].Width { // non orizzontale: 9:16, 4:5, 1:1
 			for _, n := range logoTitleClash(s.Montaggio) {
 				w := logoTitleWarning(n, cutAspectOf(s, formats[i]))
 				fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
@@ -998,10 +998,10 @@ func titleWarnings(s *story.Storyboard, path string, out *storyCheck) error {
 		}
 	}
 	if clash := logoTitleClash(m); len(clash) > 0 {
-		var vert []string // formati verticali montati
+		var vert []string // formati montati non orizzontali (9:16, 4:5, 1:1)
 		formats, _ := cutFormats(s, "")
 		for _, f := range formats {
-			if w, h, _, err := cutFormatFor(s, f); err == nil && h > w {
+			if w, h, _, err := cutFormatFor(s, f); err == nil && h >= w {
 				vert = append(vert, cutAspectOf(s, f))
 			}
 		}
@@ -1015,8 +1015,8 @@ func titleWarnings(s *story.Storyboard, path string, out *storyCheck) error {
 }
 
 // logoTitleClash sono i numeri (da 1) dei titoli in alto quando anche il logo
-// è in alto (default alto-destra): nei formati verticali il titolo va a capo
-// su tutta la larghezza e il logo lo copre. Nessuno spostamento, solo l'avviso.
+// è in alto (default alto-destra): nei formati non orizzontali il titolo va
+// a capo o arriva sotto il logo, che lo copre. Nessuno spostamento, solo l'avviso.
 func logoTitleClash(m *story.Montaggio) []int {
 	if m == nil || m.Logo == nil || (m.Logo.Posizione != "" && !strings.HasPrefix(m.Logo.Posizione, "alto")) {
 		return nil
@@ -1030,7 +1030,7 @@ func logoTitleClash(m *story.Montaggio) []int {
 	return n
 }
 
-// logoTitleWarning è l'avviso di logoTitleClash per il titolo n nei formati verticali formats.
+// logoTitleWarning è l'avviso di logoTitleClash per il titolo n nei formati non orizzontali formats.
 func logoTitleWarning(n int, formats string) string {
 	return fmt.Sprintf("titolo n. %d: in alto come il logo, in %s possono sovrapporsi (titolo al centro o in basso, o logo in basso)", n, formats)
 }
