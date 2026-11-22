@@ -162,6 +162,8 @@ func main() {
 		err = cmdPresets(os.Args[2:])
 	case "story":
 		err = cmdStory(os.Args[2:])
+	case "kit":
+		err = cmdKit(os.Args[2:])
 	case "upscale":
 		err = cmdUpscale(os.Args[2:])
 	case "avatar":
@@ -214,6 +216,7 @@ Uso:
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; cut: [--formato <r>] [--export <canali>]; aiuto: giv story help)
+  giv kit check <kit.json>         controlla il kit di marca e personaggi ed elenca i file con le misure (gratuito)
   giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv post <operazione> --video <file> [--out <dir>] [--name <nome>] [--dry-run]  rifinitura in locale con ffmpeg, gratuita (operazioni: giv post help)
