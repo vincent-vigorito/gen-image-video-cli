@@ -151,6 +151,7 @@ giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
 giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
                                               # monta con ffmpeg le scene già pronte, un file per formato
 giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
+giv kit check <kit.json>                      # controlla il kit di marca e personaggi ed elenca i file con le misure (gratuito)
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
@@ -191,6 +192,7 @@ prima o dopo.
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 | `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
 | `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS |
+| `kit check` | nessun flag: il file del kit è l'unico argomento; `giv kit help` (o `giv kit --help`) stampa l'aiuto |
 | `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
 | `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
 | `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
@@ -997,6 +999,78 @@ sopra per formato, con `format`) ed `exports`. Esce con codice 2 per clip mancan
 storyboard o formato non validi e uscita fuori dalla cartella; con codice 1 se mancano
 `ffmpeg` o `ffprobe` o il montaggio fallisce.
 
+## Kit di marca e personaggi
+
+Il kit è un file JSON (di solito `kit.json`) scritto una volta per la marca: colori, logo,
+font, cartello finale, musica, immagini e descrizione dei personaggi, voce e pronunce.
+`giv kit check` lo controlla ed elenca i file con le misure, **senza generare niente**:
+niente rete, niente chiavi, gratuito, e non scrive niente (nemmeno in `giv-log.jsonl`).
+L'esempio in `examples/kit/` (logo, personaggio e musica segnaposto, font libero DejaVu
+Sans Bold con la sua licenza) passa il controllo:
+
+```bash
+giv kit check examples/kit/kit.json     # JSON su stdout: file con le misure, personaggi, voce
+giv kit help                            # aiuto; anche giv kit check --help
+```
+
+```json
+{
+  "marca": {
+    "colori": { "primario": "#1E3A2B", "testo": "#FFFFFF" },
+    "logo": { "file": "logo.png", "posizione": "alto-destra", "larghezza": 0.12 },
+    "stile_testi": { "font": "font/DejaVuSans-Bold.ttf" },
+    "cartello_finale": { "durata": 3, "logo": "logo.png", "testo": "Marca di prova" },
+    "musica": { "file": "musica/base.wav", "volume": 0.25, "sotto_voce": true },
+    "volume": -14
+  },
+  "personaggi": {
+    "mascotte": {
+      "riferimenti": ["personaggi/mascotte-fronte.png", "personaggi/mascotte-profilo.png"],
+      "descrizione": "Mascotte di prova: segnaposto da sostituire…",
+      "tutela": "illustrazione"
+    }
+  },
+  "voce": { "provider": "xai", "voce": "eve", "lingua": "it", "velocita": 1.0 },
+  "pronuncia": { "Swerpify": "suèrpifai" }
+}
+```
+
+- **`marca`**: `logo`, `stile_testi`, `cartello_finale` e `musica` hanno gli stessi campi
+  e gli stessi limiti del blocco `montaggio` dello storyboard; `volume` è il volume finale
+  in LUFS (da -70 a -5). `colori.primario` (sfondo del cartello e bordo dei testi) e
+  `colori.testo` (colore dei testi) sono colori `#RRGGBB`.
+- **`personaggi`**: per nome (lettere, cifre, `_` e `-`, al massimo 64), un insieme di
+  immagini di riferimento (`riferimenti`, da 1 a 50 file `.png`, `.jpg` o `.webp`, senza
+  ripetizioni), una `descrizione` (al più 2000 byte) e una `tutela` (`prodotto`,
+  `illustrazione`, `no` o una clausola dei preset).
+- **`voce`**: `provider` (`xai` o `gemini`), `modello`, `voce`, `lingua` (es. `it`),
+  `velocita` (da 0,7 a 1,5) e `stile` (a parole).
+- **`pronuncia`**: al più 200 parole, ognuna con la sua pronuncia (al più 100 byte
+  ciascuna, su una riga).
+- Serve almeno uno fra `marca`, `personaggi`, `voce` e `pronuncia`; un campo sconosciuto,
+  un valore fuori dai limiti o un file del kit oltre 1 MiB escono con codice 2.
+
+**File.** Il kit è in sola lettura e chiuso nella sua cartella (quella del file JSON):
+ogni file è un percorso relativo a quella cartella e non ne esce, nemmeno seguendo i
+link; solo file normali (niente cartelle, FIFO o device), niente URL. Un file fuori dalla
+cartella, assoluto, mancante o un link che porta fuori escono con codice 2, con tutti i
+problemi trovati, uno per riga. Le immagini si leggono alla lettera, mai come sequenza.
+
+**Cosa controlla `giv kit check`.** Logo e riferimenti devono essere immagini vere
+(riconosciute dai byte, al più 20 MiB; con `ffprobe` anche le misure) e la musica deve
+avere una traccia audio (durata con `ffprobe`): altrimenti codice 2. Senza `ffprobe` le
+misure non si leggono e c'è un avviso. Avvisi, senza cambiare il codice d'uscita: logo
+senza trasparenza (PNG senza alfa, JPEG), font non leggibile (`giv story cut` lo
+rifiuterebbe), più riferimenti di quanti ne accettano i modelli video con limiti noti
+(xAI, Gemini, fal), descrizione oltre 500 caratteri, `velocita` con Gemini (che non ha
+una velocità numerica).
+
+Il JSON su stdout ha `kit`, `files` (per file `field`, `file`, `kind` fra `logo`, `font`,
+`musica` e `riferimento`, `bytes`, e secondo il tipo `width`, `height`, `alpha`,
+`font_family`, `duration_s`, `codec`), `characters` (`name`, `references`, `tutela`,
+`description_chars`), `voice`, `pronunciations` (quante parole) e `warnings`; gli avvisi
+vanno anche su stderr.
+
 ## Uso da un agente (Claude Code)
 
 La skill operativa è nel repo e si installa con un symlink:
@@ -1037,10 +1111,12 @@ internal/caps/            capacità e prezzi dei modelli video (OpenRouter /vide
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
+internal/kit/             kit di marca e personaggi: lettura, controlli e percorsi chiusi nella cartella del kit
 internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…, sheet, frame, gif, export)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto
+examples/kit/             kit di marca e personaggi d'esempio con file segnaposto
 ```
 
 ## Versioning
