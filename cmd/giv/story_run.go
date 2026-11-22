@@ -580,10 +580,18 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 
 	req := job.req
 	req.Refs = slices.Clone(job.req.Refs)
+	req.Keyframes = slices.Clone(job.req.Keyframes)
 	shown := newManifestInputs(req) // come nello storyboard
 	if err := r.staleKeyframe(scene); err != nil {
 		return err // nessuna richiesta: il fotogramma si rigenera solo con --new-keyframe
 	}
+	// fotogrammi intermedi da URL scaricati e controllati prima del fotogramma
+	// chiave a pagamento: uno non valido ferma la scena senza spesa
+	remote := provider.VideoRequest{LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: req.Keyframes}
+	if err := tmp.resolveURLs(&remote, "--keyframe"); err != nil {
+		return fail(err)
+	}
+	req.Keyframes = remote.Keyframes
 	switch {
 	case scene.FotogrammaChiave != nil:
 		if r.needKeyframe(scene) {
@@ -607,18 +615,18 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 			return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 		}
 		req.Image = p
-		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs})
+		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: job.req.Keyframes})
 	case scene.ContinuaDa != "":
 		p, err := r.lastFrame(ctx, scene, work)
 		if err != nil {
 			return fail(err)
 		}
 		req.Image = p
-		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs})
+		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: job.req.Keyframes})
 	}
 	for _, in := range videoInputs(&req) {
-		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) {
-			continue
+		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) || slices.Contains(tmp, *in.path) {
+			continue // URL e copie già private
 		}
 		rel, err := r.s.Rel(*in.path)
 		if err != nil {
@@ -1008,6 +1016,12 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	for i := range ss.Charges {
 		if c := &ss.Charges[i]; c.Kind == story.ChargeClip && c.JobID != "" && c.JobID == man.JobID {
 			c.CostUSD = man.CostUSD
+			if man.CostUSD <= 0 && c.CostEstUSD != nil && man.usageEstUSD >= *c.CostEstUSD {
+				// stima dai consumi riportati (gemini, contatori validati): prende
+				// il posto della riserva solo se non è più bassa, a piena precisione
+				v := man.usageEstUSD
+				c.CostEstUSD = &v
+			}
 		}
 	}
 	r.save()

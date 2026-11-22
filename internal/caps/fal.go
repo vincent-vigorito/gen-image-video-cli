@@ -30,9 +30,20 @@ func Fal() []Model {
 	}
 	return []Model{
 		{
+			// l'audio non ha un campo nella scheda (se c'è e quanto costa è da
+			// verificare con la prova): --audio rifiutato, stima senza audio
+			ID: "kling-4.0", Durations: seconds(3, 30), DefaultDuration: 5,
+			Resolutions: []string{"720p", "1080p", "4k"},
+			Frames:      []string{"first_frame", "last_frame"}, Seed: ptr(false),
+			MaxRefs: ptr(0), MaxKeyframes: ptr(8), Shots: ptr(true),
+			Pricing: map[string]float64{"duration_seconds_720p": 0.157, "duration_seconds_1080p": 0.235, "duration_seconds_4k": 0.549},
+			Source:  falSource("kling/v4/image-to-video"),
+			check:   checkKlingV4,
+		},
+		{
 			ID: "kling-v3-pro", Durations: seconds(3, 15), DefaultDuration: 5,
 			Frames: []string{"first_frame", "last_frame"}, Audio: ptr(true), Seed: ptr(false),
-			MaxRefs: ptr(4), Passthrough: []string{"cfg_scale", "negative_prompt"},
+			MaxRefs: ptr(4), Shots: ptr(true), Passthrough: []string{"cfg_scale", "negative_prompt"},
 			// la scheda dice 0,112 $/s senza audio, il listino generale 0,14:
 			// fonti discordi, vale la più alta finché la prova non lo chiarisce
 			Pricing: map[string]float64{"duration_seconds_with_audio": 0.168, "duration_seconds_without_audio": 0.14},
@@ -64,6 +75,41 @@ func checkKlingV3(req *provider.VideoRequest) error {
 		return reject("--aspect non supportato da kling-v3-pro: il formato segue --image")
 	case utf8.RuneCountInString(req.Prompt) > 2500:
 		return reject("prompt di %d caratteri: kling-v3-pro ne accetta al massimo 2500", utf8.RuneCountInString(req.Prompt))
+	}
+	return checkShots("kling-v3-pro", req.Shots, 15, 2500)
+}
+
+// KlingV4Resolution è la risoluzione di Kling 4.0 senza --resolution (default
+// della scheda): giv la invia sempre, così la stima vale per quella generata.
+const KlingV4Resolution = "1080p"
+
+func checkKlingV4(req *provider.VideoRequest) error {
+	switch {
+	case req.Image == "":
+		return reject("kling-4.0 vuole --image (primo fotogramma)")
+	case req.Aspect != "":
+		return reject("--aspect non supportato da kling-4.0: il formato segue --image")
+	case req.Audio != nil:
+		return reject("--audio non supportato da kling-4.0: la scheda di fal non ha un campo per l'audio")
+	case utf8.RuneCountInString(req.Prompt) > 26000:
+		return reject("prompt di %d caratteri: kling-4.0 ne accetta al massimo 26000", utf8.RuneCountInString(req.Prompt))
+	}
+	if req.Resolution == "" {
+		req.Resolution = KlingV4Resolution
+	}
+	return checkShots("kling-4.0", req.Shots, 30, 512)
+}
+
+// checkShots controlla le inquadrature sui limiti della scheda: secondi interi
+// da 1 a maxS, testo di al massimo maxChars caratteri.
+func checkShots(model string, shots []provider.Shot, maxS, maxChars int) error {
+	for i, s := range shots {
+		if s.Duration < 1 || s.Duration > maxS {
+			return reject("--shot n. %d: %d s, %s vuole da 1 a %d s per inquadratura", i+1, s.Duration, model, maxS)
+		}
+		if n := utf8.RuneCountInString(s.Prompt); n > maxChars {
+			return reject("--shot n. %d: testo di %d caratteri, %s ne accetta al massimo %d", i+1, n, model, maxChars)
+		}
 	}
 	return nil
 }
@@ -146,8 +192,9 @@ func aspectSize(short int, aspect string) (w, h int, ok bool) {
 // fal, il valore è prudente e va confermato con la prova a pagamento.
 const AvatarAudioWarnS = 60
 
-// FalOps sono le operazioni sulle clip di fal (giv avatar): schede fissate in
-// giv come quelle video. Il primo modello di un'operazione è il default.
+// FalOps sono le operazioni sulle clip di fal (giv avatar, giv upscale):
+// schede fissate in giv come quelle video. Il primo modello di un'operazione è
+// il default.
 func FalOps() []Op {
 	avatar := func(model, endpoint string, rate float64) Op {
 		return Op{
@@ -158,11 +205,63 @@ func FalOps() []Op {
 			Source:  falSource(endpoint),
 		}
 	}
-	return []Op{
+	ops := []Op{
 		avatar("avatar-v2-standard", "fal-ai/kling-video/ai-avatar/v2/standard", 0.0562),
 		avatar("avatar-v2-pro", "fal-ai/kling-video/ai-avatar/v2/pro", 0.115),
+		{
+			// Topaz (modello Proteus, il default della scheda): solo clip e
+			// fattore; limiti del sorgente non documentati, restano quelli
+			// comuni dei file in ingresso
+			Op: "upscale", Model: "topaz-upscale",
+			Flags: []string{"video", "factor"}, Required: []string{"video"},
+			FactorMin: 1, FactorMax: 4, DefaultFactor: 2,
+			Pricing: map[string]float64{"usd_per_second_720p": 0.01, "usd_per_second_1080p": 0.02, "usd_per_second_above_1080p": 0.08},
+			Source:  falSource("fal-ai/topaz/upscale/video"),
+		},
 	}
+	up := &ops[len(ops)-1]
+	up.Price = func(r provider.ClipRequest) (float64, string, string) { return topazPrice(up, r) }
+	return ops
 }
+
+// topazPrice stima Topaz in modo prudente: secondi del sorgente arrotondati in
+// eccesso × tariffa della fascia d'uscita (lati del sorgente × fattore: un
+// lato oltre la fascia vale la successiva), il doppio sopra i 30 fps (la
+// scheda: ×2 a 60 fps). Servono le misure lette con ffprobe; oltre i 60 fps
+// la scheda non ha tariffa.
+func topazPrice(o *Op, r provider.ClipRequest) (float64, string, string) {
+	s := r.Source
+	if !finitePositive(s.Duration) || s.Width <= 0 || s.Height <= 0 || !finitePositive(s.FPS) {
+		return 0, "", "misure del sorgente non note (URL o ffprobe assente) e listino per fascia d'uscita"
+	}
+	if s.FPS > 60.5 {
+		return 0, "", fmt.Sprintf("sorgente a %.2f fps: la scheda di %s non ha la tariffa oltre i 60 fps", s.FPS, o.Model)
+	}
+	f := o.Factor(r)
+	w, h := float64(s.Width)*f, float64(s.Height)*f
+	short, long := math.Min(w, h), math.Max(w, h)
+	tier := "above_1080p"
+	switch {
+	case short <= 720 && long <= 1280:
+		tier = "720p"
+	case short <= 1080 && long <= 1920:
+		tier = "1080p"
+	}
+	rate, ok := o.Pricing["usd_per_second_"+tier]
+	if !ok || f <= 0 {
+		return 0, "", "nessuna tariffa di " + o.Model + " per la fascia " + tier
+	}
+	mult, fps := 1.0, ""
+	if s.FPS > 30.5 {
+		mult, fps = 2, ", ×2 sopra i 30 fps"
+	}
+	secs := math.Ceil(s.Duration)
+	return secs * rate * mult,
+		fmt.Sprintf("%dx%d ×%g = %.0fx%.0f (fascia %s) × %g $/s × %g s (sorgente di %.2f s a %.2f fps, arrotondato al secondo%s; prudente)",
+			s.Width, s.Height, f, w, h, tier, rate, secs, s.Duration, s.FPS, fps), ""
+}
+
+func finitePositive(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 
 // avatarPrice stima l'Avatar v2: la clip dura quanto l'audio, contato per
 // secondi interi in eccesso (prudente: il conteggio di fal non è nella scheda).

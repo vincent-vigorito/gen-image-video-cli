@@ -102,8 +102,9 @@ var defaultImageModels = map[string]string{
 	"openrouter": "google/gemini-3.1-flash-image",
 }
 
-// gemini e openai non hanno un'API video (vedi resolveVideoModel).
+// openai non ha un'API video (vedi resolveVideoModel).
 var defaultVideoModels = map[string]string{
+	"gemini":     caps.GeminiVideoModel,
 	"xai":        "grok-imagine-video-1.5",
 	"openrouter": "google/gemini-omni-1.2-flash",
 	"fal":        "kling-v3-pro",
@@ -128,7 +129,12 @@ type manifest struct {
 	CostUSD     float64           `json:"cost_usd,omitempty"`     // riportato dal provider
 	CostEstUSD  float64           `json:"cost_est_usd,omitempty"` // stimato da listino, se il provider non lo riporta
 	CostSource  string            `json:"cost_source,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
+	// stima dai consumi riportati (gemini), informativa accanto a quella da listino
+	CostUsageUSD    float64  `json:"cost_usage_usd,omitempty"`
+	CostUsageSource string   `json:"cost_usage_source,omitempty"`
+	Warnings        []string `json:"warnings,omitempty"`
+
+	usageEstUSD float64 // CostUsageUSD non arrotondata (conto del tetto di story run)
 }
 
 func main() {
@@ -198,7 +204,7 @@ Uso:
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
-  giv upscale --video <file|url> [--factor 1.5-3] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter, a pagamento)
+  giv upscale --video <file|url> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter o fal, a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv version                      stampa la versione
 
@@ -220,18 +226,25 @@ giv video:
   --resolution <r>   720p, 1080p
   --negative "<t>"   negative prompt
   --image <file>     frame iniziale (image-to-video)
-  --last-frame <file|url>  ultimo fotogramma (xai 1.5, openrouter dove il modello lo prevede)
-  --ref <file|url>   immagine di riferimento, ripetibile (xai reference_images, openrouter input_references)
+  --last-frame <file|url>  ultimo fotogramma (xai 1.5, gemini, openrouter dove il modello lo prevede)
+  --ref <file|url>   immagine di riferimento, ripetibile (xai reference_images, openrouter input_references,
+                     gemini fino a 6)
+  --keyframe <file|url>  fotogramma intermedio, ripetibile in ordine (fal kling-4.0, al massimo 8)
+  --shot "<s>:<testo>"   inquadratura di s secondi, ripetibile (fal kling-4.0 e kling-v3-pro):
+                     senza prompt né --preset, il video dura la somma
   --duration <s>     durata in secondi (valori ammessi dal modello)
   --audio on|off     audio nativo (default del modello)
-  --seed <n>         seed (openrouter dove il modello lo rispetta; xai ignorato con avviso)
+  --seed <n>         seed (openrouter dove il modello lo rispetta; xai e gemini ignorato con avviso)
   --param k=v        parametro passante del modello, ripetibile (openrouter; valore JSON o stringa)
   --timeout <durata> tetto di attesa del job (default 15m)
   --dry-run          nessuna generazione: stampa parametri, avvisi e costo stimato (JSON)
   --max-cost <usd>   rifiuta (codice 2) se il costo stimato supera il tetto o non è stimabile
   --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
   Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
-  xai: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  xai e gemini: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  Senza --provider né GIV_PROVIDER giv video esce con codice 2: il default gemini vale solo per le immagini.
+  gemini (gemini-omni-1.2-flash, a pagamento): audio sempre presente, durata 3-15 s (default 10),
+  360p-4k (default 720p), 16:9 o 9:16; la durata e la risoluzione sono sempre inviate.
   --preset <nome>    preset di camera o effetto, ripetibile: al massimo uno di camera e uno
                      di effetto (elenco con giv presets); la frase si aggiunge al prompt
   --tutela <t>       clausola aggiunta coi preset: prodotto (default con --image),
@@ -259,8 +272,8 @@ func defaultsHelp() string {
 	for _, p := range providers {
 		video := defaultVideoModels[p]
 		switch {
-		case p == "openai", p == "gemini":
-			video = "non supportato: usa openrouter o xai"
+		case p == "openai":
+			video = "non supportato: usa gemini, openrouter o xai"
 		case video == "":
 			video = "nessun default: --model obbligatorio"
 		}
@@ -284,11 +297,20 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
 // parsePrompt accetta i flag sia prima che dopo il prompt (quotato).
 func parsePrompt(fs *flag.FlagSet, args []string) (string, error) {
+	return parsePromptIf(fs, args, nil)
+}
+
+// parsePromptIf è parsePrompt dove il prompt può mancare: optional, chiamata a
+// flag letti, dice se è così (giv video con --shot); "" senza prompt.
+func parsePromptIf(fs *flag.FlagSet, args []string, optional func() bool) (string, error) {
 	if err := fs.Parse(args); err != nil {
 		return "", usageError("%v", err)
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
+		if optional != nil && optional() {
+			return "", nil
+		}
 		return "", usageError("manca il prompt")
 	}
 	prompt := rest[0]
@@ -314,10 +336,20 @@ var envKeys = map[string]string{
 // defaultProvider è il provider usato senza --provider: GIV_PROVIDER (env o file
 // di configurazione, come le chiavi), altrimenti gemini.
 func defaultProvider() string {
-	if p := strings.TrimSpace(config.Get("GIV_PROVIDER")); p != "" {
+	if p := envProvider(); p != "" {
 		return p
 	}
 	return "gemini"
+}
+
+func envProvider() string { return strings.TrimSpace(config.Get("GIV_PROVIDER")) }
+
+// errNoVideoProvider: un video (a pagamento) non parte col solo default gemini,
+// serve un provider scelto (--provider, storyboard o GIV_PROVIDER); senza,
+// codice 2 come nella 0.9.1, quando gemini non aveva video.
+func errNoVideoProvider(how string) error {
+	return usageError("nessun provider scelto per il video: %s openrouter (default %s), xai (default %s), gemini (default %s) o fal (default %s), oppure imposta GIV_PROVIDER",
+		how, defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"], defaultVideoModels["fal"])
 }
 
 func checkProvider(name string) error {
@@ -327,9 +359,10 @@ func checkProvider(name string) error {
 	return nil
 }
 
-// baseURLs sono gli endpoint dei provider OpenAI-compatibili (i test li
-// puntano a un server finto).
+// baseURLs sono gli endpoint dei provider OpenAI-compatibili e dei video
+// gemini (i test li puntano a un server finto).
 var baseURLs = map[string]string{
+	"gemini":     "https://generativelanguage.googleapis.com/v1beta",
 	"openai":     "https://api.openai.com/v1",
 	"xai":        "https://api.x.ai/v1",
 	"openrouter": "https://openrouter.ai/api/v1",
@@ -351,7 +384,9 @@ func newProvider(name string) (provider.Provider, error) {
 	}
 	switch name {
 	case "gemini":
-		return gemini.New(key), nil
+		c := gemini.New(key)
+		c.Base = baseURLs["gemini"]
+		return c, nil
 	case "fal":
 		return fal.New(key, falConfig)
 	case "openai":
@@ -376,16 +411,13 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 	return "", usageError("nessun modello di default per %s: specifica --model", providerName)
 }
 
-// resolveVideoModel è resolveModel per i video, con i casi senza video spiegati:
-// openai non ha un'API video, gemini nemmeno (Veo spento sulla Gemini API), anche con --model.
+// resolveVideoModel è resolveModel per i video, col caso senza video spiegato:
+// openai non ha un'API video, anche con --model.
 func resolveVideoModel(flagValue, providerName string) (string, error) {
 	switch {
 	case providerName == "openai":
-		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s) o --provider xai (default %s)",
-			defaultVideoModels["openrouter"], defaultVideoModels["xai"])
-	case providerName == "gemini":
-		return "", usageError("gemini non ha un'API video (Veo spento sulla Gemini API dal 22/10/2026): "+
-			"usa --provider openrouter --model %s, o google/veo-3.1 per Veo", defaultVideoModels["openrouter"])
+		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s), --provider xai (default %s) o --provider gemini (default %s)",
+			defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"])
 	case providerName == "fal" && flagValue != "" && !fal.HasCard(flagValue):
 		// niente endpoint liberi: senza scheda il prezzo non sarebbe noto
 		return "", usageError("fal: scheda %q sconosciuta (schede: %s)", flagValue, strings.Join(fal.Cards(), ", "))
@@ -414,7 +446,7 @@ func cmdModels(args []string) error {
 			return err
 		}
 		if _, ok := defaultVideoModels[*prov]; !ok {
-			return usageError("--caps: nessun modello video con capacità note su %s (usa xai o openrouter)", *prov)
+			return usageError("--caps: nessun modello video con capacità note su %s (usa gemini, xai o openrouter)", *prov)
 		}
 	}
 	c, err := newProvider(*prov)
@@ -581,21 +613,36 @@ func cmdVideo(args []string) error {
 	var presetNames stringList
 	fs.Var(&presetNames, "preset", "preset di camera o effetto (ripetibile)")
 	protect := fs.String("tutela", "", "clausola di tutela coi preset: prodotto, illustrazione, no")
-	prompt, err := parsePrompt(fs, args)
+	var keyframes, shotList stringList
+	fs.Var(&keyframes, "keyframe", "fotogramma intermedio, file o URL (ripetibile, in ordine)")
+	fs.Var(&shotList, "shot", `inquadratura "<secondi>:<testo>" (ripetibile): niente prompt, durata = somma`)
+	// con --shot il testo è nelle inquadrature: il prompt può mancare
+	prompt, err := parsePromptIf(fs, args, func() bool { return len(shotList) > 0 })
+	if err != nil {
+		return err
+	}
+	shots, err := parseShots(shotList)
 	if err != nil {
 		return err
 	}
 	// --max-cost: tetto solo se il flag c'è (anche 0)
 	var costCap *float64
+	chosen := envProvider() != ""
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "max-cost" {
+		switch f.Name {
+		case "max-cost":
 			costCap = maxCost
+		case "provider":
+			chosen = true
 		}
 	})
+	if !chosen {
+		return errNoVideoProvider("usa --provider")
+	}
 	job, err := prepareVideo(videoOptions{
 		Provider: *prov, Model: *model, Prompt: prompt,
 		Aspect: *aspect, Resolution: *resolution, Negative: *negative,
-		Image: *image, LastFrame: *lastFrame, Refs: refs,
+		Image: *image, LastFrame: *lastFrame, Refs: refs, Keyframes: keyframes, Shots: shots,
 		Duration: *duration, Seed: *seed, Audio: *audio, Params: params, Timeout: *timeout,
 		Presets: presetNames, Protect: *protect,
 		MaxCost: costCap, Strict: *strict, DryRun: *dryRun,
@@ -669,6 +716,10 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 			}
 		}
 	}
+	// senza capacità note nessun provider li invierebbe: rifiuto, non avviso
+	if m == nil && (len(req.Keyframes) > 0 || len(req.Shots) > 0) {
+		return nil, usageError("--keyframe e --shot valgono solo coi modelli che li dichiarano, capacità di %s/%s non note (giv models --provider fal --kind video --caps)", c.Name(), req.Model)
+	}
 	why := "capacità del modello non note"
 	var est *caps.Estimate
 	if m != nil {
@@ -715,6 +766,9 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 	if len(req.Params) > 0 {
 		params["passthrough"] = req.Params
 	}
+	if len(req.Shots) > 0 {
+		params["shots"] = req.Shots
+	}
 	if len(params) > 0 {
 		plan.Params = params
 	}
@@ -732,6 +786,13 @@ func checkVideo(c provider.Provider, req *provider.VideoRequest, opt videoChecks
 			refs[i] = shownInput(r)
 		}
 		inputs["refs"] = refs
+	}
+	if len(req.Keyframes) > 0 {
+		kf := make([]string, len(req.Keyframes))
+		for i, k := range req.Keyframes {
+			kf[i] = shownInput(k)
+		}
+		inputs["keyframes"] = kf
 	}
 	if len(inputs) > 0 {
 		plan.Inputs = inputs

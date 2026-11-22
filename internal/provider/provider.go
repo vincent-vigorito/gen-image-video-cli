@@ -38,6 +38,14 @@ type VideoRequest struct {
 	Seed      int            // 0 = non impostato
 	Params    map[string]any // parametri passanti del modello
 	Timeout   time.Duration  // tetto di attesa del job, 0 = 15 minuti
+	Keyframes []string       // fotogrammi intermedi in ordine (path locali)
+	Shots     []Shot         // inquadrature: il video dura la loro somma (Duration)
+}
+
+// Shot è un'inquadratura di un video a più inquadrature: testo e secondi.
+type Shot struct {
+	Prompt   string `json:"prompt"`
+	Duration int    `json:"duration"`
 }
 
 type Media struct {
@@ -49,6 +57,11 @@ type Result struct {
 	Media   []Media
 	CostUSD float64 // 0 = costo non riportato dal provider
 	JobID   string  // id del job asincrono; "" se il provider non ne ha
+
+	// stima ricalcolata a fine job dai consumi riportati (es. token × listino),
+	// quando il provider non dà l'importo: 0 = nessuna
+	CostEstUSD float64
+	CostSource string
 }
 
 type Provider interface {
@@ -121,6 +134,7 @@ type ClipRequest struct {
 type ClipSource struct {
 	Duration      float64 // secondi del video sorgente
 	Width, Height int     // pixel del video sorgente
+	FPS           float64 // fotogrammi al secondo del video sorgente
 	AudioDuration float64 // secondi dell'audio (avatar)
 }
 

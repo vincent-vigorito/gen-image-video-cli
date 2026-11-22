@@ -504,7 +504,7 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		f = *s.Formato
 	}
 	o := videoOptions{
-		Provider: pick(g.Provider, d.Provider, defaultProvider()),
+		Provider: pick(g.Provider, d.Provider, envProvider()),
 		Model:    pick(g.Modello, d.Modello),
 		Prompt:   scene.Prompt, Negative: scene.Negative, Presets: scene.Preset,
 		Aspect:     pick(g.Aspect, d.Aspect, f.Aspect),
@@ -515,6 +515,12 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		Strict:    s.Strict,
 		Image:     s.Path(scene.Immagine),
 		LastFrame: s.Path(scene.UltimoFotogramma),
+	}
+	for _, p := range scene.FotogrammiIntermedi {
+		o.Keyframes = append(o.Keyframes, s.Path(p))
+	}
+	for _, q := range scene.Inquadrature {
+		o.Shots = append(o.Shots, provider.Shot{Prompt: q.Prompt, Duration: q.Durata})
 	}
 	if o.Seed == 0 {
 		o.Seed = d.Seed
@@ -550,6 +556,9 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		o.Refs = refs
 	}
 
+	if o.Provider == "" {
+		return o, errNoVideoProvider("indica provider nel blocco default dello storyboard o nella scena:")
+	}
 	if err := checkProvider(o.Provider); err != nil {
 		return o, err
 	}
@@ -558,6 +567,9 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		return o, err
 	}
 	o.Model = m
+	if err := checkFramesShots(o.Provider, m, len(o.Keyframes) > 0, len(o.Shots) > 0); err != nil {
+		return o, err
+	}
 	cl, err := sc.client(o.Provider)
 	if err != nil {
 		return o, err

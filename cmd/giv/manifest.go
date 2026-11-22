@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -28,6 +29,7 @@ type manifestInputs struct {
 	Image     *inputFile  `json:"image,omitempty"`
 	LastFrame *inputFile  `json:"last_frame,omitempty"`
 	Refs      []inputFile `json:"refs,omitempty"`
+	Keyframes []inputFile `json:"keyframes,omitempty"` // fotogrammi intermedi
 
 	// comandi sulle clip (giv extend, edit, upscale, avatar)
 	Video *inputFile `json:"video,omitempty"`
@@ -47,7 +49,10 @@ func newManifestInputs(req provider.VideoRequest) *manifestInputs {
 	for _, r := range req.Refs {
 		in.Refs = append(in.Refs, inputFile{Path: shownInput(r)})
 	}
-	if in.Image == nil && in.LastFrame == nil && len(in.Refs) == 0 {
+	for _, k := range req.Keyframes {
+		in.Keyframes = append(in.Keyframes, inputFile{Path: shownInput(k)})
+	}
+	if in.Image == nil && in.LastFrame == nil && len(in.Refs) == 0 && len(in.Keyframes) == 0 {
 		return nil
 	}
 	return in
@@ -67,6 +72,11 @@ func (in *manifestInputs) fingerprint(req provider.VideoRequest) {
 	for i := range in.Refs {
 		if i < len(req.Refs) {
 			in.Refs[i].SHA256 = shortHash(req.Refs[i])
+		}
+	}
+	for i := range in.Keyframes {
+		if i < len(req.Keyframes) {
+			in.Keyframes[i].SHA256 = clipHash(req.Keyframes[i], provider.MaxInputBytes)
 		}
 	}
 }
@@ -109,8 +119,12 @@ func videoManifest(prov, prompt string, pres presets.Result, plan *videoPlan, in
 // costo riportato dal provider prende il posto della stima.
 func (man *manifest) done(files []output.FileInfo, res *provider.Result) {
 	man.Files, man.JobID = files, res.JobID
-	if res.CostUSD > 0 {
+	switch {
+	case res.CostUSD > 0:
 		man.CostUSD, man.CostEstUSD, man.CostSource = res.CostUSD, 0, ""
+	case res.CostEstUSD > 0: // stima dai consumi riportati: accanto a quella da listino, non al suo posto
+		man.CostUsageUSD, man.CostUsageSource = math.Round(res.CostEstUSD*1e4)/1e4, res.CostSource
+		man.usageEstUSD = res.CostEstUSD
 	}
 	for _, m := range res.Media {
 		if strings.HasPrefix(m.Mime, "video/") {

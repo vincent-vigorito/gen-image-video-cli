@@ -13,11 +13,34 @@ versioning [SemVer](https://semver.org/lang/it/).
   (al massimo 50 MiB, caricato su xAI con scadenza di un'ora) o un URL `https` che finisce
   in `.mp4`. Limiti del sorgente (2-15 s per extend, fino a 8,7 s per edit) controllati
   con ffprobe; stima sul caso più caro finché non è verificato; il manifest riporta il
-  costo reale di xAI (`cost_usd`).
+  costo reale di xAI (`cost_usd`). Nella prova del 22/11/2026 l'estensione di 3 s di una
+  clip di 6 s è costata 0,27 $ (stima 0,69 $: xAI fattura solo i secondi aggiunti più
+  l'ingresso), la modifica 0,48 $ come la stima.
+- **Video con Gemini diretto** (`gemini-omni-1.2-flash`, API interactions): `giv video
+  --provider gemini` torna a generare, a pagamento, solo con una scelta esplicita del
+  provider (`--provider gemini`, provider dello storyboard o `GIV_PROVIDER`). Audio sempre
+  presente (`--audio off` rifiutato), 3-15 s (default 10), 360p-4k (default 720p), 16:9 o
+  9:16, primo e ultimo fotogramma (con l'ultimo al massimo 10 s), fino a 6 `--ref`; stima
+  massima a token e, a fine job, `cost_usage_usd` dai token riportati; `giv job fetch
+  --provider gemini`.
+- **`giv extend` e `giv edit` con Gemini** (`--provider gemini --from <job_id>`): dall'UE
+  Gemini estende e modifica solo i video che ha generato, quindi `--from` è l'id di un
+  video gemini fatto con giv (`--video` rifiutato); extend aggiunge 3-10 s fino a 30 s,
+  edit fino a 15 s; misure del video di partenza da `giv-log.jsonl`.
+- **Kling 4.0 su fal** (`kling-4.0`): `--image` obbligatorio, 3-30 s, 720p, 1080p
+  (default) o 4k, fino a 8 fotogrammi intermedi con `--keyframe`, 0,157-0,549 $/s.
+- **`--shot "<s>:<testo>"`** (fal `kling-4.0` e `kling-v3-pro`): inquadrature ripetibili, il
+  testo sta tutto lì (niente prompt né `--preset`) e il video dura la somma. `--keyframe` e
+  `--shot` con altri modelli escono con codice 2.
 - **`giv upscale`** (OpenRouter, `black-forest-labs/flux-video-upscale`): `--factor` 1,5-3
   (default 2), `--mode precise|creative` (default `precise`), prompt facoltativo; un file
-  locale va come data URI (non documentato da OpenRouter: se lo rifiuta serve un URL
-  `https`). Stima a megapixel-secondo sulle misure del sorgente.
+  locale va come data URI, che nella prova del 22/11/2026 OpenRouter ha rifiutato (HTTP
+  400, solo URL `https`, nessun addebito): da file locale serve `--provider fal`. Stima a
+  megapixel-secondo sulle misure del sorgente.
+- **`giv upscale --provider fal`** (Topaz, `topaz-upscale`): `--factor` 1-4 (default 2), file
+  mp4 locale caricato sullo storage di fal o URL `https`; stima per secondo del sorgente e
+  fascia d'uscita (0,01, 0,02 o 0,08 $/s, il doppio sopra i 30 fps) sulle misure di
+  ffprobe, fps compresi.
 - **`giv avatar`** (fal, Kling AI Avatar v2): un personaggio che parla da `--image` e
   `--audio` (wav o mp3 locale), `--model standard|pro`; la clip dura quanto l'audio. Stima
   sulla durata dell'audio; oltre 60 s un avviso (con `--strict` codice 2).
@@ -40,10 +63,17 @@ versioning [SemVer](https://semver.org/lang/it/).
     lo stesso recupero dei job delle scene video; con `tetto_costo_usd` serve la durata
     della voce misurata;
   - `giv story run --scene <id> --new-job` abbandona un job partito che non si scarica più
-    (addebito contato, job fra le riprese precedenti) e ne avvia uno nuovo.
+    (addebito contato, job fra le riprese precedenti) e ne avvia uno nuovo;
+  - `fotogrammi_intermedi` e `inquadrature` sulle scene video, come `--keyframe` e
+    `--shot`; i fotogrammi intermedi da URL si controllano prima del fotogramma chiave a
+    pagamento.
 
 ### Modificato
 
+- `giv video` e `giv story` senza `--provider`, senza provider nello storyboard e senza
+  `GIV_PROVIDER` escono con codice 2 come nella 0.9.1, ma il messaggio elenca anche gemini
+  e fal: il default `gemini` vale solo per le immagini, un comando vecchio non comincia a
+  spendere.
 - Con `--max-cost`, una configurazione ammessa dal modello ma senza tariffa nel listino
   (audio o risoluzione non indicati) rende la stima insufficiente: codice 2 col nome della
   configurazione e il flag da indicare. Per esempio `google/gemini-omni-1.2-flash` vuole
@@ -70,6 +100,9 @@ versioning [SemVer](https://semver.org/lang/it/).
   cartella sopra è scrivibile da altri senza sticky bit; `giv story cut` tiene aperta la
   cartella dello storyboard fino alla pubblicazione del file finale, che compare solo
   completo.
+- Gemini video: la chiave va solo all'origine dell'API, la richiesta che genera non segue
+  redirect e non si ripete, il video fuori dall'API si scarica solo da `https` verso
+  indirizzi pubblici e senza chiave, i testi d'errore sono filtrati.
 - `giv story run`: se lo stato col costo reale del fotogramma chiave non si salva, la
   scena si ferma prima del video; il job lasciato con `--new-job` si controlla come quelli
   da recuperare.
