@@ -1190,7 +1190,10 @@ le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `voice
 `jobs_recovered`, `keyframes`, `voices` (voci generate), `voice_checks` (voci trascritte,
 con `controllo.voce`) e i totali `cost_est_usd`
 (stime e costi dichiarati delle scene), `cost_usd` (addebito riportato dai provider),
-`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `removed_scenes` e
+`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `run_cost_est_usd` e
+`run_spent_usd` (stime e spesa contata delle sole richieste partite in questa esecuzione:
+fotogrammi chiave, video, voci e trascrizioni; i job recuperati restano dell'esecuzione
+che li ha avviati; assenti se non è partito niente), `removed_scenes` e
 `removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`.
 
 ### Montaggio: `giv story cut`
