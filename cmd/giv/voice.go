@@ -274,6 +274,9 @@ func prepareVoice(o voiceOptions) (*voiceJob, error) {
 	switch {
 	case est == nil:
 		msg = "stima del costo non disponibile: " + why
+		if r := speech.CapRefusal(req.Provider); r != "" {
+			msg += "; " + r // anche fuori listino: nessun massimo garantito
+		}
 	case est.Probable:
 		msg = fmt.Sprintf("il costo della voce %s non ha un massimo garantito: stima probabile %.6f $ (%d token d'uscita al massimo nella richiesta)",
 			req.Provider, est.USD, speech.MaxGeminiOutputTokens)

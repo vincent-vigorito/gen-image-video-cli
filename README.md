@@ -180,6 +180,9 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
             [--expect-audio on|off] [--expect-loudness <lufs>] [--for <canali>] [--strict]
                                               # controllo tecnico: durata, misure, neri, fermi, muti, volume,
                                               # profilo dei canali (locale con ffprobe e ffmpeg, gratuito)
+giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <file.json>] [--kit <kit.json>]
+            [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
+                                              # controllo della voce: trascrizione confrontata col testo (xai, a pagamento)
 giv version
 ```
 
@@ -208,6 +211,7 @@ prima o dopo.
 | `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 | `qc` | file o storyboard come argomento · `--expect-duration <s>` · `--expect-size <LxA>` · `--expect-fps <n>` · `--expect-audio on\|off` · `--expect-loudness <lufs>` (attese, solo per un file) · `--for <canali>` (come `giv export`) · `--strict` (un difetto = codice 1) · soglie `--black-min <s>` (default 0.5) · `--freeze-min <s>` (2) · `--freeze-noise <dB>` (-60) · `--silence-min <s>` (2) · `--silence-noise <dB>` (-50): vedi [Controllo tecnico](#controllo-tecnico-giv-qc) |
+| `qc --voice` | `--voice <file audio>` · `--script "<testo>"` oppure `--script-file <file>` · `--pronuncia <file.json>` · `--kit <kit.json>` · `--lang <codice>` (default `it`) · `--provider xai` · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Controllo della voce](#controllo-della-voce-giv-qc---voice) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -801,6 +805,41 @@ per montato di `giv story cut` con `format`, misure e fps del formato (con scene
 scena non ancora generata o un montato che manca hanno `result` `assente` (non conta per
 `--strict`); le attese `--expect-*` valgono solo per un file.
 
+### Controllo della voce: `giv qc --voice`
+
+```bash
+giv qc --voice out/s1-voce.wav --script "Swerpify ti porta dove vuoi." --pronuncia pronunce.json --dry-run
+giv qc --voice out/s1-voce.wav --script-file testi/s1.txt --kit kit/argo.json --max-cost 0.01 --strict
+```
+
+- Prima i controlli tecnici del file, come sopra (gratuiti, con l'audio atteso), poi la
+  **trascrizione** con xAI (chiave `XAI_API_KEY`, `POST /v1/stt`), **a pagamento**: 0,10 $
+  per ora di audio. La stima viene dalla durata contata sui campioni decodificati dei byte
+  che partono, arrotondata al minuto per eccesso perché la granularità dell'addebito non è documentata (30 secondi contano
+  0,001667 $, il vero è circa la metà); `--max-cost` rifiuta con codice 2 se la
+  supera o se la durata non si misura; `--dry-run` fa i controlli tecnici e stampa la
+  richiesta e la stima senza trascrivere.
+- Il file (`wav`, `mp3`, `ogg`, `flac`, `aac`, `m4a`, `mp4`, al massimo 100 MiB, con **una sola traccia
+  audio**: con più tracce codice 2 prima di ogni richiesta, anche senza tetto; estrai quella
+  da controllare con `ffmpeg -i <file> -map 0:a:<n> -c copy voce.m4a`) va al provider come ultimo campo del caricamento, col nome generico `audio.<estensione>`;
+  prima i termini da riconoscere (`keyterm`): le parole scritte del dizionario (al massimo
+  100, da 50 caratteri). La lingua non si invia: si controlla quella rilevata.
+- Il confronto è parola per parola, senza maiuscole, punteggiatura e accenti; una parola
+  detta come la sua pronuncia (`--pronuncia`, o le pronunce del kit sotto) vale come la
+  parola scritta. In `comparison` le parole `different` (attesa e sentita), `missing` e
+  `extra`, con la posizione nel testo atteso, più `words`, `matched` e `ratio`.
+- Due controlli in coda a `checks`: `voice` (nessuna differenza ok, altrimenti avviso;
+  meno di metà delle parole attese sentite uguali: difetto) e `language` (lingua rilevata
+  diversa da `--lang`, o da quella del kit: avviso). La trascrizione sbaglia sui nomi
+  propri: è un avviso da ascoltare, non un errore. Il controllo avvisa e basta: non
+  rigenera e non spende oltre la trascrizione.
+- Il JSON ha `mode` `voice`, `script`, `transcript` (`text`, `language`, `duration_s`,
+  `words`), `comparison`, `cost_est_usd` e `cost_usage_usd` (calcolato da giv sulla durata:
+  xAI non riporta il costo); una riga in `giv-log.jsonl`. Una trascrizione dall'esito
+  incerto (redirect, errore del server, rete dopo l'invio, risposta non valida) esce con
+  codice 5 e una riga `failed`, senza rilancio; un caricamento che non arriva fino in fondo
+  è un errore senza addebito (codice 5, «nessuna trascrizione partita»).
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -1321,6 +1360,7 @@ internal/presets/         libreria dei preset (presets.json incorporato) e compo
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
 internal/kit/             kit di marca e personaggi: lettura, controlli e percorsi chiusi nella cartella del kit
+internal/speech/          voce e trascrizione: richiesta, controlli, prezzi e stima, pronunce, tempi, WAV, confronto col testo
 internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export) e controllo di giv qc
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
