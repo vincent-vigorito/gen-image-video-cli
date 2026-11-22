@@ -23,15 +23,17 @@ import (
 
 // Richieste protette, comuni a tutti i dialetti (decisione 15):
 //   - apiCall: chiamate all'API (avvio a pagamento, caricamento, attesa) solo
-//     sull'origine dell'API, senza redirect (un 3xx è un errore, all'avvio un
-//     esito incerto), risposta entro maxAPIBody, messaggio d'errore filtrato
-//     prima del ritentativo;
+//     sull'origine dell'API; avvii e caricamenti senza redirect (un 3xx è un
+//     errore, all'avvio un esito incerto), le GET di attesa con i soli redirect
+//     sull'origine (pollOnly, come prima); risposta entro maxAPIBody,
+//     messaggio d'errore filtrato prima del ritentativo;
 //   - startedJob: id e indirizzo di attesa di un job appena avviato,
 //     controllati prima di registrarlo o attenderlo;
 //   - fetchResult: l'unico scaricamento dei risultati (avvio, attesa e
-//     recupero con giv job fetch): sull'origine dell'API con la chiave e senza
-//     redirect, altrove solo https senza credenziali né chiave, connessioni
-//     dirette solo verso indirizzi pubblici, redirect rivalidati e senza Referer;
+//     recupero con giv job fetch): sull'origine dell'API con la chiave e i soli
+//     redirect sull'origine, altrove solo https senza credenziali né chiave,
+//     connessioni dirette solo verso indirizzi pubblici, redirect rivalidati e
+//     senza Referer;
 //   - redactText, jobErrorText, hideURL, hideInMessages: messaggi senza corpo
 //     grezzo, data URI, URL completi né valori nascosti.
 
@@ -47,20 +49,25 @@ var resultTransport http.RoundTripper
 
 // apiCall fa una richiesta all'API del provider con la politica di ripetizione
 // retry (httpx.NoRetry per avvii e caricamenti, httpx.RetryPoll per l'attesa):
-// solo sull'origine dell'API, senza seguire redirect, risposta entro
-// maxAPIBody decodificata in out. Gli errori arrivano già filtrati al
-// ritentativo, che li stampa.
+// solo sull'origine dell'API, risposta entro maxAPIBody decodificata in out.
+// POST e caricamenti non seguono redirect; una GET (attesa) segue solo quelli
+// sull'origine dell'API, gli altri tornano come errore HTTP. Gli errori
+// arrivano già filtrati al ritentativo, che li stampa.
 func (c *Client) apiCall(ctx context.Context, retry httpx.RetryFunc, method, rawURL, contentType string, body []byte, out any) error {
 	if !c.apiHost(rawURL) {
 		return fmt.Errorf("%s: %s non è sull'origine dell'API: richiesta non fatta", c.name, redactURL(rawURL))
 	}
 	hide := hiddenIn(ctx)
+	cl, rctx := c.noRedirectClient(), ctx
+	if method == http.MethodGet {
+		cl, rctx = c.http, pollOnly(ctx)
+	}
 	return retry(ctx, func() error {
 		var rdr io.Reader
 		if body != nil {
 			rdr = bytes.NewReader(body)
 		}
-		req, err := http.NewRequestWithContext(ctx, method, rawURL, rdr)
+		req, err := http.NewRequestWithContext(rctx, method, rawURL, rdr)
 		if err != nil {
 			return fmt.Errorf("%s: richiesta non valida", c.name)
 		}
@@ -68,7 +75,7 @@ func (c *Client) apiCall(ctx context.Context, retry httpx.RetryFunc, method, raw
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
 		}
-		resp, err := c.noRedirectClient().Do(req)
+		resp, err := cl.Do(req)
 		if err != nil {
 			return hideURL(err)
 		}
@@ -113,18 +120,19 @@ func (c *Client) startedJob(job provider.Job) error {
 }
 
 // fetchResult scarica un risultato indicato dal provider. Sull'origine
-// dell'API con la chiave e senza seguire redirect: un redirect si segue con
-// externalGet, senza chiave. Fuori origine solo con externalGet.
+// dell'API con la chiave, seguendo solo i redirect sull'origine (pollOnly): un
+// redirect fuori origine si segue con externalGet, senza chiave. Fuori origine
+// solo con externalGet.
 func (c *Client) fetchResult(ctx context.Context, raw string) ([]byte, error) {
 	if !c.apiHost(raw) {
 		return c.externalGet(ctx, raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	req, err := http.NewRequestWithContext(pollOnly(ctx), http.MethodGet, raw, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s: indirizzo del risultato non valido", c.name)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	resp, err := c.noRedirectClient().Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: download: %w", c.name, hideURL(err))
 	}
@@ -157,7 +165,7 @@ func (c *Client) externalGet(ctx context.Context, raw string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: indirizzo del risultato non valido", c.name)
 	}
-	resp, err := externalClient().Do(req)
+	resp, err := c.externalClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: download: %w", c.name, hideURL(err))
 	}
@@ -172,7 +180,8 @@ func (c *Client) externalGet(ctx context.Context, raw string) ([]byte, error) {
 	return data, nil
 }
 
-func externalClient() *http.Client {
+// externalClient ha lo stesso tempo massimo del client dell'API.
+func (c *Client) externalClient() *http.Client {
 	rt := resultTransport
 	if rt == nil {
 		rt = &http.Transport{
@@ -183,7 +192,7 @@ func externalClient() *http.Client {
 		}
 	}
 	return &http.Client{
-		Timeout:   10 * time.Minute,
+		Timeout:   c.http.Timeout,
 		Transport: rt,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			req.Header.Del("Referer")

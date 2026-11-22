@@ -52,15 +52,28 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 }
 
 // checkRedirect lascia l'Authorization solo ai salti sull'origine dell'API
-// (schema, host e porta): fuori origine la chiave viene tolta.
+// (schema, host e porta): fuori origine la chiave viene tolta. Le GET di attesa
+// dei job (contesto di pollOnly) fuori origine non si seguono: la loro risposta
+// decide se il job è finito male, e deve venire dal provider.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
 	if !c.apiOrigin(req.URL) {
+		if req.Context().Value(pollKey{}) != nil {
+			return http.ErrUseLastResponse // il 3xx diventa un errore HTTP: il job resta
+		}
 		req.Header.Del("Authorization")
 	}
 	return nil
+}
+
+type pollKey struct{}
+
+// pollOnly segna le richieste di attesa di un job: redirect solo sull'origine
+// dell'API (i download dei risultati restano liberi, senza chiave).
+func pollOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pollKey{}, true)
 }
 
 func (c *Client) Name() string { return c.name }
@@ -309,13 +322,14 @@ func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati;
-	// ripetizioni come prima (httpx.Retry), nessun redirect
+	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati.
+	// La richiesta a pagamento non si ripete né segue redirect: con un 3xx, un 5xx
+	// o un timeout l'immagine potrebbe essere stata generata
 	res := &provider.Result{}
 	for i := 0; i < max(req.N, 1); i++ {
 		var resp imagesResponse
-		if err := c.apiCall(ctx, httpx.Retry, http.MethodPost, c.baseURL+"/images", "application/json", payload, &resp); err != nil {
-			return nil, err
+		if err := c.apiCall(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/images", "application/json", payload, &resp); err != nil {
+			return nil, httpx.Start(err)
 		}
 		media, err := c.mediaFromImages(ctx, resp)
 		if err != nil {
@@ -740,7 +754,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 		}
 		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
-	case "failed", "cancelled", "error", "expired":
+	case "failed", "cancelled", "error":
 		fmt.Fprintln(os.Stderr)
 		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
