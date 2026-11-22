@@ -130,8 +130,8 @@ func (t Tool) RunOp(ctx context.Context, op Op) (*OpResult, error) {
 			return nil, invalid("%v", err)
 		}
 	}
-	if err := checkPath(op.Output); err != nil {
-		return nil, invalid("uscita: %v", err)
+	if err := CheckOutput(op.Output, op.Inputs); err != nil {
+		return nil, err
 	}
 	ext := strings.ToLower(filepath.Ext(op.Output))
 	if !simpleExt(ext) {
@@ -194,6 +194,34 @@ func (t Tool) RunOp(ctx context.Context, op Op) (*OpResult, error) {
 		return &OpResult{Output: out, Info: info}, nil
 	}
 	return nil, fmt.Errorf("%s: esistono già %s e i nomi da -2 a -%d: scegli un altro nome", op.Output, op.Output, maxNames)
+}
+
+// CheckOutput rifiuta (ErrInvalid) un'uscita che è uno degli ingressi: stesso
+// percorso, oppure lo stesso file tramite link. Gli altri file esistenti non
+// sono un errore: RunOp sceglie il primo nome libero.
+func CheckOutput(out string, inputs []string) error {
+	if err := checkPath(out); err != nil {
+		return invalid("uscita: %v", err)
+	}
+	absOut, err := filepath.Abs(out)
+	if err != nil {
+		return invalid("uscita %s: %v", out, err)
+	}
+	stOut, errOut := os.Stat(out)
+	for _, in := range inputs {
+		same := false
+		if absIn, err := filepath.Abs(in); err == nil && absIn == absOut {
+			same = true
+		} else if errOut == nil {
+			if stIn, err := os.Stat(in); err == nil && os.SameFile(stIn, stOut) {
+				same = true
+			}
+		}
+		if same {
+			return invalid("l'uscita %s è il file in ingresso %s: scegli un altro --name o --out", out, in)
+		}
+	}
+	return nil
 }
 
 // OutputNames sono i nomi provati per l'uscita, in ordine: out, poi

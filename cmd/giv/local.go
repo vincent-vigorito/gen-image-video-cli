@@ -262,6 +262,9 @@ func execLocal(lf *localFlags, op localOp) (*localManifest, error) {
 	for _, w := range op.Warnings {
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
 	}
+	if err := montage.CheckOutput(out, paths); err != nil {
+		return nil, usageError("giv %s: %s", op.Command, localErrMsg(err))
+	}
 	if lf.DryRun {
 		man.DryRun, man.Output = true, montage.FreeOutput(out)
 		return man, nil
