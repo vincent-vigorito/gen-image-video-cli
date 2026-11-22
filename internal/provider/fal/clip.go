@@ -6,10 +6,11 @@ import (
 	"os"
 	"strings"
 
+	"gen-image-video-cli/internal/caps"
 	"gen-image-video-cli/internal/provider"
 )
 
-// clipCard è una scheda delle operazioni sulle clip (giv avatar): operazione
+// clipCard è una scheda delle operazioni sulle clip (giv avatar, giv upscale): operazione
 // ed endpoint della coda. Capacità, regole e prezzi sono in caps.FalOps(), con
 // gli stessi id.
 type clipCard struct {
@@ -19,6 +20,7 @@ type clipCard struct {
 var clipCards = map[string]clipCard{
 	"avatar-v2-standard": {op: "avatar", endpoint: "fal-ai/kling-video/ai-avatar/v2/standard"},
 	"avatar-v2-pro":      {op: "avatar", endpoint: "fal-ai/kling-video/ai-avatar/v2/pro"},
+	"topaz-upscale":      {op: "upscale", endpoint: "fal-ai/topaz/upscale/video"},
 }
 
 // GenerateClip carica gli ingressi locali sullo storage di fal, avvia il job
@@ -28,7 +30,14 @@ func (c *Client) GenerateClip(ctx context.Context, req provider.ClipRequest) (*p
 	if !ok || cd.op != req.Op {
 		return nil, fmt.Errorf("fal: giv %s non disponibile con la scheda %q", req.Op, req.Model)
 	}
-	body, err := c.avatarBody(ctx, req)
+	var body map[string]any
+	var err error
+	switch cd.op {
+	case "upscale":
+		body, err = c.upscaleBody(ctx, req)
+	default:
+		body, err = c.avatarBody(ctx, req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -61,4 +70,26 @@ func (c *Client) avatarBody(ctx context.Context, req provider.ClipRequest) (map[
 		b["prompt"] = req.Prompt
 	}
 	return b, nil
+}
+
+// upscaleBody: fal-ai/topaz/upscale/video. La clip è un file locale caricato
+// sullo storage di fal, oppure un URL https passato così com'è; il fattore va
+// sempre nel corpo (il default della scheda, su cui è fatta la stima).
+func (c *Client) upscaleBody(ctx context.Context, req provider.ClipRequest) (map[string]any, error) {
+	op := caps.FindOp(caps.FalOps(), req.Op, req.Model)
+	if op == nil || req.Video == "" {
+		return nil, fmt.Errorf("fal: giv upscale vuole --video")
+	}
+	src := req.Video
+	if strings.HasPrefix(src, "https://") || strings.HasPrefix(src, "http://") {
+		if err := checkExternal(src); err != nil {
+			return nil, fmt.Errorf("fal: --video: %w", err)
+		}
+	} else {
+		var err error
+		if src, err = c.uploadVideo(ctx, req.Video, 1); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"video_url": src, "upscale_factor": op.Factor(req)}, nil
 }
