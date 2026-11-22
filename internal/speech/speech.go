@@ -116,10 +116,14 @@ type Synthesizer interface {
 	Synthesize(ctx context.Context, req Request) (*Result, error)
 }
 
-// VoiceLister elenca le voci del provider (gratuito).
+// VoiceLister elenca le voci del provider (gratuito). Un elenco tagliato
+// torna con le voci lette e ErrPartialVoices.
 type VoiceLister interface {
 	Voices(ctx context.Context) ([]Voice, error)
 }
+
+// ErrPartialVoices: l'elenco delle voci è parziale (oltre i limiti di giv).
+var ErrPartialVoices = errors.New("elenco delle voci parziale")
 
 var (
 	voiceRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
