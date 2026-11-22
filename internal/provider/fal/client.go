@@ -16,8 +16,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"gen-image-video-cli/internal/caps"
 	"gen-image-video-cli/internal/httpx"
@@ -176,14 +179,17 @@ func (c *Client) CheckJob(job provider.Job) error {
 	if err != nil || !c.sameOrigin(u, c.queue) || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return fmt.Errorf("fal: l'indirizzo di attesa del job %s non è sulla coda di fal: rifiutato", job.ID)
 	}
+	// percorso in forma canonica: ogni segmento di soli caratteri non
+	// riservati, senza codifiche % (che la coda potrebbe decodificare in '/' o
+	// '..'), mai vuoto, "." o ".."
 	segs := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
 	for _, s := range segs {
-		if s == "" || s == "." || s == ".." {
+		if !canonicalSegment(s) {
 			return fmt.Errorf("fal: l'indirizzo di attesa non è quello del job %s: rifiutato", job.ID)
 		}
 	}
 	n := len(segs)
-	if n < 4 || segs[n-1] != "status" || segs[n-2] != url.PathEscape(job.ID) || segs[n-3] != "requests" {
+	if n < 4 || segs[n-1] != "status" || segs[n-2] != job.ID || segs[n-3] != "requests" {
 		return fmt.Errorf("fal: l'indirizzo di attesa non è quello del job %s: rifiutato", job.ID)
 	}
 	return nil
@@ -196,6 +202,20 @@ func validID(id string) bool {
 	}
 	for _, r := range id {
 		if r <= ' ' || r >= 0x7f || r == '/' {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalSegment: un segmento di percorso di soli caratteri non riservati
+// (RFC 3986: lettere, cifre, '-', '.', '_', '~'), diverso da "." e "..".
+func canonicalSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-._~", r)) {
 			return false
 		}
 	}
@@ -250,11 +270,15 @@ func (c *Client) poll1(ctx context.Context, job provider.Job) (*provider.Result,
 		return nil, nil
 	case "COMPLETED":
 	default:
-		return nil, fmt.Errorf("fal: stato del job sconosciuto: %q", clip(st.Status, 40))
+		return nil, fmt.Errorf("fal: stato del job sconosciuto: %q", safeText(st.Status, 40))
 	}
 	fmt.Fprintln(os.Stderr)
-	if msg := jsonText(st.Error); msg != "" || st.ErrorType != "" {
-		return nil, provider.JobFailed(fmt.Errorf("fal: job finito con errore: %s", clip(strings.TrimSpace(st.ErrorType+" "+msg), 400)))
+	if msg := errorText(st.Error); msg != "" || st.ErrorType != "" {
+		detail := strings.TrimSpace(safeText(st.ErrorType, 80) + " " + msg)
+		if detail == "" {
+			detail = "dettaglio vuoto"
+		}
+		return nil, provider.JobFailed(fmt.Errorf("fal: job finito con errore: %s", clip(detail, 400)))
 	}
 	return c.result(ctx, job)
 }
@@ -383,47 +407,92 @@ func port(u *url.URL) string {
 	return ""
 }
 
-// apiError è il messaggio di un errore di fal: detail come testo, o come
-// elenco di {msg, type} per gli errori del modello; mai l'input rimandato.
+// apiError è il messaggio di un errore HTTP di fal: solo il campo detail letto
+// da errorText, mai il corpo grezzo.
 func apiError(data []byte) string {
 	var e struct {
 		Detail json.RawMessage `json:"detail"`
 	}
-	if json.Unmarshal(data, &e) == nil && len(e.Detail) > 0 {
-		if s := jsonText(e.Detail); s != "" {
-			return clip(s, 400)
-		}
-		var list []struct {
-			Msg  string `json:"msg"`
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(e.Detail, &list) == nil && len(list) > 0 {
-			parts := make([]string, len(list))
-			for i, d := range list {
-				parts[i] = strings.TrimSpace(d.Type + ": " + d.Msg)
-			}
-			return clip(strings.Join(parts, "; "), 400)
+	if json.Unmarshal(data, &e) == nil {
+		if s := errorText(e.Detail); s != "" {
+			return s
 		}
 	}
-	return clip(strings.TrimSpace(string(data)), 400)
+	return "risposta di errore senza dettaglio leggibile"
 }
 
-// jsonText è il testo di un valore JSON: la stringa se lo è, il JSON grezzo
-// altrimenti; "" per assente, null o stringa vuota.
-func jsonText(raw json.RawMessage) string {
+// errorText è il testo di un errore di fal dai soli campi ammessi: una
+// stringa, un {type, msg} o un elenco di {type, msg} (gli errori di
+// validazione, senza input, loc e ctx rimandati); per ogni altra forma un
+// testo generico, mai il JSON grezzo. "" per assente, null o stringa vuota.
+func errorText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return s
+		if s == "" {
+			return ""
+		}
+		if t := safeText(s, 400); t != "" {
+			return t
+		}
+		return "dettaglio vuoto"
 	}
-	return string(raw)
+	type item struct {
+		Type string `json:"type"`
+		Msg  string `json:"msg"`
+	}
+	var list []item
+	if json.Unmarshal(raw, &list) != nil {
+		var one item
+		if json.Unmarshal(raw, &one) == nil {
+			list = []item{one}
+		}
+	}
+	var parts []string
+	for _, d := range list[:min(len(list), 5)] {
+		t, m := safeText(d.Type, 80), safeText(d.Msg, 200)
+		switch {
+		case t != "" && m != "":
+			parts = append(parts, t+": "+m)
+		case t != "" || m != "":
+			parts = append(parts, t+m)
+		}
+	}
+	if len(parts) == 0 {
+		return "dettaglio in una forma non riconosciuta"
+	}
+	if len(list) > 5 {
+		parts = append(parts, fmt.Sprintf("altri %d", len(list)-5))
+	}
+	return clip(strings.Join(parts, "; "), 400)
 }
 
+// urlRe trova gli indirizzi nei testi di fal, ridotti da safeText a schema e host.
+var urlRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
+
+// safeText prepara un testo di fal per stderr e per lo stato: URL ridotti a
+// schema e host (possono essere firmati, privati o nostri file caricati),
+// caratteri di controllo tolti, al massimo n byte.
+func safeText(s string, n int) string {
+	s = urlRe.ReplaceAllStringFunc(s, redact)
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return ' '
+		}
+		return r
+	}, s)
+	return clip(strings.Join(strings.Fields(s), " "), n)
+}
+
+// clip taglia s a n byte senza spezzare un carattere.
 func clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…"
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
