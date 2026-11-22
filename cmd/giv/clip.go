@@ -372,7 +372,10 @@ func (j *clipJob) run(ctx context.Context) (manifest, error) {
 	if err != nil {
 		return manifest{}, err
 	}
+	// col costo riportato dal provider la stima resta accanto (come nel manifest di story run)
+	est, src := man.CostEstUSD, man.CostSource
 	man.done(files, res)
+	man.CostEstUSD, man.CostSource = est, src
 	return man, nil
 }
 
