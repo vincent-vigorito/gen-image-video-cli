@@ -937,8 +937,9 @@ dopo l'inizio della scena; senza vale 0.
 - **voci dai testi**: per ogni scena con `testo` e senza `voce` la richiesta come `giv
   voice` (provider, voce, lingua, velocità, pronunce del blocco `parlato`: un valore non
   valido esce con codice 2), `text_chars`, `voice_cost_est_usd` (caratteri × listino),
-  `voice_duration_est_s` e `voice_status` (`da_generare`, `fatto`, `cambiata` se testo o
-  impostazioni sono cambiati dopo la generazione, `incerto`), con un avviso per una voce
+  `voice_cost_probable` (stima probabile, gemini), `voice_duration_est_s` e
+  `voice_status` (`da_generare`, `fatto`, `cambiata` se testo o impostazioni sono
+  cambiati dopo la generazione, `incerto`), con un avviso per una voce
   incerta, cambiata o il cui file non c'è più;
 - **costi**: `cost_est_usd` (stime da listino, voci comprese: queste anche a parte in
   `voice_cost_est_usd`), `cost_declared_usd` (costi dichiarati
@@ -1003,7 +1004,10 @@ di `giv voice` coi valori del blocco `parlato` (fuso col kit; predefiniti `xai`,
 richiesta a pagamento: prima di inviarla la spesa registrata più le stime delle voci e dei
 video ancora da fare, sul valore non arrotondato, non deve superare `tetto_costo_usd`, e
 la voce si registra nello stato come incerta; con un tetto una voce non stimabile esce con
-codice 2 senza avvii.
+codice 2 senza avvii. La voce `gemini` non ha oggi un costo massimo garantito: con
+`tetto_costo_usd` una voce gemini ancora da generare esce con codice 2 in `story check` e
+`story run`, prima di ogni richiesta (usa `xai` o togli il tetto); senza tetto parte, con
+un avviso, e la stima è probabile, mai esatta (`voice_cost_probable` in `story check`).
 
 - Una voce fatta **non si rifà da sola**: se testo o impostazioni cambiano, `story check`
   e `story run` lo dicono e si continua con quella fatta; per rifarla (a pagamento)

@@ -83,6 +83,13 @@ func (sc *storyChecker) voice(scene *story.Scene) (*sceneVoice, error) {
 	return v, nil
 }
 
+// voiceProbableWarning è l'avviso per una voce senza costo massimo garantito
+// (gemini, decisione 22): la stima è probabile, mai esatta.
+func voiceProbableWarning(v *sceneVoice) string {
+	return fmt.Sprintf("voce: il costo della voce %s non ha un massimo garantito: stima probabile %.6f $ (%d token d'uscita al massimo nella richiesta)",
+		v.req.Provider, v.est.USD, speech.MaxGeminiOutputTokens)
+}
+
 // voiceKey è l'impronta della richiesta di voce già controllata: cambia se
 // cambiano testo, provider, voce, lingua, velocità, stile o pronunce.
 func voiceKey(req speech.Request) string {
@@ -119,17 +126,27 @@ func (sc *storyChecker) checkVoice(scene *story.Scene, c *sceneCheck) error {
 	if err != nil {
 		return fmt.Errorf("voce: %w", err)
 	}
+	ss := sc.state.Scenes[scene.ID]
+	// decisione 22: con un tetto, una voce senza costo massimo garantito
+	// (gemini) ancora da chiedere è non stimabile
+	if r := speech.CapRefusal(v.req.Provider); r != "" && sc.s.TettoCostoUSD != nil && (ss == nil || ss.Voice == nil) {
+		return usageError("voce: costo non stimabile con tetto_costo_usd (%s)", r)
+	}
 	c.Warnings = append(c.Warnings, v.warns...)
 	c.VoiceStatus = "da_generare"
 	c.VoiceDurationEstS = voiceDuration(v.req)
-	if v.est != nil {
-		usd := v.est.USD
-		c.VoiceCostEstUSD = &usd
-	} else {
+	switch {
+	case v.est == nil:
 		sc.notEstimated = append(sc.notEstimated, scene.ID+" (voce)")
 		c.Warnings = append(c.Warnings, "voce: stima del costo non disponibile: "+v.why)
+	case v.est.Probable:
+		usd := v.est.USD
+		c.VoiceCostEstUSD, c.VoiceCostProbable = &usd, true
+		c.Warnings = append(c.Warnings, voiceProbableWarning(v))
+	default:
+		usd := v.est.USD
+		c.VoiceCostEstUSD = &usd
 	}
-	ss := sc.state.Scenes[scene.ID]
 	if ss == nil {
 		return nil
 	}
@@ -192,8 +209,17 @@ func (r *storyRunner) voicePreflight() error {
 			rejects = append(rejects, fmt.Errorf("scena %s: voce: %w", scene.ID, err))
 			continue
 		}
+		// decisione 22: con un tetto la voce senza costo massimo garantito
+		// (gemini) non parte; senza, parte con l'avviso
+		if rf := speech.CapRefusal(v.req.Provider); rf != "" && r.s.TettoCostoUSD != nil {
+			rejects = append(rejects, fmt.Errorf("scena %s: voce: costo non stimabile con tetto_costo_usd (%s)", scene.ID, rf))
+			continue
+		}
 		for _, w := range v.warns {
 			fmt.Fprintf(os.Stderr, "avviso: scena %s: voce: %s\n", scene.ID, w)
+		}
+		if v.est != nil && v.est.Probable {
+			fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", scene.ID, voiceProbableWarning(v))
 		}
 		if v.est == nil {
 			if r.s.TettoCostoUSD != nil {
@@ -292,6 +318,14 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 	r.man.Voices++
 	if res.CostUSD > 0 {
 		ss.Charges[k].CostUSD = res.CostUSD
+	} else if c := &ss.Charges[k]; res.UsageUSD > 0 && (c.CostEstUSD == nil || res.UsageUSD > *c.CostEstUSD) {
+		// stima dai consumi riportati (gemini): prende il posto della riserva
+		// solo se non è più bassa, a piena precisione
+		u := res.UsageUSD
+		c.CostEstUSD = &u
+	}
+	if res.UsageUSD > 0 {
+		man.CostUsageUSD, man.CostUsageSource = math.Round(res.UsageUSD*1e6)/1e6, res.UsageSource
 	}
 	for _, w := range res.Warnings {
 		fmt.Fprintf(os.Stderr, "avviso: scena %s: voce: %s\n", scene.ID, w)

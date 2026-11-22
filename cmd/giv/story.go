@@ -300,6 +300,7 @@ type sceneCheck struct {
 	VoiceStatus string         `json:"voice_status,omitempty"`  // voce dal testo: da_generare, fatto, cambiata, incerto
 	// voce dal testo da generare: stima del costo e durata stimata dai caratteri
 	VoiceCostEstUSD   *float64 `json:"voice_cost_est_usd,omitempty"`
+	VoiceCostProbable bool     `json:"voice_cost_probable,omitempty"` // stima probabile, non un massimo (gemini)
 	VoiceDurationEstS float64  `json:"voice_duration_est_s,omitempty"`
 	CostEstUSD        *float64 `json:"cost_est_usd,omitempty"`
 	CostSource        string   `json:"cost_source,omitempty"`
