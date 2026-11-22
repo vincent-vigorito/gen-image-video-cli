@@ -131,6 +131,12 @@ func run(ctx context.Context, bin string, timeout time.Duration, args []string) 
 // runTail è run che restituisce anche gli ultimi tail byte dello stderr (le
 // passate di analisi di ffmpeg, come loudnorm, scrivono lì il risultato).
 func runTail(ctx context.Context, bin string, timeout time.Duration, args []string, tail int) ([]byte, []byte, error) {
+	return runTailTo(ctx, bin, timeout, args, tail, nil)
+}
+
+// runTailTo è runTail che passa anche tutto lo stderr ad also (se non è nil)
+// man mano che arriva: per le passate di analisi la cui uscita supera la coda.
+func runTailTo(ctx context.Context, bin string, timeout time.Duration, args []string, tail int, also io.Writer) ([]byte, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -139,6 +145,9 @@ func runTail(ctx context.Context, bin string, timeout time.Duration, args []stri
 	errBuf := &tailBuffer{max: tail}
 	cmd.Stdout = out
 	cmd.Stderr = errBuf
+	if also != nil {
+		cmd.Stderr = io.MultiWriter(errBuf, also)
+	}
 	err := cmd.Run()
 	name := filepath.Base(bin)
 	if ctx.Err() == context.DeadlineExceeded {

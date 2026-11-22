@@ -40,8 +40,8 @@ func newCutRunEnv(t *testing.T, boardJSON string, mp4 []byte) *cutRunEnv {
 		case r.Method == http.MethodPost && r.URL.Path == "/videos":
 			io.Copy(io.Discard, r.Body)
 			n := atomic.AddInt32(&e.posts, 1)
-			fmt.Fprintf(w, `{"id":"job-%d","polling_url":%q,"status":"pending"}`, n, e.srv.URL+"/poll")
-		case r.URL.Path == "/poll":
+			fmt.Fprintf(w, `{"id":"job-%d","polling_url":%q,"status":"pending"}`, n, e.srv.URL+"/videos/job-"+fmt.Sprint(n))
+		case strings.HasPrefix(r.URL.Path, "/videos/job-"):
 			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":0.5}}`, e.srv.URL+"/content")
 		case r.URL.Path == "/content":
 			w.Write(mp4)
