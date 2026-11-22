@@ -29,7 +29,9 @@ type Model struct {
 	ImageWithRefs   *bool              `json:"image_with_refs,omitempty"` // false = --image e --ref non insieme
 	ImageWithRefsOn string             `json:"-"`                         // provider che li accetta insieme
 	Passthrough     []string           `json:"passthrough,omitempty"`
-	Pricing         map[string]float64 `json:"pricing,omitempty"` // sku -> valore, unità nel nome
+	MaxKeyframes    *int               `json:"max_keyframes,omitempty"` // --keyframe; nil o 0 = non supportati
+	Shots           *bool              `json:"shots,omitempty"`         // --shot (più inquadrature); nil = non supportate
+	Pricing         map[string]float64 `json:"pricing,omitempty"`       // sku -> valore, unità nel nome
 	Source          string             `json:"source"`
 
 	// schede con regole o prezzi propri (fal): nil = solo i controlli e la
@@ -192,6 +194,26 @@ func Check(prov string, m *Model, catalog []Model, req *provider.VideoRequest, s
 		}
 		return nil, reject("--image e --ref insieme non supportati da %s su %s: usa uno solo dei due%s", m.ID, prov, alt)
 	}
+	// fotogrammi intermedi e inquadrature: solo dove la scheda li dichiara (gli
+	// altri provider non li inviano)
+	if len(req.Keyframes) > 0 {
+		if m.MaxKeyframes == nil || *m.MaxKeyframes == 0 {
+			return nil, reject("--keyframe non supportato da %s; %s", m.ID,
+				supporting(func(x *Model) bool { return x.MaxKeyframes != nil && *x.MaxKeyframes > 0 }))
+		}
+		if len(req.Keyframes) > *m.MaxKeyframes {
+			return nil, reject("--keyframe: %s accetta al massimo %d fotogrammi intermedi, non %d", m.ID, *m.MaxKeyframes, len(req.Keyframes))
+		}
+	}
+	if len(req.Shots) > 0 {
+		if m.Shots == nil || !*m.Shots {
+			return nil, reject("--shot non supportato da %s; %s", m.ID,
+				supporting(func(x *Model) bool { return x.Shots != nil && *x.Shots }))
+		}
+		if len(m.Durations) > 0 && !slices.Contains(m.Durations, req.Duration) {
+			return nil, reject("--shot: inquadrature per %d s in tutto, %s ammette %s s", req.Duration, m.ID, durationRange(m.Durations))
+		}
+	}
 	resolutions, maxDuration := m.Resolutions, 0
 	if len(req.Refs) > 0 {
 		switch {
@@ -299,6 +321,14 @@ func seedOwner(prov string, m *Model) string {
 		return prov
 	}
 	return m.ID
+}
+
+// durationRange scrive le durate come da-a se sono consecutive.
+func durationRange(v []int) string {
+	if len(v) > 2 && slices.IsSorted(v) && v[len(v)-1]-v[0] == len(v)-1 {
+		return fmt.Sprintf("da %d a %d", v[0], v[len(v)-1])
+	}
+	return joinInts(v)
 }
 
 func joinInts(v []int) string {

@@ -81,15 +81,19 @@ type Scene struct {
 	Durata int    `json:"durata,omitempty"` // secondi; video: 0 = default del modello
 
 	// scena video
-	Prompt             string            `json:"prompt,omitempty"`
-	Negative           string            `json:"negative,omitempty"`
-	Preset             []string          `json:"preset,omitempty"`
-	Immagine           string            `json:"immagine,omitempty"`          // primo fotogramma, file o URL
-	UltimoFotogramma   string            `json:"ultimo_fotogramma,omitempty"` // file o URL
-	Usa                []string          `json:"usa,omitempty"`               // insiemi di riferimenti
-	FotogrammaChiave   *FotogrammaChiave `json:"fotogramma_chiave,omitempty"`
-	ContinuaDa         string            `json:"continua_da,omitempty"` // id di una scena precedente
-	CostoDichiaratoUSD *float64          `json:"costo_dichiarato_usd,omitempty"`
+	Prompt           string            `json:"prompt,omitempty"`
+	Negative         string            `json:"negative,omitempty"`
+	Preset           []string          `json:"preset,omitempty"`
+	Immagine         string            `json:"immagine,omitempty"`          // primo fotogramma, file o URL
+	UltimoFotogramma string            `json:"ultimo_fotogramma,omitempty"` // file o URL
+	Usa              []string          `json:"usa,omitempty"`               // insiemi di riferimenti
+	FotogrammaChiave *FotogrammaChiave `json:"fotogramma_chiave,omitempty"`
+	ContinuaDa       string            `json:"continua_da,omitempty"` // id di una scena precedente
+	// fotogrammi intermedi in ordine (file o URL) e inquadrature: valgono
+	// solo coi modelli che li prevedono (story check)
+	FotogrammiIntermedi []string       `json:"fotogrammi_intermedi,omitempty"`
+	Inquadrature        []Inquadratura `json:"inquadrature,omitempty"`
+	CostoDichiaratoUSD  *float64       `json:"costo_dichiarato_usd,omitempty"`
 	Generazione
 
 	// scene clip e immagine
@@ -98,6 +102,13 @@ type Scene struct {
 	// tutte: voce fuori campo, messa al montaggio
 	Voce        string   `json:"voce,omitempty"`
 	RitardoVoce *float64 `json:"ritardo_voce,omitempty"` // secondi dall'inizio della scena; nil = 0
+}
+
+// Inquadratura è una delle inquadrature di una scena video: testo e secondi;
+// la scena dura la loro somma e non ha un prompt suo.
+type Inquadratura struct {
+	Prompt string `json:"prompt"`
+	Durata int    `json:"durata"`
 }
 
 // FotogrammaChiave è l'immagine generata prima della scena e usata come primo
@@ -316,8 +327,33 @@ func (s *Storyboard) Validate() error {
 
 func (s *Storyboard) validateVideo(sc *Scene, where string, seen map[string]int,
 	fail func(string, ...any), file func(string, string, bool)) {
-	if strings.TrimSpace(sc.Prompt) == "" {
+	if len(sc.Inquadrature) > 0 {
+		// il testo è nelle inquadrature, la durata è la loro somma
+		if sc.Prompt != "" || len(sc.Preset) > 0 {
+			fail("%s: con inquadrature il testo va nelle inquadrature: prompt e preset non valgono", where)
+		}
+		sum := 0
+		for i, q := range sc.Inquadrature {
+			if strings.TrimSpace(q.Prompt) == "" {
+				fail("%s: inquadratura n. %d senza prompt", where, i+1)
+			}
+			if q.Durata < 1 {
+				fail("%s: inquadratura n. %d: durata in secondi interi da 1 in su", where, i+1)
+			}
+			sum += max(q.Durata, 0)
+		}
+		if sc.Durata != 0 && sc.Durata != sum {
+			fail("%s: durata %d diversa dalla somma delle inquadrature (%d s)", where, sc.Durata, sum)
+		}
+	} else if strings.TrimSpace(sc.Prompt) == "" {
 		fail("%s: prompt mancante", where)
+	}
+	for i, p := range sc.FotogrammiIntermedi {
+		if p == "" {
+			fail("%s: fotogrammi_intermedi n. %d vuoto", where, i+1)
+		} else {
+			file(fmt.Sprintf("%s: fotogrammi_intermedi n. %d", where, i+1), p, true)
+		}
 	}
 	if sc.File != "" {
 		fail("%s: file non vale per una scena video (il primo fotogramma è immagine)", where)
@@ -446,6 +482,8 @@ func (sc *Scene) videoFields() []string {
 	add(len(sc.Usa) > 0, "usa")
 	add(sc.FotogrammaChiave != nil, "fotogramma_chiave")
 	add(sc.ContinuaDa != "", "continua_da")
+	add(len(sc.FotogrammiIntermedi) > 0, "fotogrammi_intermedi")
+	add(len(sc.Inquadrature) > 0, "inquadrature")
 	add(sc.CostoDichiaratoUSD != nil, "costo_dichiarato_usd")
 	g := sc.Generazione
 	add(g.Provider != "", "provider")

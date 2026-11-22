@@ -6,6 +6,8 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"gen-image-video-cli/internal/output"
@@ -22,6 +24,8 @@ type videoOptions struct {
 	Aspect, Resolution, Negative string
 	Image, LastFrame             string
 	Refs                         []string
+	Keyframes                    []string        // fotogrammi intermedi, in ordine
+	Shots                        []provider.Shot // inquadrature: niente prompt, durata = somma
 	Duration, Seed               int
 	Audio                        string   // on, off o "" (default del modello)
 	Params                       []string // chiave=valore
@@ -93,6 +97,11 @@ func prepareVideo(o videoOptions) (*videoJob, error) {
 	if req.Audio, err = parseAudio(o.Audio); err != nil {
 		return nil, err
 	}
+	if len(o.Shots) > 0 {
+		if err := shotsRequest(o, pres, &req); err != nil {
+			return nil, err
+		}
+	}
 	if req.Params, err = parseParams(o.Params); err != nil {
 		return nil, err
 	}
@@ -107,6 +116,7 @@ func prepareVideo(o videoOptions) (*videoJob, error) {
 		return nil, usageError("--max-cost deve essere un importo finito e non negativo in dollari")
 	}
 	req.Image, req.LastFrame, req.Refs = o.Image, o.LastFrame, slices.Clone(o.Refs)
+	req.Keyframes = slices.Clone(o.Keyframes)
 	files := req
 	if o.ImagePending {
 		files.Image = ""
@@ -130,11 +140,54 @@ func prepareVideo(o videoOptions) (*videoJob, error) {
 		plan: plan, out: o.Out, name: o.Name}, nil
 }
 
+// parseShots legge i --shot "<secondi>:<testo>": secondi interi, testo non
+// vuoto; i limiti del modello li controlla la scheda.
+func parseShots(list []string) ([]provider.Shot, error) {
+	var out []provider.Shot
+	for i, v := range list {
+		s, text, ok := strings.Cut(v, ":")
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if !ok || err != nil {
+			return nil, usageError("--shot n. %d: serve la forma \"<secondi>:<testo>\" (secondi interi)", i+1)
+		}
+		out = append(out, provider.Shot{Prompt: strings.TrimSpace(text), Duration: n})
+	}
+	return out, nil
+}
+
+// maxShotSeconds è il tetto di una inquadratura prima dei limiti del modello
+// (tiene la somma lontana dall'overflow).
+const maxShotSeconds = 1000
+
+// shotsRequest mette in req le inquadrature di o: il testo è tutto lì (niente
+// prompt libero né frasi dei preset) e il video dura la loro somma.
+func shotsRequest(o videoOptions, pres presets.Result, req *provider.VideoRequest) error {
+	if o.Prompt != "" || len(o.Presets) > 0 || pres.Prompt != "" {
+		return usageError("--shot: il testo va nelle inquadrature, niente prompt né --preset")
+	}
+	sum := 0
+	for i, s := range o.Shots {
+		if strings.TrimSpace(s.Prompt) == "" {
+			return usageError("--shot n. %d: testo mancante", i+1)
+		}
+		if s.Duration < 1 || s.Duration > maxShotSeconds {
+			return usageError("--shot n. %d: %d s non validi (secondi interi positivi)", i+1, s.Duration)
+		}
+		sum += s.Duration
+	}
+	if o.Duration > 0 && o.Duration != sum {
+		return usageError("--duration %d diversa dalla somma delle inquadrature (%d s): toglila o correggila", o.Duration, sum)
+	}
+	req.Duration, req.Shots = sum, slices.Clone(o.Shots)
+	return nil
+}
+
 // run scarica gli ingressi, genera e salva i file; restituisce il manifest da
 // emettere. Un job partito e poi fallito lascia la sua riga nel registro.
 func (j *videoJob) run(ctx context.Context) (manifest, error) {
 	req := j.req
 	req.Refs = slices.Clone(j.req.Refs) // resolveVideo li sostituisce coi file scaricati
+	req.Keyframes = slices.Clone(j.req.Keyframes)
 	var tmp tempInputs
 	defer tmp.cleanup()
 	inputs := newManifestInputs(req) // come li ha passati l'utente, prima dei download
@@ -154,7 +207,11 @@ func (j *videoJob) run(ctx context.Context) (manifest, error) {
 	}
 	slug := j.name
 	if slug == "" {
-		slug = output.Slug(j.prompt)
+		text := j.prompt
+		if text == "" && len(req.Shots) > 0 {
+			text = req.Shots[0].Prompt // --shot: niente prompt, il nome dalla prima inquadratura
+		}
+		slug = output.Slug(text)
 	}
 	files, err := saveMedia(j.save, j.out, slug, res)
 	if err != nil {

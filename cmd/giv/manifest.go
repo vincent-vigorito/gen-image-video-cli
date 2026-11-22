@@ -28,6 +28,7 @@ type manifestInputs struct {
 	Image     *inputFile  `json:"image,omitempty"`
 	LastFrame *inputFile  `json:"last_frame,omitempty"`
 	Refs      []inputFile `json:"refs,omitempty"`
+	Keyframes []inputFile `json:"keyframes,omitempty"` // fotogrammi intermedi
 
 	// comandi sulle clip (giv extend, edit, upscale, avatar)
 	Video *inputFile `json:"video,omitempty"`
@@ -47,7 +48,10 @@ func newManifestInputs(req provider.VideoRequest) *manifestInputs {
 	for _, r := range req.Refs {
 		in.Refs = append(in.Refs, inputFile{Path: shownInput(r)})
 	}
-	if in.Image == nil && in.LastFrame == nil && len(in.Refs) == 0 {
+	for _, k := range req.Keyframes {
+		in.Keyframes = append(in.Keyframes, inputFile{Path: shownInput(k)})
+	}
+	if in.Image == nil && in.LastFrame == nil && len(in.Refs) == 0 && len(in.Keyframes) == 0 {
 		return nil
 	}
 	return in
@@ -67,6 +71,11 @@ func (in *manifestInputs) fingerprint(req provider.VideoRequest) {
 	for i := range in.Refs {
 		if i < len(req.Refs) {
 			in.Refs[i].SHA256 = shortHash(req.Refs[i])
+		}
+	}
+	for i := range in.Keyframes {
+		if i < len(req.Keyframes) {
+			in.Keyframes[i].SHA256 = shortHash(req.Keyframes[i])
 		}
 	}
 }

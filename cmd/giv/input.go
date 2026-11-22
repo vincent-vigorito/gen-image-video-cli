@@ -230,6 +230,9 @@ func videoInputs(req *provider.VideoRequest) []videoInput {
 	for i := range req.Refs {
 		list = append(list, videoInput{"--ref", &req.Refs[i]})
 	}
+	for i := range req.Keyframes {
+		list = append(list, videoInput{"--keyframe", &req.Keyframes[i]})
+	}
 	return list
 }
 
@@ -246,6 +249,9 @@ func checkVideoInputs(req *provider.VideoRequest) error {
 func localInputsSize(req *provider.VideoRequest) (int64, error) {
 	if len(req.Refs) > provider.MaxRefs {
 		return 0, usageError("--ref: al massimo %d immagini di riferimento, non %d", provider.MaxRefs, len(req.Refs))
+	}
+	if len(req.Keyframes) > provider.MaxKeyframes {
+		return 0, usageError("--keyframe: al massimo %d fotogrammi intermedi, non %d", provider.MaxKeyframes, len(req.Keyframes))
 	}
 	var total int64
 	for _, in := range videoInputs(req) {

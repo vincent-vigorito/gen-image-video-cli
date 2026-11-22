@@ -580,6 +580,7 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 
 	req := job.req
 	req.Refs = slices.Clone(job.req.Refs)
+	req.Keyframes = slices.Clone(job.req.Keyframes)
 	shown := newManifestInputs(req) // come nello storyboard
 	if err := r.staleKeyframe(scene); err != nil {
 		return err // nessuna richiesta: il fotogramma si rigenera solo con --new-keyframe
@@ -607,14 +608,14 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 			return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 		}
 		req.Image = p
-		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs})
+		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: req.Keyframes})
 	case scene.ContinuaDa != "":
 		p, err := r.lastFrame(ctx, scene, work)
 		if err != nil {
 			return fail(err)
 		}
 		req.Image = p
-		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs})
+		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: req.Keyframes})
 	}
 	for _, in := range videoInputs(&req) {
 		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) {

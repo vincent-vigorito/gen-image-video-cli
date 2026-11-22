@@ -516,6 +516,12 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		Image:     s.Path(scene.Immagine),
 		LastFrame: s.Path(scene.UltimoFotogramma),
 	}
+	for _, p := range scene.FotogrammiIntermedi {
+		o.Keyframes = append(o.Keyframes, s.Path(p))
+	}
+	for _, q := range scene.Inquadrature {
+		o.Shots = append(o.Shots, provider.Shot{Prompt: q.Prompt, Duration: q.Durata})
+	}
 	if o.Seed == 0 {
 		o.Seed = d.Seed
 	}
