@@ -187,10 +187,16 @@ func listVoices(o voiceOptions) error {
 		return usageError("--voices: elenco non disponibile con %s", req.Provider)
 	}
 	voices, err := vl.Voices(context.Background())
-	if err != nil {
+	out := map[string]any{"provider": req.Provider, "voices": voices}
+	switch {
+	case errors.Is(err, speech.ErrPartialVoices):
+		msg := fmt.Sprintf("elenco delle voci parziale: le prime %d", len(voices))
+		fmt.Fprintf(os.Stderr, "avviso: %s\n", msg)
+		out["warnings"] = []string{msg}
+	case err != nil:
 		return err
 	}
-	return output.PrintJSON(map[string]any{"provider": req.Provider, "voices": voices})
+	return output.PrintJSON(out)
 }
 
 // prepareVoice fa tutti i controlli senza chiave né chiamate: testo, flag,

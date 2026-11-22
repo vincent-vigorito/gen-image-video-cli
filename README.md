@@ -1089,12 +1089,17 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
   nello storyboard un difetto fa uscire `giv story run` con 1, dopo il manifest; `giv
   story cut` esce sempre come prima.
 - Un controllo che non si può fare (ffmpeg o ffprobe assenti) è un avviso: il comando non
-  cambia esito e il file non si scrive.
+  cambia esito e il file non si scrive. Se `<nome>.controllo.json` è uno dei file
+  d'ingresso (storyboard, stato, file che lo storyboard nomina, manifest e file del kit,
+  anche quelli tolti con `montaggio.senza`, file generati elencati nello stato) non si
+  sovrascrive: resta un avviso.
 - Con `controllo.voce` `giv story run` trascrive ogni voce **generata da giv** appena
   fatta (prima dei video), o già fatta e mai trascritta, e la confronta col testo della
   scena come [`giv qc --voice`](#controllo-della-voce-giv-qc---voice) (xai, lingua e
   pronunce del blocco `parlato`; i file `voce` delle scene non si trascrivono: per quelli
-  `giv qc --voice`). Serve `XAI_API_KEY` (senza, codice 2 prima di ogni avvio). La riga
+  `giv qc --voice`). Si carica solo `voce/<id>-v<N>.wav` della scena, file normale in una
+  cartella `voce` vera (niente link): uno stato che indica un altro file salta la
+  trascrizione con un avviso. Serve `XAI_API_KEY` (senza, codice 2 prima di ogni avvio). La riga
   della voce in `voices[]` porta i controlli `voice` e `language`, `transcript` e
   `comparison`; nelle esecuzioni dopo, e in `giv story cut`, l'esito registrato nello
   stato. Ogni trascrizione è **a pagamento** (0,10 $ l'ora, al minuto per eccesso): la
@@ -1190,7 +1195,10 @@ le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `voice
 `jobs_recovered`, `keyframes`, `voices` (voci generate), `voice_checks` (voci trascritte,
 con `controllo.voce`) e i totali `cost_est_usd`
 (stime e costi dichiarati delle scene), `cost_usd` (addebito riportato dai provider),
-`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `removed_scenes` e
+`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `run_cost_est_usd` e
+`run_spent_usd` (stime e spesa contata delle sole richieste partite in questa esecuzione:
+fotogrammi chiave, video, voci e trascrizioni; i job recuperati restano dell'esecuzione
+che li ha avviati; assenti se non è partito niente), `removed_scenes` e
 `removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`.
 
 ### Montaggio: `giv story cut`

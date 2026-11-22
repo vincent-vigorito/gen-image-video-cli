@@ -121,6 +121,12 @@ type storyRunManifest struct {
 	CostEstUSD  float64 `json:"cost_est_usd"` // stime (o costi dichiarati) delle generazioni delle scene
 	CostUSD     float64 `json:"cost_usd"`     // addebito riportato dai provider
 	SpentUSD    float64 `json:"spent_usd"`    // per il tetto: addebito dove c'è, altrimenti stima (anche delle scene tolte)
+	// richieste a pagamento partite in questa esecuzione (fotogrammi chiave,
+	// video, voci e trascrizioni): stime (o costi dichiarati) e spesa contata
+	// per il tetto (addebito dove c'è, altrimenti stima); i job recuperati
+	// restano dell'esecuzione che li ha avviati
+	RunCostEstUSD float64 `json:"run_cost_est_usd,omitempty"`
+	RunSpentUSD   float64 `json:"run_spent_usd,omitempty"`
 	// spesa nello stato di scene non più nello storyboard: in spent_usd, non fra le scene
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"`
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
@@ -161,6 +167,7 @@ type storyRunner struct {
 	thisRun map[string]string
 	failed  []string // scene fallite sul provider (in questa esecuzione o prima): non si rigenerano da sole
 	man     storyRunManifest
+	started time.Time // inizio dell'esecuzione: gli addebiti da qui in poi sono suoi
 
 	kitRoot      *os.Root // cartella del kit: i suoi file letti solo qui dentro (nil senza kit)
 	newVoice     string   // --new-voice: scena di cui rigenerare la voce
@@ -221,7 +228,7 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 		return nil, err
 	}
 	defer root.Close()
-	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only,
+	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only, started: time.Now(),
 		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{},
 		voicesOnly: o.voicesOnly, voiceSent: map[string]bool{}, voiceThisRun: map[string]string{}, speech: map[string]speech.Synthesizer{},
 		checkEst: map[string]float64{}, checkDone: map[string]bool{}, voiceChecks: map[string]*storyVoiceCheck{}}
@@ -1253,6 +1260,22 @@ func (r *storyRunner) summary() {
 	}
 	r.man.CostEstUSD, r.man.CostUSD = round4(r.man.CostEstUSD), round4(r.man.CostUSD)
 	r.man.SpentUSD = round4(r.st.Spent())
+	var runEst, runSpent float64
+	for _, ss := range r.st.Scenes {
+		for _, c := range ss.Charges {
+			if c.At.Before(r.started) {
+				continue
+			}
+			switch {
+			case c.CostEstUSD != nil:
+				runEst += *c.CostEstUSD
+			case c.CostDeclaredUSD != nil:
+				runEst += *c.CostDeclaredUSD
+			}
+			runSpent += c.Spent()
+		}
+	}
+	r.man.RunCostEstUSD, r.man.RunSpentUSD = round4(runEst), round4(runSpent)
 	var removed float64
 	r.man.RemovedScenes, removed = removedSpend(r.s, r.st)
 	r.man.RemovedSpentUSD = round4(removed)
