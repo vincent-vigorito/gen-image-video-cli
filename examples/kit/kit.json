@@ -14,5 +14,6 @@
       "tutela": "illustrazione"
     }
   },
-  "voce": { "provider": "xai", "voce": "eve", "lingua": "it", "velocita": 1.0 }
+  "voce": { "provider": "xai", "voce": "eve", "lingua": "it", "velocita": 1.0 },
+  "pronuncia": {}
 }
