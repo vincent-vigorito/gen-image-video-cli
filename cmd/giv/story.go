@@ -12,8 +12,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gen-image-video-cli/internal/caps"
+	"gen-image-video-cli/internal/kit"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
 	"gen-image-video-cli/internal/story"
@@ -47,9 +49,10 @@ const storyHelp = `giv story — video a più scene da uno storyboard JSON (form
 Uso:
   giv story check <storyboard.json>   controlla lo storyboard e ne stima il costo: nessuna
                                       generazione, gratuito
-  giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
-                                      genera a pagamento le scene video e avatar mancanti; stato e
-                                      spesa in <nome>.stato.json accanto allo storyboard
+  giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] <storyboard.json>
+                                      genera a pagamento le voci dai testi, poi le scene video e
+                                      avatar mancanti; stato e spesa in <nome>.stato.json
+                                      accanto allo storyboard
   giv story cut <storyboard.json>     monta con ffmpeg le scene già pronte in un solo video
   giv story <sottocomando> --help     aiuto e flag del sottocomando
 
@@ -57,6 +60,11 @@ Flag di giv story run (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita
   --new-keyframe     con --scene: rigenera anche il fotogramma chiave della scena
   --new-job          con --scene: abbandona il job già partito della scena e ne avvia uno nuovo
+  --new-voice        con --scene: rigenera anche la voce dal testo della scena
+  --voices           genera solo le voci dai testi, nessun video
+
+Flag di check, run e cut:
+  --kit <file>       kit di marca e personaggi al posto del campo kit dello storyboard
 
 Uscita: su stdout solo il JSON del risultato; avanzamento, avvisi ed errori su stderr.
 Uno storyboard, uno stato o un tetto di spesa non validi escono con codice 2, senza generazioni.
@@ -64,28 +72,37 @@ Uno storyboard, uno stato o un tetto di spesa non validi escono con codice 2, se
 
 // storySubHelp è l'aiuto dei sottocomandi (giv story <sottocomando> --help).
 var storySubHelp = map[string]string{
-	"check": `uso: giv story check <storyboard.json>
+	"check": `uso: giv story check [--kit <kit.json>] <storyboard.json>
 
 Controlla lo storyboard senza generare niente: forma, file, riferimenti fra scene, modelli
-sul catalogo letto adesso, capacità, preset e tutela. Somma stime da listino e costi
-dichiarati e, con tetto_costo_usd, li confronta col tetto insieme alla spesa già registrata
-nello stato (<nome>.stato.json) per scene non più nello storyboard (removed_scenes).
+sul catalogo letto adesso, capacità, preset e tutela, voci dai testi. Somma stime da
+listino (voci comprese) e costi dichiarati e, con tetto_costo_usd, li confronta col tetto
+insieme alla spesa già registrata nello stato (<nome>.stato.json) per scene non più nello
+storyboard (removed_scenes). Col kit (campo kit o --kit) mostra i valori che ne vengono.
 Ogni problema trovato esce con codice 2, uno per riga.
 
-Flag:
-  -h, --help   questo aiuto
+Flag (anche dopo il file):
+  --kit <file>   kit di marca e personaggi al posto del campo kit dello storyboard
+  -h, --help     questo aiuto
 `,
-	"run": `uso: giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
+	"run": `uso: giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
 
-Genera a pagamento le scene video e avatar dello storyboard, in ordine e una richiesta alla
-volta: prima l'eventuale fotogramma chiave, poi la clip, in clip/ accanto allo storyboard
+Genera a pagamento le voci dai testi delle scene (testo senza voce: voce/<id>-v<N>.wav
+accanto allo storyboard, prima dei video), poi le scene video e avatar dello storyboard, in
+ordine e una richiesta alla volta: prima l'eventuale fotogramma chiave, poi la clip, in
+clip/ accanto allo storyboard
 (scena avatar: immagine e voce caricate su fal, Kling AI Avatar v2; serve FAL_KEY). Stato e
 spesa sono in <nome>.stato.json: una nuova esecuzione recupera i job già partiti senza
 rilanciarli e genera solo le scene mancanti. Con tetto_costo_usd, prima di ogni richiesta
 a pagamento la spesa registrata (anche di scene non più nello storyboard) più le stime
 ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii. Alla
 fine riscrive foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
-non farlo).
+non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
+(<nome>.controllo.json e campo controllo): avvisa e basta, con strict un difetto esce
+con 1. Con controllo.voce trascrive ogni voce generata (appena fatta o mai trascritta)
+e la confronta col testo come giv qc --voice: xai, a pagamento, riserva e tetto come
+ogni richiesta, una sola richiesta mai rilanciata (incerta: resta contata); avvisa e
+basta, i video proseguono.
 
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
@@ -99,19 +116,29 @@ Flag (anche dopo il file):
                      scarica più: il job non si recupera, resta fra i precedenti con
                      l'errore e il suo addebito resta contato; poi una nuova richiesta,
                      con la stessa riserva e lo stesso tetto delle altre
+  --new-voice        solo con --scene, per una scena con testo: rigenera anche la voce,
+                     con la stessa riserva e lo stesso tetto; la precedente resta fra le
+                     riprese precedenti. Una voce fatta non si rifà mai da sola, nemmeno
+                     se testo o impostazioni cambiano (avviso); una incerta resta contata
+                     e si rifà solo così
+  --voices           solo le voci dai testi, nessun video (con --scene, solo la sua)
+  --kit <file>       kit di marca e personaggi al posto del campo kit dello storyboard
   -h, --help         questo aiuto
 `,
-	"cut": `uso: giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+	"cut": `uso: giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
 
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
-clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce,
-musica e sottotitoli del blocco montaggio, e taglio, velocita e fuoco delle scene. La
+clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce (il
+file della scena o la voce generata dal testo), musica e sottotitoli del blocco montaggio
+(sottotitoli "auto": dai testi delle scene coi tempi delle voci; col kit, logo, cartello
+e musica del kit, salvo montaggio.senza), e taglio, velocita e fuoco delle scene. La
 voce di una scena avatar è già nella sua clip e non si aggiunge una seconda volta.
 Nessuna generazione e nessuna rete; il file d'uscita (montaggio.uscita, altrimenti
 <nome>.mp4) si riscrive a ogni montaggio. Con montaggio.formati un file per formato,
 <nome>-9x16.mp4…, adattato come dice montaggio.adatta (bande, ritaglio, sfocato).
 Riscrive anche foglio-contatto.jpg accanto allo storyboard (foglio_contatto: false per
-non farlo).
+non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
+(<nome>.controllo.json e campo controllo; avvisa e basta).
 
 Flag (anche dopo il file):
   --formato <r>       monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra
@@ -120,26 +147,53 @@ Flag (anche dopo il file):
                       (instagram, tiktok, youtube, linkedin, anche <canale>:<formato>)
                       dal file montato nel suo formato: <nome>-<canale>-<WxH>.mp4,
                       volume montaggio.volume o -14 LUFS
+  --kit <file>        kit di marca e personaggi al posto del campo kit dello storyboard
   -h, --help          questo aiuto
 `,
 }
 
-// storyArg legge l'unico argomento di un sottocomando: il file dello storyboard.
-func storyArg(name string, args []string) (string, error) {
+// storyArg legge l'argomento di un sottocomando, il file dello storyboard, e
+// --kit (anche dopo il file).
+func storyArg(name string, args []string) (path, kitFile string, err error) {
 	fl := flag.NewFlagSet("story "+name, flag.ExitOnError)
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp[name]) }
+	kitFlag := fl.String("kit", "", "kit di marca e personaggi al posto del campo kit")
 	if err := fl.Parse(args); err != nil {
-		return "", err
+		return "", "", err
 	}
-	if fl.NArg() != 1 {
-		return "", usageError("uso: giv story %s <storyboard.json>", name)
+	if fl.NArg() < 1 {
+		return "", "", usageError("uso: giv story %s [--kit <kit.json>] <storyboard.json>", name)
 	}
-	return fl.Arg(0), nil
+	path = fl.Arg(0)
+	if err := fl.Parse(fl.Args()[1:]); err != nil {
+		return "", "", err
+	}
+	if fl.NArg() != 0 {
+		return "", "", usageError("uso: giv story %s [--kit <kit.json>] <storyboard.json>", name)
+	}
+	if err := checkKitFlag(fl, *kitFlag); err != nil {
+		return "", "", err
+	}
+	return path, *kitFlag, nil
 }
 
-// loadStory legge e controlla lo storyboard (codice 2 con l'elenco dei problemi).
+// checkKitFlag: --kit indicato vuole un file (vuoto vale mancante, decisione 15).
+func checkKitFlag(fl *flag.FlagSet, kitFile string) error {
+	if flagsSet(fl)["kit"] && strings.TrimSpace(kitFile) == "" {
+		return usageError("--kit vuoto: indica il file del kit")
+	}
+	return nil
+}
+
+// loadStory legge e controlla lo storyboard (codice 2 con l'elenco dei
+// problemi), col kit del suo campo kit se c'è.
 func loadStory(path string) (*story.Storyboard, error) {
-	s, err := story.Load(path)
+	return loadStoryKit(path, "")
+}
+
+// loadStoryKit è loadStory col kit di --kit (vuoto: quello del campo kit).
+func loadStoryKit(path, kitFile string) (*story.Storyboard, error) {
+	s, err := story.LoadWithKit(path, kitFile)
 	if err == nil {
 		return s, nil
 	}
@@ -169,11 +223,21 @@ type storyCheck struct {
 	NotEstimated    []string       `json:"not_estimated,omitempty"`     // senza stima né costo dichiarato
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"` // spesa nello stato di scene non più nello storyboard: conta nel tetto
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
-	CapUSD          *float64       `json:"cap_usd,omitempty"`  // tetto_costo_usd
-	Warnings        []string       `json:"warnings,omitempty"` // avvisi del montaggio (titoli)
+	CapUSD          *float64       `json:"cap_usd,omitempty"`            // tetto_costo_usd
+	Warnings        []string       `json:"warnings,omitempty"`           // avvisi del montaggio (titoli)
+	VoiceCostEstUSD float64        `json:"voice_cost_est_usd,omitempty"` // voci dai testi, già in cost_est_usd
+	// trascrizioni delle voci (controllo.voce), già in cost_est_usd
+	VoiceCheckCostEstUSD float64        `json:"voice_check_cost_est_usd,omitempty"`
+	Kit                  *storyKitCheck `json:"kit,omitempty"`
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
+}
+
+// storyKitCheck è il kit usato dallo storyboard e i valori che ne vengono.
+type storyKitCheck struct {
+	File      string   `json:"file"`
+	Inherited []string `json:"inherited"` // campi presi dal kit
 }
 
 // removedScene è la spesa registrata nello stato per una scena che non è più
@@ -185,16 +249,29 @@ type removedScene struct {
 }
 
 // removedSpend elenca, per id, le scene dello stato con generazioni registrate
-// che non sono più scene video dello storyboard e ne somma la spesa non arrotondata.
+// che non sono più nello storyboard, o non più scene video (per le loro clip
+// e i fotogrammi chiave: la voce di una scena che c'è ancora resta sua), e ne somma
+// la spesa non arrotondata.
 func removedSpend(s *story.Storyboard, st *story.State) ([]removedScene, float64) {
 	var out []removedScene
 	var total float64
 	for _, id := range sortedKeys(st.Scenes) {
 		ss := st.Scenes[id]
-		if sc := s.Scena(id); (sc != nil && sc.Generata()) || len(ss.Charges) == 0 {
+		sc := s.Scena(id)
+		if sc != nil && sc.Generata() {
 			continue
 		}
-		v := ss.Spent()
+		var v float64
+		n := 0
+		for _, c := range ss.Charges {
+			if sc == nil || !c.OfVoice() {
+				v += c.Spent()
+				n++
+			}
+		}
+		if n == 0 {
+			continue
+		}
 		out = append(out, removedScene{ID: id, SpentUSD: round4(v)})
 		total += v
 	}
@@ -212,24 +289,35 @@ func removedText(rs []removedScene, v float64) string {
 
 // sceneCheck è una scena controllata: per le scene video il piano di giv video --dry-run.
 type sceneCheck struct {
-	ID              string         `json:"id"`
-	Tipo            string         `json:"tipo"`
-	Provider        string         `json:"provider,omitempty"`
-	Model           string         `json:"model,omitempty"`
-	Duration        int            `json:"duration,omitempty"`
-	PromptFinal     string         `json:"prompt_final,omitempty"`
-	Params          map[string]any `json:"params,omitempty"`
-	Inputs          map[string]any `json:"inputs,omitempty"`
-	Keyframe        *keyframeCheck `json:"keyframe,omitempty"`
-	File            string         `json:"file,omitempty"`
-	Voice           string         `json:"voice,omitempty"`
-	VoiceDelayS     *float64       `json:"voice_delay_s,omitempty"` // ritardo_voce
-	CostEstUSD      *float64       `json:"cost_est_usd,omitempty"`
-	CostSource      string         `json:"cost_source,omitempty"`
-	CostDeclaredUSD *float64       `json:"cost_declared_usd,omitempty"`
-	Warnings        []string       `json:"warnings,omitempty"`
+	ID          string         `json:"id"`
+	Tipo        string         `json:"tipo"`
+	Provider    string         `json:"provider,omitempty"`
+	Model       string         `json:"model,omitempty"`
+	Duration    int            `json:"duration,omitempty"`
+	PromptFinal string         `json:"prompt_final,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
+	Inputs      map[string]any `json:"inputs,omitempty"`
+	Keyframe    *keyframeCheck `json:"keyframe,omitempty"`
+	File        string         `json:"file,omitempty"`
+	Voice       string         `json:"voice,omitempty"`
+	VoiceDelayS *float64       `json:"voice_delay_s,omitempty"` // ritardo_voce
+	TextChars   int            `json:"text_chars,omitempty"`    // testo della voce
+	VoiceStatus string         `json:"voice_status,omitempty"`  // voce dal testo: da_generare, fatto, cambiata, incerto
+	// voce dal testo da generare: stima del costo e durata stimata dai caratteri
+	VoiceCostEstUSD   *float64 `json:"voice_cost_est_usd,omitempty"`
+	VoiceCostProbable bool     `json:"voice_cost_probable,omitempty"` // stima probabile, non un massimo (gemini)
+	VoiceDurationEstS float64  `json:"voice_duration_est_s,omitempty"`
+	// controllo.voce: stima della trascrizione della voce generata ed esito
+	// dell'ultima (ok, avviso, difetto, incerto)
+	VoiceCheckCostEstUSD *float64 `json:"voice_check_cost_est_usd,omitempty"`
+	VoiceCheck           string   `json:"voice_check,omitempty"`
+	CostEstUSD           *float64 `json:"cost_est_usd,omitempty"`
+	CostSource           string   `json:"cost_source,omitempty"`
+	CostDeclaredUSD      *float64 `json:"cost_declared_usd,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
 
-	length float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
+	length          float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
+	voiceCheckExact float64 // VoiceCheckCostEstUSD non arrotondata
 }
 
 // keyframeCheck è il fotogramma chiave di una scena: un'immagine generata prima
@@ -243,11 +331,11 @@ type keyframeCheck struct {
 }
 
 func cmdStoryCheck(args []string) error {
-	path, err := storyArg("check", args)
+	path, kitFile, err := storyArg("check", args)
 	if err != nil {
 		return err
 	}
-	s, err := loadStory(path)
+	s, err := loadStoryKit(path, kitFile)
 	if err != nil {
 		return err
 	}
@@ -268,10 +356,12 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		return nil, usageError("%v", err)
 	}
 	chk := newStoryChecker(s)
+	chk.state = st
 	out, err := chk.plan(path, nil)
 	if err != nil {
 		return nil, err
 	}
+	kitWarnings(s, st, out)
 	chk.voiceOverlaps(out)
 	if err := titleWarnings(s, path, out); err != nil {
 		return nil, err
@@ -298,6 +388,35 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(out.NotEstimated, ", "))
 	}
 	return out, nil
+}
+
+// kitWarnings porta in story check il kit usato e i campi che ne vengono; con
+// scene o voci già generate ricorda che il kit cambia solo il montaggio e le
+// prossime generazioni; una descrizione dei personaggi lunga è un avviso.
+func kitWarnings(s *story.Storyboard, st *story.State, out *storyCheck) {
+	if s.KitData == nil {
+		return
+	}
+	out.Kit = &storyKitCheck{File: s.KitFile, Inherited: slices.Clone(s.Ereditati)}
+	if out.Kit.Inherited == nil {
+		out.Kit.Inherited = []string{}
+	}
+	for _, ss := range st.Scenes {
+		if ss.Clip != nil || ss.Keyframe != nil || ss.Voice != nil {
+			w := "kit: le scene e le voci già generate non si rigenerano: il kit cambia il montaggio e le prossime generazioni"
+			out.Warnings = append(out.Warnings, w)
+			fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
+			break
+		}
+	}
+	for i := range out.Scenes {
+		scene := s.Scena(out.Scenes[i].ID)
+		if n := utf8.RuneCountInString(s.Descrizione(scene)); n > kit.DescrizioneLunga {
+			w := fmt.Sprintf("descrizione dei personaggi di %d caratteri davanti al prompt (oltre %d): il prompt si allunga", n, kit.DescrizioneLunga)
+			out.Scenes[i].Warnings = append(out.Scenes[i].Warnings, w)
+			fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", scene.ID, w)
+		}
+	}
 }
 
 // plan controlla le scene indicate (nil = tutte), nell'ordine dello storyboard,
@@ -335,12 +454,23 @@ func (sc *storyChecker) plan(path string, ids map[string]bool) (*storyCheck, err
 			out.CostDeclaredUSD += *k.CostDeclaredUSD
 			out.exactUSD += *k.CostDeclaredUSD
 		}
+		if v := sc.voices[scene.ID]; v != nil && v.est != nil && c.VoiceCostEstUSD != nil {
+			out.CostEstUSD += v.est.USD
+			out.VoiceCostEstUSD += v.est.USD
+			out.exactUSD += v.est.Exact
+		}
+		if c.VoiceCheckCostEstUSD != nil {
+			out.CostEstUSD += *c.VoiceCheckCostEstUSD
+			out.VoiceCheckCostEstUSD += *c.VoiceCheckCostEstUSD
+			out.exactUSD += c.voiceCheckExact
+		}
 	}
 	if len(rejects) > 0 {
 		return nil, storyError(path, errors.Join(rejects...))
 	}
 	out.NotEstimated = sc.notEstimated
-	out.CostEstUSD, out.CostDeclaredUSD = round4(out.CostEstUSD), round4(out.CostDeclaredUSD)
+	out.CostEstUSD, out.CostDeclaredUSD, out.VoiceCostEstUSD = round4(out.CostEstUSD), round4(out.CostDeclaredUSD), round4(out.VoiceCostEstUSD)
+	out.VoiceCheckCostEstUSD = math.Round(out.VoiceCheckCostEstUSD*1e6) / 1e6
 	out.CostTotalUSD = round4(out.CostEstUSD + out.CostDeclaredUSD)
 	return out, nil
 }
@@ -363,8 +493,10 @@ func (sc *storyChecker) exactEstimate(c sceneCheck) float64 {
 // catalogo per provider.
 type storyChecker struct {
 	s            *story.Storyboard
+	state        *story.State // stato di giv story run (voci già fatte); nil = vuoto
 	clients      map[string]*storyClient
 	notEstimated []string
+	voices       map[string]*sceneVoice // voci dai testi, controllate e stimate
 
 	// giv story run: cartella e nome dei file per scena, job pronti a partire
 	out    string
@@ -375,7 +507,7 @@ type storyChecker struct {
 }
 
 func newStoryChecker(s *story.Storyboard) *storyChecker {
-	return &storyChecker{s: s, clients: map[string]*storyClient{}, names: map[string]string{},
+	return &storyChecker{s: s, state: &story.State{}, clients: map[string]*storyClient{}, voices: map[string]*sceneVoice{}, names: map[string]string{},
 		jobs: map[string]*videoJob{}, images: map[string]*imageJob{}, clips: map[string]*clipJob{}}
 }
 
@@ -423,6 +555,15 @@ func sceneRetime(scene *story.Scene, c *sceneCheck) error {
 }
 
 func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
+	c, err := sc.sceneOnly(scene)
+	if err != nil {
+		return c, err
+	}
+	return c, sc.checkVoice(scene, &c)
+}
+
+// sceneOnly controlla la scena senza la voce dal testo (checkVoice).
+func (sc *storyChecker) sceneOnly(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce, VoiceDelayS: scene.RitardoVoce}
 	if scene.Tipo == story.Avatar {
 		return sc.avatar(scene, c)
@@ -521,6 +662,9 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 	if err := checkTutela("tutela", g.Tutela); err != nil {
 		return videoOptions{}, err
 	}
+	if err := checkTutela("tutela del personaggio (kit)", s.TutelaPersonaggi(scene)); err != nil {
+		return videoOptions{}, err
+	}
 	pick := func(v ...string) string {
 		for _, x := range v {
 			if x != "" {
@@ -536,11 +680,11 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 	o := videoOptions{
 		Provider: pick(g.Provider, d.Provider, envProvider()),
 		Model:    pick(g.Modello, d.Modello),
-		Prompt:   scene.Prompt, Negative: scene.Negative, Presets: scene.Preset,
+		Prompt:   s.ConDescrizione(scene, scene.Prompt), Negative: scene.Negative, Presets: scene.Preset,
 		Aspect:     pick(g.Aspect, d.Aspect, f.Aspect),
 		Resolution: pick(g.Risoluzione, d.Risoluzione, f.Risoluzione),
 		Audio:      pick(g.Audio, d.Audio),
-		Protect:    pick(g.Tutela, d.Tutela),
+		Protect:    pick(g.Tutela, s.TutelaPersonaggi(scene), d.Tutela),
 		Duration:   scene.Durata, Seed: g.Seed, Timeout: storyTimeout,
 		Strict:    s.Strict,
 		Image:     s.Path(scene.Immagine),
@@ -550,7 +694,7 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		o.Keyframes = append(o.Keyframes, s.Path(p))
 	}
 	for _, q := range scene.Inquadrature {
-		o.Shots = append(o.Shots, provider.Shot{Prompt: q.Prompt, Duration: q.Durata})
+		o.Shots = append(o.Shots, provider.Shot{Prompt: s.ConDescrizione(scene, q.Prompt), Duration: q.Durata})
 	}
 	if o.Seed == 0 {
 		o.Seed = d.Seed
@@ -630,13 +774,14 @@ func (sc *storyChecker) keyframe(scene *story.Scene, o videoOptions) (*keyframeC
 	if prov == "" {
 		prov = o.Provider
 	}
-	job, err := prepareImage(imageOptions{Provider: prov, Model: fk.Modello, Prompt: fk.Prompt, Aspect: o.Aspect, N: 1, Inputs: inputs,
+	prompt := sc.s.ConDescrizione(scene, fk.Prompt)
+	job, err := prepareImage(imageOptions{Provider: prov, Model: fk.Modello, Prompt: prompt, Aspect: o.Aspect, N: 1, Inputs: inputs,
 		Out: sc.out, Name: sc.names[scene.ID] + "-fotogramma"})
 	if err != nil {
 		return nil, err
 	}
 	sc.images[scene.ID] = job
-	k := &keyframeCheck{Provider: prov, Model: job.req.Model, Prompt: fk.Prompt, CostDeclaredUSD: fk.CostoDichiaratoUSD}
+	k := &keyframeCheck{Provider: prov, Model: job.req.Model, Prompt: prompt, CostDeclaredUSD: fk.CostoDichiaratoUSD}
 	for _, in := range inputs {
 		k.Inputs = append(k.Inputs, shownInput(in))
 	}

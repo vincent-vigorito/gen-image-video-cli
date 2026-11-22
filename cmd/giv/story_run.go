@@ -18,6 +18,10 @@ import (
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
+	"gen-image-video-cli/internal/provider/fal"
+	"gen-image-video-cli/internal/provider/gemini"
+	"gen-image-video-cli/internal/provider/openaicompat"
+	"gen-image-video-cli/internal/speech"
 	"gen-image-video-cli/internal/story"
 )
 
@@ -41,6 +45,9 @@ func cmdStoryRun(args []string) error {
 	only := fl.String("scene", "", "rifà solo questa scena (id); la ripresa precedente resta")
 	newKeyframe := fl.Bool("new-keyframe", false, "con --scene: rigenera anche il fotogramma chiave")
 	newJob := fl.Bool("new-job", false, "con --scene: abbandona il job già partito della scena e ne avvia uno nuovo")
+	newVoice := fl.Bool("new-voice", false, "con --scene: rigenera anche la voce dal testo della scena")
+	voicesOnly := fl.Bool("voices", false, "genera solo le voci dai testi, nessun video")
+	kitFile := fl.String("kit", "", "kit di marca e personaggi al posto del campo kit")
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["run"]) }
 	if err := fl.Parse(args); err != nil {
 		return usageError("%v", err)
@@ -63,12 +70,30 @@ func cmdStoryRun(args []string) error {
 	if *newJob && *only == "" {
 		return usageError("--new-job vale solo insieme a --scene <id>")
 	}
+	if *newVoice && *only == "" {
+		return usageError("--new-voice vale solo insieme a --scene <id>")
+	}
+	if *voicesOnly && (*newKeyframe || *newJob) {
+		return usageError("--voices genera solo le voci: niente --new-keyframe né --new-job")
+	}
+	if err := checkKitFlag(fl, *kitFile); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	man, err := runStory(ctx, path, *only, *newKeyframe, *newJob)
+	o := storyRunOptions{only: *only, newKeyframe: *newKeyframe, newJob: *newJob, newVoice: *newVoice, voicesOnly: *voicesOnly, kit: *kitFile}
+	man, err := runStory(ctx, path, o)
 	if man != nil && ctx.Err() == nil {
-		if s, lerr := story.Load(path); lerr == nil {
+		if s, lerr := story.LoadWithKit(path, *kitFile); lerr == nil {
 			contactSheet(s, path)
+			if controlOn(s) || voiceControlOn(s) {
+				// avvisa e basta: nessuna scena si rigenera; con strict un
+				// difetto fa uscire con 1 dopo il manifest
+				man.Controllo = controlStory(s, path, "story run", man.voiceChecks)
+				if c := man.Controllo; c != nil && s.Strict && c.Result == montage.QCDefect && err == nil {
+					err = &cliError{code: exitError, msg: fmt.Sprintf("controllo dei file: difetti (strict nello storyboard): vedi %s; nessuna scena rigenerata", firstOf(c.File, "controllo nel JSON"))}
+				}
+			}
 		}
 	}
 	if man != nil {
@@ -87,16 +112,29 @@ type storyRunManifest struct {
 	State      string     `json:"state"`
 	Titolo     string     `json:"titolo,omitempty"`
 	Scenes     []sceneRun `json:"scenes"`
-	Started    int        `json:"jobs_started"`   // job video avviati in questa esecuzione
-	Recovered  int        `json:"jobs_recovered"` // job già partiti, scaricati senza nuovo avvio
-	Keyframes  int        `json:"keyframes"`      // fotogrammi chiave generati in questa esecuzione
-	CostEstUSD float64    `json:"cost_est_usd"`   // stime (o costi dichiarati) delle generazioni delle scene
-	CostUSD    float64    `json:"cost_usd"`       // addebito riportato dai provider
-	SpentUSD   float64    `json:"spent_usd"`      // per il tetto: addebito dove c'è, altrimenti stima (anche delle scene tolte)
+	Started    int        `json:"jobs_started"`     // job video avviati in questa esecuzione
+	Recovered  int        `json:"jobs_recovered"`   // job già partiti, scaricati senza nuovo avvio
+	Keyframes  int        `json:"keyframes"`        // fotogrammi chiave generati in questa esecuzione
+	Voices     int        `json:"voices,omitempty"` // voci dai testi generate in questa esecuzione
+	// trascrizioni delle voci generate (controllo.voce) fatte in questa esecuzione
+	VoiceChecks int     `json:"voice_checks,omitempty"`
+	CostEstUSD  float64 `json:"cost_est_usd"` // stime (o costi dichiarati) delle generazioni delle scene
+	CostUSD     float64 `json:"cost_usd"`     // addebito riportato dai provider
+	SpentUSD    float64 `json:"spent_usd"`    // per il tetto: addebito dove c'è, altrimenti stima (anche delle scene tolte)
+	// richieste a pagamento partite in questa esecuzione (fotogrammi chiave,
+	// video, voci e trascrizioni): stime (o costi dichiarati) e spesa contata
+	// per il tetto (addebito dove c'è, altrimenti stima); i job recuperati
+	// restano dell'esecuzione che li ha avviati
+	RunCostEstUSD float64 `json:"run_cost_est_usd,omitempty"`
+	RunSpentUSD   float64 `json:"run_spent_usd,omitempty"`
 	// spesa nello stato di scene non più nello storyboard: in spent_usd, non fra le scene
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"`
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
 	CapUSD          *float64       `json:"cap_usd,omitempty"`
+	// Controllo è il controllo dei file a fine giro (controllo.tecnico e controllo.voce)
+	Controllo *storyControl `json:"controllo,omitempty"`
+
+	voiceChecks map[string]*storyVoiceCheck // controlli della voce di questa esecuzione, per scena
 }
 
 type sceneRun struct {
@@ -107,6 +145,8 @@ type sceneRun struct {
 	Keyframe   string  `json:"keyframe,omitempty"` // fotogramma chiave in uso
 	Takes      int     `json:"takes,omitempty"`    // riprese generate
 	ThisRun    string  `json:"this_run,omitempty"` // generata, recuperata, già fatta
+	Voice      string  `json:"voice,omitempty"`    // voce in uso: file della scena o voce generata
+	VoiceRun   string  `json:"voice_this_run,omitempty"`
 	CostEstUSD float64 `json:"cost_est_usd,omitempty"`
 	CostUSD    float64 `json:"cost_usd,omitempty"`
 }
@@ -127,10 +167,36 @@ type storyRunner struct {
 	thisRun map[string]string
 	failed  []string // scene fallite sul provider (in questa esecuzione o prima): non si rigenerano da sole
 	man     storyRunManifest
+	started time.Time // inizio dell'esecuzione: gli addebiti da qui in poi sono suoi
+
+	kitRoot      *os.Root // cartella del kit: i suoi file letti solo qui dentro (nil senza kit)
+	newVoice     string   // --new-voice: scena di cui rigenerare la voce
+	voicesOnly   bool     // --voices: solo le voci
+	voiceOrder   []*story.Scene
+	voiceSent    map[string]bool // voci già riservate in questa esecuzione: non più nelle stime da fare
+	voiceThisRun map[string]string
+	speech       map[string]speech.Synthesizer // client della voce per provider
+
+	// controllo.voce: trascrizioni da fare, stima non arrotondata per scena,
+	// trascrizioni già riservate o saltate, esiti di questa esecuzione e client
+	checkOrder  []*story.Scene
+	checkEst    map[string]float64
+	checkDone   map[string]bool
+	voiceChecks map[string]*storyVoiceCheck
+	transcriber speech.Transcriber
 }
 
-func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) (*storyRunManifest, error) {
-	s, err := loadStory(path)
+// storyRunOptions sono i flag di giv story run.
+type storyRunOptions struct {
+	only                          string
+	newKeyframe, newJob, newVoice bool
+	voicesOnly                    bool
+	kit                           string
+}
+
+func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunManifest, error) {
+	only, newKeyframe, newJob := o.only, o.newKeyframe, o.newJob
+	s, err := loadStoryKit(path, o.kit)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +205,14 @@ func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) 
 		if target == nil {
 			return nil, usageError("--scene %s: scena inesistente in %s", only, path)
 		}
-		if !target.Generata() {
+		if o.newVoice && !needsVoice(target) {
+			return nil, usageError("--new-voice: la scena %s non ha un testo da far dire senza un file di voce", only)
+		}
+		if !target.Generata() && !needsVoice(target) {
 			return nil, usageError("--scene %s: scena %s, niente da generare", only, target.Tipo)
+		}
+		if o.voicesOnly && !needsVoice(target) {
+			return nil, usageError("--voices --scene %s: la scena non ha un testo da far dire senza un file di voce", only)
 		}
 		if newKeyframe && target.FotogrammaChiave == nil {
 			return nil, usageError("--new-keyframe: la scena %s non ha fotogramma_chiave", only)
@@ -156,8 +228,20 @@ func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) 
 		return nil, err
 	}
 	defer root.Close()
-	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only,
-		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{}}
+	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only, started: time.Now(),
+		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{},
+		voicesOnly: o.voicesOnly, voiceSent: map[string]bool{}, voiceThisRun: map[string]string{}, speech: map[string]speech.Synthesizer{},
+		checkEst: map[string]float64{}, checkDone: map[string]bool{}, voiceChecks: map[string]*storyVoiceCheck{}}
+	r.sc.state = st
+	if o.newVoice {
+		r.newVoice = only
+	}
+	if s.KitData != nil {
+		if r.kitRoot, err = os.OpenRoot(s.KitData.Dir); err != nil {
+			return nil, usageError("kit %s: cartella non leggibile: %v", s.KitFile, err)
+		}
+		defer r.kitRoot.Close()
+	}
 	if newKeyframe {
 		r.renew = only
 	}
@@ -172,7 +256,7 @@ func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) 
 	r.sc.out = filepath.Join(s.Dir, storyClipDir)
 	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: st.Path(), Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
 	for i := range s.Scene {
-		if sc := &s.Scene[i]; sc.Generata() && (only == "" || sc.ID == only) {
+		if sc := &s.Scene[i]; sc.Generata() && (only == "" || sc.ID == only) && !o.voicesOnly {
 			r.order = append(r.order, sc)
 		}
 	}
@@ -182,18 +266,29 @@ func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) 
 	// i job già partiti, di tutte le scene, si recuperano prima di ogni nuovo
 	// avvio: il tetto conta così il loro addebito reale. Una scena il cui job
 	// finisce male sul provider è fallita: non si rigenera da sola (nemmeno con
-	// --scene in questa esecuzione) e le altre proseguono.
-	for _, scene := range r.pending() {
-		if err := r.recover(ctx, scene); err != nil && !r.failedNow(scene.ID) {
-			return nil, r.stopped(fmt.Errorf("scena %s: %w", scene.ID, err))
+	// --scene in questa esecuzione) e le altre proseguono. Con --voices nessun
+	// job video si tocca.
+	if !o.voicesOnly {
+		for _, scene := range r.pending() {
+			if err := r.recover(ctx, scene); err != nil && !r.failedNow(scene.ID) {
+				return nil, r.stopped(fmt.Errorf("scena %s: %w", scene.ID, err))
+			}
 		}
 	}
+	// le voci dai testi prima dei video
+	if err := r.makeVoices(ctx); err != nil {
+		return nil, r.stopped(err)
+	}
+	// controllo.voce: ogni voce appena generata (o mai controllata) si
+	// trascrive prima dei video; avvisa e basta
+	r.checkVoices(ctx)
 	for i, scene := range r.order {
 		if err := r.scene(ctx, i, scene); err != nil && !r.failedNow(scene.ID) {
 			return nil, r.stopped(fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
 	}
 	r.summary()
+	r.man.voiceChecks = r.voiceChecks
 	return &r.man, r.stopped(nil)
 }
 
@@ -230,12 +325,26 @@ func (r *storyRunner) stopped(err error) error {
 // letto adesso), fotogrammi di continua_da e tetto di spesa. Ogni rifiuto è
 // codice 2 e nessun avvio.
 func (r *storyRunner) preflight() error {
-	var rejects []error
+	if err := r.voicePreflight(); err != nil {
+		return err
+	}
+	rejects, err := r.voiceCheckPreflight()
+	if err != nil {
+		return err
+	}
 	var launch []*story.Scene
 	for _, scene := range r.pending() {
 		if err := r.checkJob(r.jobOf(scene.ID)); err != nil {
 			rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
+	}
+	if r.voicesOnly {
+		// i job in corso non si recuperano, ma con un job non valido nello
+		// stato non parte nessuna voce
+		if len(rejects) > 0 {
+			return storyError(r.st.Path(), errors.Join(rejects...))
+		}
+		return r.checkCap(0)
 	}
 	if id := r.abandon; id != "" {
 		// il job lasciato con --new-job non si recupera ma si valida come gli
@@ -264,7 +373,10 @@ func (r *storyRunner) preflight() error {
 	if len(rejects) > 0 {
 		return storyError(r.st.Path(), errors.Join(rejects...))
 	}
-	return r.plan(launch, true)
+	if err := r.plan(launch, true); err != nil {
+		return err
+	}
+	return r.checkCap(0) // anche con le sole voci da fare
 }
 
 // pending sono le scene con un job già partito, di tutto lo stato (anche fuori
@@ -326,7 +438,8 @@ func (r *storyRunner) abandonJob(id string) error {
 }
 
 // checkJob controlla, senza richieste, un job del file di stato: provider con
-// job video e indirizzo di attesa sull'host del provider.
+// job video e indirizzo di attesa sull'host del provider (con --voices senza
+// chiave video: jobChecker).
 func (r *storyRunner) checkJob(j *story.Job) error {
 	if err := checkProvider(j.Provider); err != nil {
 		return err
@@ -334,11 +447,20 @@ func (r *storyRunner) checkJob(j *story.Job) error {
 	if _, ok := defaultVideoModels[j.Provider]; !ok {
 		return usageError("job %s: %s non ha job video", j.ID, j.Provider)
 	}
-	c, err := r.sc.client(j.Provider)
-	if err != nil {
-		return err
+	var p provider.Provider
+	if r.voicesOnly {
+		var err error
+		if p, err = jobChecker(j.Provider); err != nil {
+			return usageError("job %s: %v", j.ID, err)
+		}
+	} else {
+		c, err := r.sc.client(j.Provider)
+		if err != nil {
+			return err
+		}
+		p = c.Provider
 	}
-	f, ok := c.Provider.(provider.JobFetcher)
+	f, ok := p.(provider.JobFetcher)
 	if !ok {
 		return usageError("job %s: %s non sa recuperare i job video", j.ID, j.Provider)
 	}
@@ -346,6 +468,25 @@ func (r *storyRunner) checkJob(j *story.Job) error {
 		return usageError("job %s: %v", j.ID, err)
 	}
 	return nil
+}
+
+// jobChecker è il provider dei job video senza chiave, con le stesse origini
+// di newProvider, solo per CheckJob: con --voices i job in corso si validano
+// (nessuna richiesta, nessun recupero) e la chiave video non serve.
+func jobChecker(name string) (provider.Provider, error) {
+	switch name {
+	case "gemini":
+		c := gemini.New("")
+		c.Base = baseURLs["gemini"]
+		return c, nil
+	case "fal":
+		return fal.New("", falConfig)
+	case "xai":
+		return openaicompat.New("xai", baseURLs["xai"], "", openaicompat.Options{B64Param: true, Grok: true}), nil
+	case "openrouter":
+		return openaicompat.New("openrouter", baseURLs["openrouter"], "", openaicompat.Options{Router: true}), nil
+	}
+	return nil, fmt.Errorf("%s non ha job video", name)
 }
 
 // plan prepara le scene da generare e controlla il tetto: spesa già fatta più
@@ -439,16 +580,7 @@ func (r *storyRunner) checkCap(from int) error {
 	if cap == nil {
 		return nil
 	}
-	spent := r.st.Spent()
-	var next float64
-	for _, scene := range r.order[from:] {
-		if r.toLaunch(scene) {
-			next += r.est[scene.ID]
-			if r.needKeyframe(scene) {
-				next += *scene.FotogrammaChiave.CostoDichiaratoUSD
-			}
-		}
-	}
+	spent, next := r.st.Spent(), r.capNext(from)
 	if spent+next > *cap {
 		removed := ""
 		if rs, v := removedSpend(r.s, r.st); len(rs) > 0 {
@@ -458,6 +590,21 @@ func (r *storyRunner) checkCap(from int) error {
 			*cap, round4(spent), removed, round4(next), r.st.Path())
 	}
 	return nil
+}
+
+// capNext è la stima non arrotondata delle generazioni ancora da chiedere:
+// voci, trascrizioni (controllo.voce) e video dalla scena from in poi.
+func (r *storyRunner) capNext(from int) float64 {
+	next := r.voiceNext() + r.voiceCheckNext()
+	for _, scene := range r.order[from:] {
+		if r.toLaunch(scene) {
+			next += r.est[scene.ID]
+			if r.needKeyframe(scene) {
+				next += *scene.FotogrammaChiave.CostoDichiaratoUSD
+			}
+		}
+	}
+	return next
 }
 
 // toLaunch: la scena va generata (non ha un job da recuperare e non ha una clip,
@@ -633,13 +780,11 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) || slices.Contains(tmp, *in.path) {
 			continue // URL e copie già private
 		}
-		rel, err := r.s.Rel(*in.path)
+		p, err := r.privateLocal(*in.path, work)
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", in.flag, err))
 		}
-		if *in.path, err = r.privateCopy(rel, work); err != nil {
-			return fail(fmt.Errorf("%s: %w", in.flag, err))
-		}
+		*in.path = p
 	}
 	if err := checkVideoInputs(&req); err != nil {
 		return fail(err)
@@ -812,10 +957,7 @@ func (r *storyRunner) privateInputs(inputs []string, work string, tmp *tempInput
 		if isURL(in) {
 			out[i], err = tmp.resolve(in)
 		} else {
-			var rel string
-			if rel, err = r.s.Rel(in); err == nil {
-				out[i], err = r.privateCopy(rel, work)
-			}
+			out[i], err = r.privateLocal(in, work)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("--input %s: %w", shownInput(in), err)
@@ -824,13 +966,32 @@ func (r *storyRunner) privateInputs(inputs []string, work string, tmp *tempInput
 	return out, nil
 }
 
+// privateLocal è privateCopy di un ingresso locale come lo dà Path: un file
+// del kit si legge solo dentro la cartella del kit, ogni altro solo dentro
+// quella dello storyboard.
+func (r *storyRunner) privateLocal(path, work string) (string, error) {
+	if rel, ok := r.s.KitRel(path); ok && r.kitRoot != nil {
+		return r.privateCopyFrom(r.kitRoot, "del kit", rel, work)
+	}
+	rel, err := r.s.Rel(path)
+	if err != nil {
+		return "", err
+	}
+	return r.privateCopy(rel, work)
+}
+
 // privateCopy legge rel (relativo alla cartella dello storyboard) solo dentro
 // la cartella, anche seguendo i link, controlla che sia un'immagine entro i
 // limiti e ne scrive una copia privata in work: il provider legge quella.
 func (r *storyRunner) privateCopy(rel, work string) (string, error) {
-	f, err := r.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	return r.privateCopyFrom(r.root, "dello storyboard", rel, work)
+}
+
+// privateCopyFrom è privateCopy da root (la cartella dello storyboard o del kit, in where).
+func (r *storyRunner) privateCopyFrom(root *os.Root, where, rel, work string) (string, error) {
+	f, err := root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", fmt.Errorf("%s: file non leggibile dentro la cartella dello storyboard: %w", rel, err)
+		return "", fmt.Errorf("%s: file non leggibile dentro la cartella %s: %w", rel, where, err)
 	}
 	defer f.Close()
 	fi, err := f.Stat()
@@ -1045,14 +1206,34 @@ func (r *storyRunner) save() {
 func (r *storyRunner) summary() {
 	for i := range r.s.Scene {
 		scene := &r.s.Scene[i]
-		row := sceneRun{ID: scene.ID, Tipo: scene.Tipo}
+		row := sceneRun{ID: scene.ID, Tipo: scene.Tipo, VoiceRun: r.voiceThisRun[scene.ID]}
+		ss := r.st.Scenes[scene.ID]
+		if ss != nil && ss.Voice != nil && needsVoice(scene) {
+			row.Voice = ss.Voice.File
+		}
 		if !scene.Generata() {
 			row.File = scene.File
+			if ss != nil && needsVoice(scene) {
+				// la voce dal testo: la sua spesa è della scena
+				var est, cost float64
+				for _, c := range ss.Charges {
+					if !c.OfVoice() {
+						continue
+					}
+					if c.CostEstUSD != nil {
+						est += *c.CostEstUSD
+					}
+					cost += c.CostUSD
+				}
+				row.CostEstUSD, row.CostUSD = round4(est), round4(cost)
+				r.man.CostEstUSD += est
+				r.man.CostUSD += cost
+			}
 			r.man.Scenes = append(r.man.Scenes, row)
 			continue
 		}
 		row.ThisRun = r.thisRun[scene.ID]
-		if ss := r.st.Scenes[scene.ID]; ss != nil {
+		if ss != nil {
 			row.Status = ss.Status
 			if ss.Clip != nil {
 				row.File = ss.Clip.File
@@ -1079,6 +1260,22 @@ func (r *storyRunner) summary() {
 	}
 	r.man.CostEstUSD, r.man.CostUSD = round4(r.man.CostEstUSD), round4(r.man.CostUSD)
 	r.man.SpentUSD = round4(r.st.Spent())
+	var runEst, runSpent float64
+	for _, ss := range r.st.Scenes {
+		for _, c := range ss.Charges {
+			if c.At.Before(r.started) {
+				continue
+			}
+			switch {
+			case c.CostEstUSD != nil:
+				runEst += *c.CostEstUSD
+			case c.CostDeclaredUSD != nil:
+				runEst += *c.CostDeclaredUSD
+			}
+			runSpent += c.Spent()
+		}
+	}
+	r.man.RunCostEstUSD, r.man.RunSpentUSD = round4(runEst), round4(runSpent)
 	var removed float64
 	r.man.RemovedScenes, removed = removedSpend(r.s, r.st)
 	r.man.RemovedSpentUSD = round4(removed)

@@ -227,7 +227,9 @@ func decodeBase64(s string) ([]byte, error) {
 // grokTimings legge audio_timestamps: graph_chars (elenco di stringhe, o una
 // stringa) e graph_times in una delle due forme descritte da xAI (oggetti
 // {start, end} o coppie [inizio, fine]), oppure soli inizi (la fine è
-// l'inizio seguente). Numero di caratteri e di tempi uguale.
+// l'inizio seguente). Numero di caratteri e di tempi uguale; al più
+// speech.MaxTimings elementi, contati durante la lettura (oltre, i tempi si
+// scartano senza tenerli in memoria).
 func grokTimings(raw json.RawMessage) ([]speech.CharTime, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, errors.New("xai non ha restituito i tempi")
@@ -240,48 +242,85 @@ func grokTimings(raw json.RawMessage) ([]speech.CharTime, error) {
 		return nil, errors.New("forma dei tempi non riconosciuta")
 	}
 	var chars []string
-	if json.Unmarshal(at.Chars, &chars) != nil {
+	err := eachElem(at.Chars, func(el json.RawMessage) error {
+		var c string
+		if json.Unmarshal(el, &c) != nil {
+			return errors.New("caratteri dei tempi non riconosciuti")
+		}
+		chars = append(chars, c)
+		return nil
+	})
+	if errors.Is(err, errNotList) {
 		var s string
 		if json.Unmarshal(at.Chars, &s) != nil {
 			return nil, errors.New("caratteri dei tempi non riconosciuti")
 		}
+		if utf8.RuneCountInString(s) > speech.MaxTimings {
+			return nil, fmt.Errorf("oltre %d caratteri nei tempi", speech.MaxTimings)
+		}
+		chars = nil
 		for _, r := range s {
 			chars = append(chars, string(r))
 		}
+	} else if err != nil {
+		return nil, err
 	}
 	var starts, ends []float64
-	var objs []struct {
-		Start *float64 `json:"start"`
-		End   *float64 `json:"end"`
-	}
-	var pairs [][]float64
-	var flat []float64
-	switch {
-	case json.Unmarshal(at.Times, &flat) == nil:
-		starts = flat
-		for i := range flat {
-			if i+1 < len(flat) {
-				ends = append(ends, flat[i+1])
-			} else {
-				ends = append(ends, flat[i])
-			}
+	form := byte(0)
+	err = eachElem(at.Times, func(el json.RawMessage) error {
+		f := el[0]
+		if f == '-' || (f >= '0' && f <= '9') {
+			f = '0'
 		}
-	case json.Unmarshal(at.Times, &pairs) == nil:
-		for _, p := range pairs {
-			if len(p) != 2 {
-				return nil, errors.New("coppia di tempi non valida")
-			}
-			starts, ends = append(starts, p[0]), append(ends, p[1])
+		if form == 0 {
+			form = f
 		}
-	case json.Unmarshal(at.Times, &objs) == nil:
-		for _, o := range objs {
-			if o.Start == nil || o.End == nil {
-				return nil, errors.New("tempo senza inizio o fine")
+		if f != form {
+			return errors.New("forma dei tempi non riconosciuta")
+		}
+		switch f {
+		case '0':
+			var v float64
+			if json.Unmarshal(el, &v) != nil {
+				return errors.New("tempo non valido")
+			}
+			starts = append(starts, v)
+		case '[':
+			// al più tre elementi tenuti (gli altri si leggono e si scartano):
+			// un terzo vuol dire coppia non valida
+			var p [3]*float64
+			if json.Unmarshal(el, &p) != nil || p[0] == nil || p[1] == nil || p[2] != nil {
+				return errors.New("coppia di tempi non valida")
+			}
+			starts, ends = append(starts, *p[0]), append(ends, *p[1])
+		case '{':
+			var o struct {
+				Start *float64 `json:"start"`
+				End   *float64 `json:"end"`
+			}
+			if json.Unmarshal(el, &o) != nil || o.Start == nil || o.End == nil {
+				return errors.New("tempo senza inizio o fine")
 			}
 			starts, ends = append(starts, *o.Start), append(ends, *o.End)
+		default:
+			return errors.New("forma dei tempi non riconosciuta")
 		}
-	default:
+		return nil
+	})
+	if errors.Is(err, errNotList) {
 		return nil, errors.New("forma dei tempi non riconosciuta")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if form == '0' { // soli inizi: la fine è l'inizio seguente
+		for i := range starts {
+			if i+1 < len(starts) {
+				ends = append(ends, starts[i+1])
+			} else {
+				ends = append(ends, starts[i])
+			}
+		}
 	}
 	if len(chars) == 0 || len(chars) != len(starts) {
 		return nil, fmt.Errorf("%d caratteri e %d tempi", len(chars), len(starts))
@@ -294,4 +333,33 @@ func grokTimings(raw json.RawMessage) ([]speech.CharTime, error) {
 		out[i] = speech.CharTime{Char: chars[i], Start: starts[i], End: ends[i]}
 	}
 	return out, nil
+}
+
+// errNotList: il valore JSON non è un elenco.
+var errNotList = errors.New("non è un elenco")
+
+// eachElem chiama fn per ogni elemento dell'elenco JSON raw, leggendo un
+// elemento per volta: oltre speech.MaxTimings elementi si ferma con un errore.
+func eachElem(raw json.RawMessage, fn func(json.RawMessage) error) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if d, ok := tok.(json.Delim); err != nil || !ok || d != '[' {
+		return errNotList
+	}
+	for n := 1; dec.More(); n++ {
+		if n > speech.MaxTimings {
+			return fmt.Errorf("oltre %d tempi", speech.MaxTimings)
+		}
+		var el json.RawMessage
+		if err := dec.Decode(&el); err != nil || len(el) == 0 {
+			return errors.New("forma dei tempi non riconosciuta")
+		}
+		if err := fn(el); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return errors.New("forma dei tempi non riconosciuta")
+	}
+	return nil
 }

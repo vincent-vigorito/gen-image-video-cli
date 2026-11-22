@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
+	"gen-image-video-cli/internal/speech"
 	"gen-image-video-cli/internal/story"
 )
 
@@ -44,6 +46,8 @@ type storyCutResult struct {
 	Format     string   `json:"format,omitempty"` // con più formati: il formato del file
 	// Exports sono i file per canale di --export (senza più formati)
 	Exports []exportItem `json:"exports,omitempty"`
+	// Controllo è il controllo dei file dopo il montaggio (controllo.tecnico)
+	Controllo *storyControl `json:"controllo,omitempty"`
 }
 
 // storyCutFormats è l'uscita di giv story cut con montaggio.formati o
@@ -54,13 +58,14 @@ type storyCutFormats struct {
 	Scenes     int              `json:"scenes"`
 	Formats    []storyCutResult `json:"formats"`
 	Exports    []exportItem     `json:"exports,omitempty"`
+	Controllo  *storyControl    `json:"controllo,omitempty"`
 }
 
 // runStoryCut è giv story cut: monta con ffmpeg le clip già presenti, senza
 // generazione e senza rete; il file d'uscita dello storyboard si riscrive a
 // ogni montaggio.
 func runStoryCut(args []string) error {
-	path, only, exportSpec, err := storyCutArgs(args)
+	path, only, exportSpec, kitFile, err := storyCutArgs(args)
 	if err != nil {
 		return err
 	}
@@ -75,7 +80,7 @@ func runStoryCut(args []string) error {
 		return usageError("%s: %v", path, err)
 	}
 	defer root.Close()
-	s, err := loadStory(path)
+	s, err := loadStoryKit(path, kitFile)
 	if err != nil {
 		return err
 	}
@@ -141,9 +146,12 @@ func runStoryCut(args []string) error {
 			return err
 		}
 	}
+	if controlOn(s) {
+		multi.Controllo = controlStory(s, path, "story cut", nil)
+	}
 	if formats[0] == "" {
 		out := multi.Formats[0]
-		out.Exports = multi.Exports
+		out.Exports, out.Controllo = multi.Exports, multi.Controllo
 		return output.PrintJSON(out)
 	}
 	return output.PrintJSON(multi)
@@ -167,7 +175,9 @@ func storyFiles(s *story.Storyboard) []string {
 		if m.Musica != nil {
 			add(m.Musica.File)
 		}
-		add(m.Sottotitoli)
+		if m.Sottotitoli != story.SottotitoliAuto {
+			add(m.Sottotitoli)
+		}
 		if m.Logo != nil {
 			add(m.Logo.File)
 		}
@@ -197,16 +207,39 @@ func storyFiles(s *story.Storyboard) []string {
 }
 
 // cutProtected sono i file che le uscite di giv story cut e il foglio di
-// contatto non sostituiscono mai: lo storyboard, il suo stato, i file che
-// nomina (storyFiles) e quelli generati che lo stato elenca (clip in uso,
-// fotogrammi chiave, riprese sostituite) che esistono come file normali.
-// Uno stato illeggibile non elenca file (ferma già il montaggio delle scene
-// video).
+// contatto non sostituiscono mai: gli ingressi dello storyboard
+// (storyInputs) e il suo controllo.
 func cutProtected(s *story.Storyboard, path string) []string {
+	files := storyInputs(s, path)
+	if st, err := os.Stat(story.ControlPath(path)); err == nil && st.Mode().IsRegular() {
+		files = append(files, story.ControlPath(path))
+	}
+	return files
+}
+
+// storyInputs sono gli ingressi dello storyboard che esistono come file
+// normali: lo storyboard, il suo stato, i file che nomina (storyFiles), il
+// manifesto del kit con tutti i suoi file (anche quelli che montaggio.senza
+// esclude) e i file generati che lo stato elenca (clip in uso, fotogrammi
+// chiave, voci, riprese sostituite). Uno stato illeggibile non elenca file
+// (ferma già il montaggio delle scene video).
+func storyInputs(s *story.Storyboard, path string) []string {
 	files := storyFiles(s)
 	for _, p := range []string{path, story.StatePath(path)} {
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
 			files = append(files, p)
+		}
+	}
+	if k := s.KitData; k != nil {
+		// il kit è in sola lettura: nessuna uscita lo sostituisce
+		kf := []string{s.KitFile}
+		for _, f := range k.Files() {
+			kf = append(kf, k.Path(f.File))
+		}
+		for _, p := range kf {
+			if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+				files = append(files, p)
+			}
 		}
 	}
 	st, err := story.LoadState(story.StatePath(path))
@@ -214,7 +247,7 @@ func cutProtected(s *story.Storyboard, path string) []string {
 		return files
 	}
 	for _, sc := range st.Scenes {
-		takes := []*story.Take{sc.Clip, sc.Keyframe}
+		takes := []*story.Take{sc.Clip, sc.Keyframe, sc.Voice}
 		for i := range sc.Previous {
 			takes = append(takes, &sc.Previous[i])
 		}
@@ -222,8 +255,14 @@ func cutProtected(s *story.Storyboard, path string) []string {
 			if t == nil || t.File == "" || story.IsURL(t.File) {
 				continue
 			}
-			if st, err := os.Stat(s.Path(t.File)); err == nil && st.Mode().IsRegular() {
-				files = append(files, s.Path(t.File))
+			names := []string{t.File}
+			if t == sc.Voice || t.Kind == story.TakeVoice {
+				names = append(names, voiceTimingsFile(t.File)) // tempi della voce
+			}
+			for _, n := range names {
+				if st, err := os.Stat(s.Path(n)); err == nil && st.Mode().IsRegular() {
+					files = append(files, s.Path(n))
+				}
 			}
 		}
 	}
@@ -422,34 +461,38 @@ func cutOne(tool montage.Tool, path string, plan *montage.Plan, format string) (
 
 // storyCutArgs legge gli argomenti di giv story cut: il file dello storyboard,
 // --formato e --export (anche dopo il file).
-func storyCutArgs(args []string) (path, format, export string, err error) {
+func storyCutArgs(args []string) (path, format, export, kitFile string, err error) {
 	fl := flag.NewFlagSet("story cut", flag.ExitOnError)
 	only := fl.String("formato", "", "monta solo questo formato")
 	exp := fl.String("export", "", "canali per giv export")
+	kitFlag := fl.String("kit", "", "kit di marca e personaggi al posto del campo kit")
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["cut"]) }
 	const use = "uso: giv story cut [--formato <r>] [--export <canali>] <storyboard.json>"
 	if err := fl.Parse(args); err != nil {
-		return "", "", "", usageError("%v", err)
+		return "", "", "", "", usageError("%v", err)
 	}
 	rest := fl.Args()
 	if len(rest) == 0 {
-		return "", "", "", usageError(use)
+		return "", "", "", "", usageError(use)
 	}
 	path = rest[0]
 	if err := fl.Parse(rest[1:]); err != nil {
-		return "", "", "", usageError("%v", err)
+		return "", "", "", "", usageError("%v", err)
 	}
 	if fl.NArg() > 0 {
-		return "", "", "", usageError(use)
+		return "", "", "", "", usageError(use)
 	}
 	set := flagsSet(fl)
 	if set["formato"] && strings.TrimSpace(*only) == "" {
-		return "", "", "", usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
+		return "", "", "", "", usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
 	}
 	if set["export"] && strings.TrimSpace(*exp) == "" {
-		return "", "", "", usageError("--export vuoto (%s)", strings.Join(montage.Channels(), ", "))
+		return "", "", "", "", usageError("--export vuoto (%s)", strings.Join(montage.Channels(), ", "))
 	}
-	return path, *only, *exp, nil
+	if err := checkKitFlag(fl, *kitFlag); err != nil {
+		return "", "", "", "", err
+	}
+	return path, *only, *exp, *kitFlag, nil
 }
 
 // cutFormats sono i formati da montare: con only quello solo (fra
@@ -510,7 +553,18 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 		trans = montage.Transition{Kind: montage.Fade, Duration: cutFadeSeconds}
 	}
 	var missing []string
-	var st *story.State // stato di giv story run, letto alla prima scena video
+	var captions []montage.ClipCaption // sottotitoli "auto"
+	auto := m.Sottotitoli == story.SottotitoliAuto
+	var st *story.State // stato di giv story run, letto alla prima scena che lo usa
+	state := func() (*story.State, error) {
+		if st == nil {
+			var err error
+			if st, err = story.LoadState(story.StatePath(path)); err != nil {
+				return nil, usageError("%s: %v", path, err)
+			}
+		}
+		return st, nil
+	}
 	for i := range s.Scene {
 		sc := &s.Scene[i]
 		c := montage.Clip{Duration: float64(sc.Durata), Transition: trans}
@@ -520,11 +574,9 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 		case story.Immagine:
 			c.Path, c.Image = s.Path(sc.File), true
 		case story.Video, story.Avatar:
-			if st == nil {
-				var err error
-				if st, err = story.LoadState(story.StatePath(path)); err != nil {
-					return p, usageError("%s: %v", path, err)
-				}
+			st, err := state()
+			if err != nil {
+				return p, err
 			}
 			clip, err := st.ClipFile(s, sc.ID)
 			if err != nil {
@@ -540,11 +592,34 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 		if sc.Voce != "" && sc.Tipo != story.Avatar {
 			c.Voice, c.VoiceAt = s.Path(sc.Voce), sc.Ritardo()
 		}
+		if needsVoice(sc) {
+			// voce dal testo: quella generata da giv story run, nello stato
+			st, err := state()
+			if err != nil {
+				return p, err
+			}
+			voice, err := st.VoiceFile(s, sc.ID)
+			if err != nil {
+				missing = append(missing, voiceMissing(sc.ID, err))
+				continue
+			}
+			c.Voice, c.VoiceAt = voice, sc.Ritardo()
+			if auto {
+				captions = append(captions, cutCaption(s, sc, len(p.Clips)+1, st.Scenes[sc.ID].Voice.File))
+			}
+		} else if auto && strings.TrimSpace(sc.Testo) != "" && sc.Voce != "" {
+			// voce da file (anche quella di un avatar, nella clip)
+			captions = append(captions, cutCaption(s, sc, len(p.Clips)+1, sc.Voce))
+		}
 		sceneCut(&c, sc)
 		p.Clips = append(p.Clips, c)
 	}
 	if len(missing) > 0 {
-		return p, usageError("%s: clip mancanti (genera le scene con giv story run):\n  %s", path, strings.Join(missing, "\n  "))
+		what := "clip mancanti (genera le scene con giv story run)"
+		if slices.ContainsFunc(missing, func(m string) bool { return strings.Contains(m, ": voce") }) {
+			what = "clip o voci mancanti (genera scene e voci con giv story run)"
+		}
+		return p, usageError("%s: %s:\n  %s", path, what, strings.Join(missing, "\n  "))
 	}
 	if mu := m.Musica; mu != nil {
 		vol := cutMusicVolume
@@ -556,7 +631,8 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 			p.Music = &montage.Music{Path: s.Path(mu.File), Volume: vol}
 		}
 	}
-	if m.Sottotitoli != "" {
+	p.Captions = captions
+	if m.Sottotitoli != "" && !auto {
 		p.Subtitles = s.Path(m.Sottotitoli)
 		// con montaggio.formati o --formato un .srt sta nei margini sicuri del
 		// formato (nel 9:16 sopra il 35% in basso); senza, come prima
@@ -709,7 +785,46 @@ func cutOverlays(s *story.Storyboard, m *story.Montaggio, p *montage.Plan) error
 	if m.Volume != nil {
 		p.Loudness = *m.Volume
 	}
+	if m.Sottotitoli == story.SottotitoliAuto {
+		ts, err := style(montage.DefaultCaptionStyle(p.Width, h), m.StileTesti)
+		if err != nil {
+			return fmt.Errorf("montaggio.sottotitoli: %v", err)
+		}
+		p.CaptionStyle = ts
+	}
 	return nil
+}
+
+// cutCaption è il sottotitolo dal testo della scena sc (sottotitoli "auto")
+// per la clip numero n del piano, con la voce voice (relativa alla cartella
+// dello storyboard): testo scritto, pronunce del parlato e tempi della voce
+// da <voce>.tempi.json, se c'è, sta nella cartella dello storyboard ed è
+// dello stesso testo; altrimenti i sottotitoli si distribuiscono sulla
+// durata della voce, con l'avviso del montaggio.
+func cutCaption(s *story.Storyboard, sc *story.Scene, n int, voice string) montage.ClipCaption {
+	c := montage.ClipCaption{Clip: n, Text: sc.Testo}
+	if p := s.Parlato; p != nil && len(p.Pronuncia) > 0 {
+		c.Dict = speech.Dictionary(maps.Clone(p.Pronuncia))
+	}
+	f, err := s.CheckFile(voiceTimingsFile(voice))
+	if err != nil {
+		return c
+	}
+	data, err := speech.ReadSmallFile(f, speech.MaxTimingsFileBytes)
+	if err != nil {
+		return c
+	}
+	if tf, err := speech.ParseTimings(data); err == nil && tf.Text == strings.TrimSpace(sc.Testo) {
+		c.Timings = tf.Chars
+	}
+	return c
+}
+
+// voiceTimingsFile è il file dei tempi accanto alla voce voice
+// (voce/s1-v1.wav -> voce/s1-v1.tempi.json), come li scrivono giv voice e
+// giv story run.
+func voiceTimingsFile(voice string) string {
+	return strings.TrimSuffix(voice, filepath.Ext(voice)) + ".tempi.json"
 }
 
 // sceneCut porta nella clip fuoco, taglio e velocità della scena. Una scena
@@ -867,41 +982,78 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 		out.Scenes[i].Warnings = append(out.Scenes[i].Warnings, w)
 		fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", s.Scene[i].ID, w)
 	}
+	// voce di ogni scena: il file, la voce generata dal testo (nello stato) o,
+	// se non c'è ancora, la durata stimata dai caratteri
+	n := len(s.Scene)
+	voiceFile := make([]string, n)
+	estimated := make([]bool, n)
+	voiceLen := make([]float64, n)
 	var voiced []int
 	for i := range s.Scene {
-		if s.Scene[i].Voce != "" {
-			voiced = append(voiced, i)
+		sc := &s.Scene[i]
+		switch {
+		case sc.Voce != "":
+			voiceFile[i] = sc.Voce
+		case needsVoice(sc):
+			if ss := chk.state.Scenes[sc.ID]; ss != nil && ss.Voice != nil {
+				if _, err := chk.state.VoiceFile(s, sc.ID); err != nil {
+					continue // voce registrata mancante o fuori cartella: l'avviso c'è già (checkVoice), niente letture
+				}
+				voiceFile[i] = ss.Voice.File
+			} else if v := chk.voices[sc.ID]; v != nil {
+				estimated[i], voiceLen[i] = true, voiceDuration(v.req)
+			} else {
+				continue
+			}
+		default:
+			continue
 		}
+		voiced = append(voiced, i)
 	}
 	if len(voiced) == 0 {
 		return
 	}
 	tool := montage.Tool{}
-	if err := tool.Check(); err != nil {
+	probing := tool.Check() == nil
+	if !probing {
 		for _, i := range voiced {
-			warn(i, "durata della voce non controllata: ffprobe non trovato")
+			if !estimated[i] {
+				warn(i, "durata della voce non controllata: ffprobe non trovato")
+			}
 		}
-		return
+		if !slices.Contains(estimated, true) {
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), montage.ProbeTimeout)
 	defer cancel()
-	n := len(s.Scene)
-	voiceLen := make([]float64, n)
 	for _, i := range voiced {
+		if estimated[i] {
+			continue
+		}
 		voiceLen[i] = math.NaN()
+		if !probing {
+			continue
+		}
 		var info *montage.Info
 		var err error
 		if ctx.Err() == nil {
-			info, err = tool.Probe(ctx, s.Path(s.Scene[i].Voce))
+			info, err = tool.Probe(ctx, s.Path(voiceFile[i]))
 		}
 		switch {
 		case ctx.Err() != nil:
 			warn(i, "durata della voce non controllata: letture oltre il tempo massimo di "+montage.ProbeTimeout.String())
 		case err != nil || info.Audio == nil:
-			warn(i, fmt.Sprintf("voce %s illeggibile come audio: giv story cut la rifiuterà", s.Scene[i].Voce))
+			warn(i, fmt.Sprintf("voce %s illeggibile come audio: giv story cut la rifiuterà", voiceFile[i]))
 		default:
 			voiceLen[i] = info.Duration
 		}
+	}
+	about := func(i int) string {
+		if estimated[i] {
+			return " (voce non ancora generata: durata stimata dai caratteri, approssimata)"
+		}
+		return ""
 	}
 	// inizio di ogni scena nel montaggio, starts[n] è la fine; NaN da una
 	// scena di durata ignota in poi (nessun confronto)
@@ -912,7 +1064,7 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 	starts := make([]float64, n+1)
 	for i := range s.Scene {
 		l := out.Scenes[i].length
-		if l == 0 && s.Scene[i].Tipo == story.Clip && ctx.Err() == nil {
+		if l == 0 && s.Scene[i].Tipo == story.Clip && probing && ctx.Err() == nil {
 			if info, err := tool.Probe(ctx, s.Path(s.Scene[i].File)); err == nil {
 				l = retimedLength(&s.Scene[i], info.Duration)
 			}
@@ -932,12 +1084,25 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 			j := voiced[k+1]
 			next := starts[j] + s.Scene[j].Ritardo()
 			if d := end - next; d > cutVoiceSlack {
-				warn(i, fmt.Sprintf("la voce si sovrappone di %s s a quella della scena %s: finisce a %s s del montaggio, quella di %s parte a %s s",
-					secs(d), s.Scene[j].ID, secs(end), s.Scene[j].ID, secs(next)))
+				note := about(i)
+				if note == "" {
+					note = about(j)
+				}
+				if s.Scene[i].Testo != "" || s.Scene[j].Testo != "" {
+					// voci dai testi: una proposta per toglierla
+					note += fmt.Sprintf("; prova ritardo_voce %s nella scena %s o una durata più lunga della scena %s",
+						secs(math.Ceil((s.Scene[j].Ritardo()+d)*10)/10), s.Scene[j].ID, s.Scene[i].ID)
+				}
+				warn(i, fmt.Sprintf("la voce si sovrappone di %s s a quella della scena %s: finisce a %s s del montaggio, quella di %s parte a %s s%s",
+					secs(d), s.Scene[j].ID, secs(end), s.Scene[j].ID, secs(next), note))
 			}
 		} else if d := end - starts[n]; d > cutVoiceSlack {
-			warn(i, fmt.Sprintf("la voce supera di %s s la fine del montaggio e viene tagliata: finisce a %s s, il montaggio dura %s s",
-				secs(d), secs(end), secs(starts[n])))
+			note := about(i)
+			if s.Scene[i].Testo != "" {
+				note += fmt.Sprintf("; prova una durata più lunga della scena %s (almeno %s s in più)", s.Scene[i].ID, secs(math.Ceil(d*10)/10))
+			}
+			warn(i, fmt.Sprintf("la voce supera di %s s la fine del montaggio e viene tagliata: finisce a %s s, il montaggio dura %s s%s",
+				secs(d), secs(end), secs(starts[n]), note))
 		}
 	}
 }
@@ -1053,6 +1218,14 @@ func focusWarnings(s *story.Storyboard, out *storyCheck) {
 		}
 		fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", s.Scene[i].ID, w)
 	}
+}
+
+// voiceMissing è la riga di una voce dal testo che manca al montaggio.
+func voiceMissing(id string, err error) string {
+	if errors.Is(err, story.ErrNotDone) {
+		return fmt.Sprintf("scena %s: voce dal testo non ancora generata (giv story run --voices)", id)
+	}
+	return err.Error()
 }
 
 // sceneMissing descrive una scena video senza clip da montare: l'errore di

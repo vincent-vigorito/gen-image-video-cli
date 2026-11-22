@@ -219,7 +219,7 @@ Uso:
                    [--tutela prodotto|illustrazione] [--strict]
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
-                                   run: --scene <id> [--new-keyframe] [--new-job]; cut: [--formato <r>] [--export <canali>]; aiuto: giv story help)
+                                   run: --scene <id> [--new-keyframe] [--new-job] [--new-voice], --voices; cut: [--formato <r>] [--export <canali>]; tutti: [--kit <file>]; aiuto: giv story help)
   giv kit check <kit.json>         controlla il kit di marca e personaggi ed elenca i file con le misure (gratuito)
   giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
@@ -228,8 +228,9 @@ Uso:
   giv frame --video <file> --at <s>|--last [--width <px>]  un fotogramma PNG (con --width la miniatura), in locale (gratuito)
   giv gif --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]  GIF animata in locale (default 480 px, 12 fps; gratuita)
   giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito
-  giv voice "<testo>"|--text-file <f> [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--style "<t>"] [--pronuncia <file.json>] [--voices]  voce fuori campo WAV con i tempi (xai, a pagamento; aiuto: giv voice help)
+  giv voice "<testo>"|--text-file <f> [--provider xai|gemini] [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--style "<t>"] [--kit <kit.json>] [--pronuncia <file.json>] [--voices]  voce fuori campo WAV, coi tempi su xai (a pagamento; aiuto: giv voice help)
   giv qc <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>] [--expect-audio on|off] [--for <canali>] [--strict]  controllo tecnico (durata, misure, neri, fermi, muti, volume, canali), in locale, gratuito
+  giv qc --voice <audio> --script "<testo>"|--script-file <f> [--pronuncia <file.json>] [--kit <kit.json>] [--lang it] [--max-cost <usd>] [--dry-run] [--strict]  controllo della voce: trascrizione confrontata col testo (xai, a pagamento)
   giv version                      stampa la versione
 
 Flag comuni:

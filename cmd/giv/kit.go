@@ -16,6 +16,7 @@ import (
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
+	"gen-image-video-cli/internal/speech"
 )
 
 // kitTool legge con ffprobe le misure dei file del kit.
@@ -223,8 +224,23 @@ func checkKit(k *kit.Kit, path string) (*kitCheckOut, error) {
 			warn("personaggi.%s.riferimenti: %d immagini, %s", name, c.References, w)
 		}
 	}
-	if v := k.Voce; v != nil && v.Provider == "gemini" && v.Velocita != nil {
-		warn("voce.velocita non vale con gemini (nessuna velocità numerica): indica il ritmo in voce.stile")
+	// voce e pronunce: gli stessi controlli di giv voice (speech.Check), su
+	// un testo di prova; i valori non validi sono rifiuti, gli avvisi restano
+	if v := k.Voce; v != nil || len(k.Pronuncia) > 0 {
+		req := speech.Request{Text: "-", Dict: speech.Dictionary(k.Pronuncia)}
+		if v != nil {
+			req.Provider, req.Model, req.Voice, req.Language, req.Style = v.Provider, v.Modello, v.Voce, v.Lingua, v.Stile
+			if v.Velocita != nil {
+				req.Speed = *v.Velocita
+			}
+		}
+		_, warns, err := speech.Check(req)
+		if err != nil {
+			problems = append(problems, "voce: "+err.Error())
+		}
+		for _, w := range warns {
+			warn("voce: %s", w)
+		}
 	}
 	if len(problems) > 0 {
 		return nil, storyError(path, errors.New(strings.Join(problems, "\n")))

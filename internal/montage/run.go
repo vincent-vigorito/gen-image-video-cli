@@ -131,6 +131,12 @@ func run(ctx context.Context, bin string, timeout time.Duration, args []string) 
 // runTail è run che restituisce anche gli ultimi tail byte dello stderr (le
 // passate di analisi di ffmpeg, come loudnorm, scrivono lì il risultato).
 func runTail(ctx context.Context, bin string, timeout time.Duration, args []string, tail int) ([]byte, []byte, error) {
+	return runTailTo(ctx, bin, timeout, args, tail, nil)
+}
+
+// runTailTo è runTail che passa anche tutto lo stderr ad also (se non è nil)
+// man mano che arriva: per le passate di analisi la cui uscita supera la coda.
+func runTailTo(ctx context.Context, bin string, timeout time.Duration, args []string, tail int, also io.Writer) ([]byte, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -139,6 +145,9 @@ func runTail(ctx context.Context, bin string, timeout time.Duration, args []stri
 	errBuf := &tailBuffer{max: tail}
 	cmd.Stdout = out
 	cmd.Stderr = errBuf
+	if also != nil {
+		cmd.Stderr = io.MultiWriter(errBuf, also)
+	}
 	err := cmd.Run()
 	name := filepath.Base(bin)
 	if ctx.Err() == context.DeadlineExceeded {
@@ -654,7 +663,7 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	outTotal := total
 	if p.extended() {
 		w := &Work{Dir: work, ctx: ctx, tool: t, ffmpeg: ffmpeg}
-		if outTotal, err = t.prepareExtended(w, &p, starts, total, res); err != nil {
+		if outTotal, err = t.prepareExtended(w, &p, starts, voiceLen, total, res); err != nil {
 			return nil, err
 		}
 	}
@@ -681,11 +690,12 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 }
 
 // prepareExtended prepara in p le sovrimpressioni e l'audio della 0.11.0:
-// misure del logo e delle immagini del cartello, tempi dei titoli sul
-// montato, file .ass dei testi coi font nella cartella di lavoro, misura del
+// misure del logo e delle immagini del cartello, tempi dei titoli (e dei
+// sottotitoli dai testi, con le durate delle voci voiceLen) sul montato,
+// file .ass dei testi coi font nella cartella di lavoro, misura del
 // volume finale (prima passata). Restituisce la durata del montato col
 // cartello. Logo e cartello si copiano: il piano del chiamante non cambia.
-func (t Tool) prepareExtended(w *Work, p *Plan, starts []float64, total float64, res *Result) (float64, error) {
+func (t Tool) prepareExtended(w *Work, p *Plan, starts, voiceLen []float64, total float64, res *Result) (float64, error) {
 	image := func(what, path string) (*Info, error) {
 		info, err := t.Probe(w.ctx, path)
 		if err != nil {
@@ -751,6 +761,14 @@ func (t Tool) prepareExtended(w *Work, p *Plan, starts []float64, total float64,
 	m := SafeMargins(p.Width, p.Height)
 	if p.Margins != nil {
 		m = *p.Margins
+	}
+	if len(p.Captions) > 0 {
+		cts, warns, err := p.captionTexts(starts, voiceLen, total, m)
+		if err != nil {
+			return 0, err
+		}
+		res.Warnings = append(res.Warnings, warns...)
+		texts = append(texts, cts...)
 	}
 	if p.EndCard != nil {
 		texts = append(texts, EndCardTexts(*p.EndCard, total, p.Height, m)...)

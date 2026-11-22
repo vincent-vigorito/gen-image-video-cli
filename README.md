@@ -145,10 +145,11 @@ giv edit    --provider gemini --from <job_id> "<cosa cambiare>"
                                               # modifica un video fatto con gemini (a pagamento)
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                               # scarica un job video già partito, senza nuovo avvio
-giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
-giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
-                                              # genera le scene video (a pagamento), riprende da dove si era fermato
-giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+giv story check [--kit <kit.json>] <storyboard.json>
+                                              # valida uno storyboard a più scene e ne stima il costo
+giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
+                                              # genera le voci dai testi e le scene video (a pagamento), riprende da dove si era fermato
+giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
                                               # monta con ffmpeg le scene già pronte, un file per formato
 giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
 giv kit check <kit.json>                      # controlla il kit di marca e personaggi ed elenca i file con le misure (gratuito)
@@ -172,13 +173,16 @@ giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
                                               # GIF animata, palette in due passate (locale, gratuita)
 giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
                                               # un file per canale col suo profilo, in locale con ffmpeg (gratuito)
-giv voice   "<testo>" | --text-file <f> [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--pronuncia <file.json>]
-                                              # voce fuori campo WAV con i tempi per carattere (xai, a pagamento; giv voice help)
-giv voice   --voices                          # elenco delle voci del provider (gratuito)
+giv voice   "<testo>" | --text-file <f> [--provider xai|gemini] [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--kit <kit.json>] [--pronuncia <file.json>]
+                                              # voce fuori campo WAV, coi tempi per carattere su xai (a pagamento; giv voice help)
+giv voice   --voices [--provider xai|gemini]  # elenco delle voci del provider (gratuito)
 giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>]
             [--expect-audio on|off] [--expect-loudness <lufs>] [--for <canali>] [--strict]
                                               # controllo tecnico: durata, misure, neri, fermi, muti, volume,
                                               # profilo dei canali (locale con ffprobe e ffmpeg, gratuito)
+giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <file.json>] [--kit <kit.json>]
+            [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
+                                              # controllo della voce: trascrizione confrontata col testo (xai, a pagamento)
 giv version
 ```
 
@@ -196,17 +200,18 @@ prima o dopo.
 | `upscale` | `--video <url\|file>` obbligatorio (con openrouter solo URL `https` pubblico: un file locale esce con codice 2; con fal anche file locale) · `--factor` (default 2; openrouter 1,5-3, fal 1-4) · `--mode precise\|creative` (default `precise`) e prompt facoltativo, solo openrouter · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `openrouter` (default) o `fal` |
 | `avatar` | `--image <file\|url>` e `--audio <wav\|mp3>` obbligatori · `--model standard\|pro` (default `standard`) · prompt facoltativo · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `fal` |
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
-| `story check` | nessun flag: il file dello storyboard è l'unico argomento |
-| `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
-| `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS |
+| `story check` | `--kit <file>` (kit di marca e personaggi al posto del campo `kit`); il file dello storyboard è l'unico argomento |
+| `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; `--new-voice` (solo con `--scene`) rigenera anche la voce dal testo della scena; `--voices` genera solo le voci dai testi, nessun video; `--kit <file>` come in `story check`; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
+| `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS; `--kit <file>` come in `story check` |
 | `kit check` | nessun flag: il file del kit è l'unico argomento; `giv kit help` (o `giv kit --help`) stampa l'aiuto |
 | `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
 | `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
-| `voice` | testo fra virgolette oppure `--text-file <file>` · `--voice <nome>` · `--lang <codice>` (default `it`) · `--speed <0.7-1.5>` · `--style "<t>"` · `--pronuncia <file.json>` · `--out` · `--name` · `--dry-run` · `--max-cost <usd>` · `--voices`; provider `xai`: vedi [Voce fuori campo](#voce-fuori-campo-giv-voice) |
+| `voice` | testo fra virgolette oppure `--text-file <file>` · `--provider xai\|gemini` (default `xai`) · `--model <m>` (gemini) · `--voice <nome>` · `--lang <codice>` (default `it`) · `--speed <0.7-1.5>` (xai) · `--style "<t>"` (gemini) · `--kit <kit.json>` · `--pronuncia <file.json>` · `--out` · `--name` · `--dry-run` · `--max-cost <usd>` · `--voices`: vedi [Voce fuori campo](#voce-fuori-campo-giv-voice) |
 | `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
 | `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 | `qc` | file o storyboard come argomento · `--expect-duration <s>` · `--expect-size <LxA>` · `--expect-fps <n>` · `--expect-audio on\|off` · `--expect-loudness <lufs>` (attese, solo per un file) · `--for <canali>` (come `giv export`) · `--strict` (un difetto = codice 1) · soglie `--black-min <s>` (default 0.5) · `--freeze-min <s>` (2) · `--freeze-noise <dB>` (-60) · `--silence-min <s>` (2) · `--silence-noise <dB>` (-50): vedi [Controllo tecnico](#controllo-tecnico-giv-qc) |
+| `qc --voice` | `--voice <file audio>` · `--script "<testo>"` oppure `--script-file <file>` · `--pronuncia <file.json>` · `--kit <kit.json>` · `--lang <codice>` (default `it`) · `--provider xai` · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Controllo della voce](#controllo-della-voce-giv-qc---voice) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -534,37 +539,65 @@ giv job fetch --provider xai --timeout 30m --name s2 <id>
 giv voice --dry-run "Swerpify ti porta dove vuoi."
 giv voice --pronuncia pronunce.json --speed 1.1 --name s1-voce --max-cost 0.01 "Swerpify ti porta dove vuoi."
 giv voice --text-file testi/s2.txt --voice eve --lang it --out voce
+giv voice --provider gemini --style "calda, ritmo calmo" "Swerpify ti porta dove vuoi."
+giv voice --kit kit/argo.json --name s1-voce "Swerpify ti porta dove vuoi."
 giv voice --voices
+giv voice --voices --provider gemini
 ```
 
-- **provider**: xAI (chiave `XAI_API_KEY`), `POST /v1/tts`. La voce predefinita `eve` è
-  **provvisoria**: la scelta finale si fa dopo l'ascolto. Lingua predefinita `it`
-  (`--lang` accetta un codice BCP-47 o `auto`). `--style` vale solo per gemini: xai lo
-  ignora con un avviso (per ritmo e pause: `--speed` e i tag nel testo, come `[pause]`).
+- **provider**: xAI (predefinito, chiave `XAI_API_KEY`), `POST /v1/tts`, oppure Gemini
+  (`--provider gemini`, chiave `GEMINI_API_KEY`), `POST /v1beta/interactions` col modello
+  `gemini-3.8-flash-tts` (oppure `--model gemini-3.8-flash-lite-tts`). Voci predefinite:
+  `eve` per xai (scelta dopo l'ascolto) e `Kore` per gemini. Lingua predefinita `it` (`--lang` accetta un codice BCP-47 o `auto`; gemini
+  la rileva dal testo e non la riceve). `--style` vale solo per gemini (stile e ritmo a
+  parole): xai lo ignora con un avviso (per ritmo e pause: `--speed` e i tag nel testo,
+  come `[pause]`); `--speed` vale solo per xai: gemini la ignora con un avviso.
 - **testo**: fra virgolette oppure `--text-file` (UTF-8), al massimo 15.000 caratteri per
-  richiesta. Il testo va a xAI, che conserva richieste e risposte per 30 giorni: solo
-  testi di marketing, mai dati di clienti.
+  richiesta (con gemini 6.000, pronunce comprese, perché l'audio di una richiesta non
+  supera gli 11 minuti circa). Il testo va al provider (xAI conserva richieste e
+  risposte per 30 giorni): solo testi di marketing, mai dati di clienti.
 - **pronunce** (`--pronuncia`): un file JSON piatto `{"Swerpify": "suèrpifai", "ARGO":
-  "àrgo"}`, inviato a xAI come dizionario: parola intera, senza distinguere le maiuscole,
-  vince la più lunga. Al massimo 200 voci; la parola fino a 100 caratteri (lettere,
-  cifre, apostrofi e spazi), la pronuncia fino a 128 (anche IPA fra barre, `/ˈanja/`);
-  fuori da questi limiti, o con due parole uguali a meno delle maiuscole, codice 2
-  prima di qualsiasi chiamata.
+  "àrgo"}`: parola intera, senza distinguere le maiuscole, vince la più lunga. A xAI va
+  come dizionario; gemini non ne ha uno, quindi giv sostituisce le parole nel testo
+  inviato (nei sottotitoli e nel manifest resta la grafia giusta). Al massimo 200 voci;
+  la parola fino a 100 caratteri (lettere, cifre, apostrofi e spazi), la pronuncia fino
+  a 128 (anche IPA fra barre, `/ˈanja/`, utile solo con xai); fuori da questi limiti, o
+  con due parole uguali a meno delle maiuscole, codice 2 prima di qualsiasi chiamata.
+- **kit** (`--kit <kit.json>`): il blocco `voce` del kit (provider, modello, voce, lingua,
+  velocità, stile) e le sue `pronuncia` fanno da predefiniti; i flag vincono e
+  `--pronuncia` va sopra le pronunce del kit (a parità di parola vince il file). Con un
+  `--provider` diverso da quello del kit, del kit valgono solo lingua e pronunce (avviso).
+  Il kit si controlla come con `giv kit check` (codice 2 se non va).
 - **uscita**: in `--out` (default `out`) `<nome>.wav` (24 kHz) e `<nome>.tempi.json` con
   i tempi per carattere (`{"provider", "text", "duration_s", "chars": [{"c", "start",
   "end"}]}`); `--name` dà il nome, altrimenti deriva dal testo con data e ora. Un file
   che c'è già non si sovrascrive: il nome diventa `<nome>-2`, `<nome>-3`… Se i tempi
-  mancano o non tornano, solo il WAV, con un avviso. Su stdout il manifest JSON (file,
-  durata misurata sul WAV, caratteri, stima), una riga in `giv-log.jsonl`.
-- **costo**: 15 $ per milione di caratteri del testo inviato (le pronunce non cambiano il
-  conto): uno spot da 375 caratteri costa circa 0,006 $. xAI non riporta il costo: il
-  manifest ha la stima (`cost_est_usd`). `--dry-run` stampa la richiesta e la stima senza
-  chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto o non
-  è stimabile.
+  mancano o non tornano, solo il WAV, con un avviso; gemini non dà tempi, quindi sempre
+  solo il WAV (i sottotitoli si distribuiscono sulla durata). Su stdout il manifest JSON
+  (file, durata misurata sul WAV, caratteri, stima), una riga in `giv-log.jsonl`.
+- **costo**: xai 15 $ per milione di caratteri del testo inviato (le pronunce non cambiano
+  il conto): uno spot da 375 caratteri costa circa 0,006 $. xAI non riporta il costo: il
+  manifest ha la stima (`cost_est_usd`). Gemini: 0,50 $ per milione di token di testo e
+  9 $ (flash-lite 6 $) per milione di token audio, 25 token al secondo; **dal 01/01/2027
+  il doppio** (la tariffa si sceglie dalla data). Ogni richiesta gemini porta il limite di
+  16.384 token d'uscita (`max_output_tokens`) e la stima (`cost_est_usd`) usa quel limite
+  più 8.192 token di testo: circa 0,15 $ con flash, 0,10 $ con flash-lite, il doppio dal
+  2027. Non è un massimo garantito (non è confermato che l'API rispetti il limite): la
+  stima è **probabile** (`cost_source`), con un avviso su stderr, e **con `--max-cost`
+  gemini esce con codice 2** prima di qualsiasi chiamata (usa xai o togli il tetto).
+  Dopo la generazione il manifest ha anche il costo dai token riportati o, se mancano,
+  dalla durata misurata (`cost_usage_usd`). `--dry-run` stampa la richiesta e la stima
+  senza chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto
+  o non è stimabile.
 - **una sola richiesta, mai ripetuta**: un esito incerto (redirect, errore del server,
   rete, risposta non valida) esce con codice 5 e una riga `failed` nel registro: la voce
   può essere stata addebitata, controlla prima di rilanciare. Voce sconosciuta: codice 3
   (elenco con `giv voice --voices`).
+- **elenco delle voci** (`--voices`, gratuito): con `--provider gemini` sempre le 30 voci
+  studio (`name` `voce studio`, compresa la predefinita `Kore`) e poi le voci dell'API
+  (`GET /v1beta/voices`) pagina per pagina, fino a 10 pagine e 10.000 voci; un elenco
+  tagliato esce comunque con codice 0, con un avviso su stderr e il campo `warnings` nel
+  JSON.
 
 ## Rifinitura in locale: `giv post`
 
@@ -650,7 +683,9 @@ logo in pixel (`logo.box`, `end_card.logo_box`), i margini e `duration_out`.
   (default 0); la parte oltre la fine del video si taglia;
 - `--loudness <LUFS>`: volume finale in LUFS integrati, da -70 a -5, misurato e corretto in
   due passate (`loudnorm`); default **-14**, la convenzione dei social (nessuna fonte
-  ufficiale, quindi impostabile); `off` lascia il volume com'è.
+  ufficiale, quindi impostabile); `off` lascia il volume com'è. Il picco vero del file
+  scritto resta entro -1 dBTP anche dopo la codifica AAC (la normalizzazione chiede
+  -1,5 dBTP per lasciare il margine).
 
 L'audio del video resta e si somma a voce e musica (senza audio si parte dal silenzio); il
 video si copia senza ricodifica se è già H.264. Serve almeno uno fra `--music`, `--voice` e
@@ -777,6 +812,41 @@ per montato di `giv story cut` con `format`, misure e fps del formato (con scene
 scena non ancora generata o un montato che manca hanno `result` `assente` (non conta per
 `--strict`); le attese `--expect-*` valgono solo per un file.
 
+### Controllo della voce: `giv qc --voice`
+
+```bash
+giv qc --voice out/s1-voce.wav --script "Swerpify ti porta dove vuoi." --pronuncia pronunce.json --dry-run
+giv qc --voice out/s1-voce.wav --script-file testi/s1.txt --kit kit/argo.json --max-cost 0.01 --strict
+```
+
+- Prima i controlli tecnici del file, come sopra (gratuiti, con l'audio atteso), poi la
+  **trascrizione** con xAI (chiave `XAI_API_KEY`, `POST /v1/stt`), **a pagamento**: 0,10 $
+  per ora di audio. La stima viene dalla durata contata sui campioni decodificati dei byte
+  che partono, arrotondata al minuto per eccesso perché la granularità dell'addebito non è documentata (30 secondi contano
+  0,001667 $, il vero è circa la metà); `--max-cost` rifiuta con codice 2 se la
+  supera o se la durata non si misura; `--dry-run` fa i controlli tecnici e stampa la
+  richiesta e la stima senza trascrivere.
+- Il file (`wav`, `mp3`, `ogg`, `flac`, `aac`, `m4a`, `mp4`, al massimo 100 MiB, con **una sola traccia
+  audio**: con più tracce codice 2 prima di ogni richiesta, anche senza tetto; estrai quella
+  da controllare con `ffmpeg -i <file> -map 0:a:<n> -c copy voce.m4a`) va al provider come ultimo campo del caricamento, col nome generico `audio.<estensione>`;
+  prima i termini da riconoscere (`keyterm`): le parole scritte del dizionario (al massimo
+  100, da 50 caratteri). La lingua non si invia: si controlla quella rilevata.
+- Il confronto è parola per parola, senza maiuscole, punteggiatura e accenti; una parola
+  detta come la sua pronuncia (`--pronuncia`, o le pronunce del kit sotto) vale come la
+  parola scritta. In `comparison` le parole `different` (attesa e sentita), `missing` e
+  `extra`, con la posizione nel testo atteso, più `words`, `matched` e `ratio`.
+- Due controlli in coda a `checks`: `voice` (nessuna differenza ok, altrimenti avviso;
+  meno di metà delle parole attese sentite uguali: difetto) e `language` (lingua rilevata
+  diversa da `--lang`, o da quella del kit: avviso). La trascrizione sbaglia sui nomi
+  propri: è un avviso da ascoltare, non un errore. Il controllo avvisa e basta: non
+  rigenera e non spende oltre la trascrizione.
+- Il JSON ha `mode` `voice`, `script`, `transcript` (`text`, `language`, `duration_s`,
+  `words`), `comparison`, `cost_est_usd` e `cost_usage_usd` (calcolato da giv sulla durata:
+  xAI non riporta il costo); una riga in `giv-log.jsonl`. Una trascrizione dall'esito
+  incerto (redirect, errore del server, rete dopo l'invio, risposta non valida) esce con
+  codice 5 e una riga `failed`, senza rilancio; un caricamento che non arriva fino in fondo
+  è un errore senza addebito (codice 5, «nessuna trascrizione partita»).
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -828,7 +898,9 @@ errori vanno su stderr. `giv story help` (o `giv story --help`) e `giv story <so
 Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost_total_usd`
 1,5 (il `taglio` di s3 cambia solo il montaggio, non la durata chiesta al modello). I file in
 `examples/spot/img/`, `voce/` e `musica/` sono segnaposto (tinte piatte e silenzio):
-sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
+sostituirli con la foto del prodotto, il logo, la voce e la musica vere. Lo stesso spot col
+kit di `examples/kit/`, la voce dai testi, i sottotitoli dai testi e il controllo dei file
+è in `examples/spot/storyboard-kit.json` (vedi [Kit e voce dai testi](#kit-e-voce-dai-testi)).
 
 | Campo | Cosa contiene |
 |---|---|
@@ -840,13 +912,18 @@ sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
 | `riferimenti` | insiemi di immagini per nome (`"prodotto": ["img/prodotto.png"]`), richiamati dalle scene con `usa` |
 | `scene` | le scene, in ordine |
 | `avatar` | `modello` (`standard`, default, o `pro`) delle scene avatar che non lo indicano |
-| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1, `sotto_voce`, `sfuma_fine`), `sottotitoli` (file), `uscita` (file finale); dalla 0.11.0 `formati`, `adatta`, `logo`, `titoli`, `cartello_finale`, `stile_testi`, `volume`: vedi [Montaggio](#montaggio-giv-story-cut) |
+| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1, `sotto_voce`, `sfuma_fine`), `sottotitoli` (file, o dalla 0.12.0 `"auto"`: dai testi delle scene), `uscita` (file finale); dalla 0.11.0 `formati`, `adatta`, `logo`, `titoli`, `cartello_finale`, `stile_testi`, `volume`; dalla 0.12.0 `senza` (`logo`, `cartello`, `musica`: toglie ciò che il kit mette da solo): vedi [Montaggio](#montaggio-giv-story-cut) |
 | `foglio_contatto` | `false` perché `giv story run` e `giv story cut` non scrivano `foglio-contatto.jpg` accanto allo storyboard (default: lo scrivono) |
+| `kit` | il file del kit di marca e personaggi (`"../marca/kit.json"`, relativo alla cartella dello storyboard, anche fuori): vedi [Kit e voce dai testi](#kit-e-voce-dai-testi) |
+| `parlato` | voce delle scene con `testo`: `provider` (`xai`, default), `modello`, `voce`, `lingua`, `velocita`, `stile`, `pronuncia` (oggetto `{"parola": "come dirla"}`); i predefiniti vengono dal kit |
+| `controllo` | `{"tecnico": true}`: `giv story run` (a fine giro) e `giv story cut` (dopo il montaggio) controllano clip, voci e montati come `giv qc`, con il risultato in `<nome>.controllo.json`: vedi [Controllo dei file](#controllo-dei-file-nello-storyboard); `{"voce": true}`: `giv story run` trascrive ogni voce generata e la confronta col testo (xai, a pagamento, nel tetto) |
 
 Ogni scena ha un `id` (lettere, cifre, `_` e `-`, al massimo 64 caratteri), un `tipo`, una
 `durata` in secondi e, facoltativa, la `voce`: un file audio fuori campo, messo al
-montaggio. `ritardo_voce` (secondi, anche decimali, finito e non negativo; solo con
-`voce`) la fa partire dopo l'inizio della scena; senza vale 0.
+montaggio, oppure un `testo` (al più 2000 byte) che `giv story run` fa dire (vedi [Kit e
+voce dai testi](#kit-e-voce-dai-testi)); con tutti e due vale il file. `ritardo_voce`
+(secondi, anche decimali, finito e non negativo; solo con `voce` o `testo`) la fa partire
+dopo l'inizio della scena; senza vale 0.
 
 - `video`: generata da un modello. `prompt`, `negative`, `preset`; il primo fotogramma
   viene da **uno solo** fra `immagine` (file o URL), `fotogramma_chiave` (immagine
@@ -901,8 +978,22 @@ montaggio. `ritardo_voce` (secondi, anche decimali, finito e non negativo; solo 
   voce della scena successiva che ne ha una, l'ultima prima della fine del montaggio.
   Oltre 0,05 s un avviso, nei `warnings` della scena e su stderr, dice di quanti secondi e
   su quale scena; una voce che supera la sua scena senza toccarne un'altra non ha avviso.
-  Un avviso anche per un file che non si legge come audio;
-- **costi**: `cost_est_usd` (stime da listino), `cost_declared_usd` (costi dichiarati
+  Un avviso anche per un file che non si legge come audio. Per una voce dal testo vale
+  quella già generata; se non c'è ancora, la durata è stimata dai caratteri (circa 15 al
+  secondo, approssimata: l'avviso lo dice) e l'avviso propone un `ritardo_voce` o una
+  `durata` più lunga;
+- **voci dai testi**: per ogni scena con `testo` e senza `voce` la richiesta come `giv
+  voice` (provider, voce, lingua, velocità, pronunce del blocco `parlato`: un valore non
+  valido esce con codice 2), `text_chars`, `voice_cost_est_usd` (caratteri × listino),
+  `voice_cost_probable` (stima probabile, gemini), `voice_duration_est_s` e
+  `voice_status` (`da_generare`, `fatto`, `cambiata` se testo o impostazioni sono
+  cambiati dopo la generazione, `incerto`), con un avviso per una voce
+  incerta, cambiata o il cui file non c'è più; con `controllo.voce` anche
+  `voice_check_cost_est_usd` (trascrizione sulla durata stimata, già nei totali e nel
+  tetto) e `voice_check` (esito dell'ultima trascrizione: `ok`, `avviso`, `difetto`,
+  `incerto`);
+- **costi**: `cost_est_usd` (stime da listino, voci e trascrizioni comprese: queste anche a
+  parte in `voice_cost_est_usd` e `voice_check_cost_est_usd`), `cost_declared_usd` (costi dichiarati
   dall'autore dove la stima non c'è, per esempio i modelli a token come Seedance),
   `cost_total_usd`; le generazioni senza stima né costo dichiarato (compresi i
   fotogrammi chiave) sono in `not_estimated` e non contano come zero. Con
@@ -914,7 +1005,126 @@ montaggio. `ritardo_voce` (secondi, anche decimali, finito e non negativo; solo 
   insieme a `cost_total_usd`.
 
 Il JSON su stdout ha `storyboard`, `titolo`, le `scenes` (per scena il piano come `giv
-video --dry-run`), i costi qui sopra e `cap_usd`.
+video --dry-run`), i costi qui sopra e `cap_usd`; col kit, `kit` con `file` e `inherited`
+(i campi presi dal kit).
+
+### Kit e voce dai testi
+
+```bash
+giv story check spot/storyboard.json                      # col campo "kit": "../marca/kit.json"
+giv story check --kit marca/kit.json spot/storyboard.json # lo stesso kit, senza il campo
+giv story run --voices spot/storyboard.json               # solo le voci (centesimi), poi check
+                                                          # mostra le durate vere
+giv story run --scene s2 --new-voice spot/storyboard.json # rifà la voce (e la clip) di s2
+```
+
+**Kit.** Il kit (formato in [Kit di marca e personaggi](#kit-di-marca-e-personaggi)) si usa
+**solo se indicato**: campo `kit` dello storyboard o `--kit` su `check`, `run` e `cut`
+(`--kit` vince sul campo); senza, tutto resta come prima. I valori del kit fanno da
+predefiniti, campo per campo: **vince la scena, poi lo storyboard, poi il kit**.
+
+- `logo`, `stile_testi`, `cartello_finale` e `musica` del kit valgono per il blocco
+  `montaggio`: con un kit logo, cartello finale e musica compaiono da soli; lo storyboard
+  ne cambia i campi che indica. `"montaggio": {"senza": ["logo", "musica"]}` li toglie
+  (`logo`, `cartello`, `musica`); uno storyboard che indica anche l'elemento tolto (per
+  esempio `montaggio.logo` con `senza` `logo`) esce con codice 2. `colori.primario` è lo sfondo del cartello e il bordo dei
+  testi, `colori.testo` il colore dei testi; `volume` il volume finale. `sotto_voce` del
+  kit vale solo se una scena ha una voce.
+- Ogni **personaggio** diventa un insieme di riferimenti con quel nome, da usare in `usa`
+  come gli altri; un insieme con lo stesso nome nello storyboard vince. La `descrizione`
+  va davanti al prompt delle scene (e delle inquadrature) e del fotogramma chiave che lo
+  usano; la `tutela` del personaggio vale per la scena che non ne indica una (prima del
+  blocco `default`).
+- `voce` e `pronuncia` del kit sono i predefiniti del blocco `parlato`; le pronunce dello
+  storyboard vincono su quelle del kit, anche a meno delle maiuscole.
+- I file del kit restano nella sua cartella, che può stare fuori da quella dello
+  storyboard: relativi al kit, dentro la sua cartella anche seguendo i link, file normali.
+  giv li legge soltanto (le uscite di `giv story cut` e il foglio di contatto non li
+  sostituiscono mai) e il file di stato non ne contiene i percorsi; i file scritti dallo
+  storyboard (`montaggio`, scene) restano nella cartella dello storyboard come prima.
+- `giv story check` elenca in `kit.inherited` ogni valore che viene dal kit. Un kit
+  cambiato dopo la generazione non rigenera niente: cambia solo il montaggio successivo e
+  le prossime generazioni (un avviso lo ricorda se lo stato ha già scene o voci fatte).
+
+**Voce dai testi.** Una scena (non avatar) con `testo` e senza `voce` ha una voce generata
+da `giv story run` **prima dei video**, in `voce/<id>-v<N>.wav` accanto allo storyboard
+(con i tempi per carattere in `voce/<id>-v<N>.tempi.json`, dove il provider li dà), mai
+sovrascritta; `giv story cut` la monta come la `voce` della scena. La richiesta è quella
+di `giv voice` coi valori del blocco `parlato` (fuso col kit; predefiniti `xai`, voce
+`eve`, lingua `it`) e passa dalla stessa riserva e dallo stesso tetto di ogni
+richiesta a pagamento: prima di inviarla la spesa registrata più le stime delle voci e dei
+video ancora da fare, sul valore non arrotondato, non deve superare `tetto_costo_usd`, e
+la voce si registra nello stato come incerta; con un tetto una voce non stimabile esce con
+codice 2 senza avvii. La voce `gemini` non ha oggi un costo massimo garantito: con
+`tetto_costo_usd` una voce gemini ancora da generare esce con codice 2 in `story check` e
+`story run`, prima di ogni richiesta (usa `xai` o togli il tetto); senza tetto parte, con
+un avviso, e la stima è probabile, mai esatta (`voice_cost_probable` in `story check`).
+
+- Una voce fatta **non si rifà da sola**: se testo o impostazioni cambiano, `story check`
+  e `story run` lo dicono e si continua con quella fatta; per rifarla (a pagamento)
+  `--scene <id> --new-voice`, e la precedente resta nello stato fra le riprese precedenti
+  (`previous`, con `kind` `voce`). Con un file di voce registrato che non c'è più, codice 2
+  finché non la si rifà così.
+- Una voce **dall'esito incerto** (3xx, 5xx, rete caduta dopo l'invio, risposta non
+  valida) o arrivata ma non salvata resta contata nella spesa e non si rilancia mai da
+  sola: codice 2 finché non la si rifà con `--scene <id> --new-voice`, dopo aver
+  controllato sul provider. Una richiesta rifiutata subito (4xx) non conta e si riprova
+  (una voce che prima era incerta resta incerta).
+- `--voices` genera solo le voci (con `--scene`, solo quella della scena), senza toccare i
+  video né i job già partiti: costa centesimi e poi `giv story check` usa le durate vere.
+- Nello stato la voce sta nella scena (`voice`, `voice_key`: l'impronta di testo e
+  impostazioni, `voice_status`, `voice_error`; addebiti di tipo `voce`); anche le scene
+  clip e immagine con una voce dal testo entrano nello stato. **Un giv più vecchio
+  rifiuta uno stato scritto con le voci.** Ogni voce entra nel registro di `giv log` con
+  `command` `story voice`.
+
+### Controllo dei file nello storyboard
+
+```json
+"controllo": {"tecnico": true, "voce": true}
+```
+
+Con `controllo.tecnico` `giv story run`, a fine giro, e `giv story cut`, dopo il
+montaggio, controllano come [`giv qc`](#controllo-tecnico-giv-qc) (soglie di default) la
+clip o il file in uso di ogni scena, ogni voce in uso (il file della scena o la voce
+generata) e ogni montato. Il risultato va in `<nome>.controllo.json` accanto allo
+storyboard (riscritto ogni volta, leggibile solo dall'utente) e nel JSON del comando, nel
+campo `controllo`: `command`, `storyboard`, `checked_at`, `result` (il peggiore: `ok`,
+`avviso`, `difetto`; `assente` se non c'è niente da controllare), `counts`, `scenes[]`,
+`voices[]` e `outputs[]` (una riga per scena, voce e montato, come `giv qc` su uno
+storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
+
+- Il controllo **avvisa e basta**: non rigenera, non scarta, non spende. Con `strict`
+  nello storyboard un difetto fa uscire `giv story run` con 1, dopo il manifest; `giv
+  story cut` esce sempre come prima.
+- Un controllo che non si può fare (ffmpeg o ffprobe assenti) è un avviso: il comando non
+  cambia esito e il file non si scrive. Se `<nome>.controllo.json` è uno dei file
+  d'ingresso (storyboard, stato, file che lo storyboard nomina, manifest e file del kit,
+  anche quelli tolti con `montaggio.senza`, file generati elencati nello stato) non si
+  sovrascrive: resta un avviso.
+- Con `controllo.voce` `giv story run` trascrive ogni voce **generata da giv** appena
+  fatta (prima dei video), o già fatta e mai trascritta, e la confronta col testo della
+  scena come [`giv qc --voice`](#controllo-della-voce-giv-qc---voice) (xai, lingua e
+  pronunce del blocco `parlato`; i file `voce` delle scene non si trascrivono: per quelli
+  `giv qc --voice`). Si carica solo `voce/<id>-v<N>.wav` della scena, file normale in una
+  cartella `voce` vera (niente link): uno stato che indica un altro file salta la
+  trascrizione con un avviso. Serve `XAI_API_KEY` (senza, codice 2 prima di ogni avvio). La riga
+  della voce in `voices[]` porta i controlli `voice` e `language`, `transcript` e
+  `comparison`; nelle esecuzioni dopo, e in `giv story cut`, l'esito registrato nello
+  stato. Ogni trascrizione è **a pagamento** (0,10 $ l'ora, al minuto per eccesso): la
+  stima entra nel piano e nel tetto (`voice_check_cost_est_usd` in `story check`), prima
+  della richiesta la spesa registrata più la trascrizione più le generazioni ancora da
+  fare non deve superare `tetto_costo_usd` (sul valore non arrotondato; altrimenti la
+  trascrizione si salta con un avviso: i video hanno la precedenza) e la trascrizione si
+  registra nello stato come incerta, con un addebito di tipo `trascrizione`. Una sola
+  richiesta, mai ripetuta: dall'esito incerto resta contata e **non si rilancia** (la voce
+  si ritrascrive solo se cambia il file, con `--new-voice`, o a mano con `giv qc
+  --voice`); rifiutata (4xx) o col caricamento non completo non conta e si riprova al
+  giro dopo. Nello stato la scena ha `voice_check` (`file`, `status` `fatto` o
+  `incerto`, `result`, `message`, `at`). Anche qui il controllo avvisa e basta: una voce
+  con parole diverse non si rigenera; con `strict` un difetto (meno di metà delle parole
+  sentite uguali) fa uscire con 1. `controllo.voce` senza `controllo.tecnico` controlla
+  solo le voci.
 
 ### Generazione: `giv story run`
 
@@ -989,10 +1199,15 @@ stderr, `removed_scenes` e `removed_spent_usd`, e nel messaggio di rifiuto del t
 **Cancellando il file di stato il conto riparte da zero** e le scene tornano da generare.
 
 Il JSON su stdout ha `state`, le `scenes` (per scena `status`, `file`, `keyframe`, `takes`:
-le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `cost_est_usd`,
-`cost_usd`), `jobs_started`, `jobs_recovered`, `keyframes` e i totali `cost_est_usd`
+le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `voice` e
+`voice_this_run` per la voce dal testo, `cost_est_usd`, `cost_usd`), `jobs_started`,
+`jobs_recovered`, `keyframes`, `voices` (voci generate), `voice_checks` (voci trascritte,
+con `controllo.voce`) e i totali `cost_est_usd`
 (stime e costi dichiarati delle scene), `cost_usd` (addebito riportato dai provider),
-`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `removed_scenes` e
+`spent_usd` (la spesa contata per il tetto, comprese le scene tolte), `run_cost_est_usd` e
+`run_spent_usd` (stime e spesa contata delle sole richieste partite in questa esecuzione:
+fotogrammi chiave, video, voci e trascrizioni; i job recuperati restano dell'esecuzione
+che li ha avviati; assenti se non è partito niente), `removed_scenes` e
 `removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`.
 
 ### Montaggio: `giv story cut`
@@ -1020,7 +1235,8 @@ Come monta:
   e 720×1280 in 9:16. Video H.264, audio AAC.
 - **transizioni**: `taglio` o `dissolvenza` di 0,5 s fra una scena e l'altra; ogni
   dissolvenza accorcia il totale di 0,5 s.
-- **audio**: la `voce` di una scena parte con la scena, o `ritardo_voce` secondi dopo (se
+- **audio**: la `voce` di una scena (il file, o per una scena con `testo` la voce generata
+  da `giv story run`: se manca, codice 2 con `giv story run --voices`) parte con la scena, o `ritardo_voce` secondi dopo (se
   dura di più continua sulla scena dopo, o viene tagliata alla fine); l'audio di una clip resta se il file ne ha uno;
   la `musica` va in loop sotto tutto il video a `volume` 0,25 se non indicato (0 = niente
   musica).
@@ -1029,6 +1245,15 @@ Come monta:
   file dei sottotitoli non cambia). Con `montaggio.formati` o `--formato` un `.srt` sta
   dentro i margini sicuri del formato (nel 9:16 sopra il 35% in basso, coperto dai Reels);
   un `.ass` o `.ssa` resta col suo stile.
+- **sottotitoli dai testi** (dalla 0.12.0): con `"sottotitoli": "auto"` giv li scrive dal
+  `testo` di ogni scena con una voce (il file della scena o quella generata), in ogni
+  formato, in basso dentro i margini sicuri, al più due righe, spezzati alle frasi e alla
+  punteggiatura. I tempi sono quelli della voce (`<voce>.tempi.json` accanto al file, se è
+  dello stesso testo, come li scrivono `giv voice` e `giv story run`), con il ritardo della
+  voce; senza tempi i sottotitoli si distribuiscono sulla durata della voce, con un
+  avviso. Resta la grafia scritta (le pronunce servono solo ad allineare i tempi); lo stile
+  è quello di `stile_testi`. Serve almeno una scena con `testo` (codice 2); un file che si
+  chiama proprio `auto` si scrive `./auto`.
 - **uscita**: `montaggio.uscita`, altrimenti `<nome dello storyboard>.mp4`, sempre dentro
   la cartella dello storyboard anche seguendo i link. Si riscrive a ogni `giv story cut`;
   il file compare solo a montaggio riuscito. Tutto il montaggio sta entro 30 minuti.
@@ -1073,7 +1298,8 @@ montaggio resta quello di prima):
   parlano le voci (serve almeno una scena con `voce`) e `sfuma_fine` sono i secondi di
   dissolvenza in chiusura (da 0 a 60).
 - **`volume`**: volume finale in LUFS integrati, da -70 a -5 (es. -14, la convenzione dei
-  social), misurato e corretto in due passate; senza il campo il volume resta com'è.
+  social), misurato e corretto in due passate, col picco vero entro -1 dBTP; senza il
+  campo il volume resta com'è.
 
 Testi di titoli e cartello: alla lettera (al più 2000 byte, UTF-8), in un file `.ass`
 generato da giv, mai nella stringa dei filtri di ffmpeg. Font, logo e musica devono stare
@@ -1131,7 +1357,7 @@ giv kit help                            # aiuto; anche giv kit check --help
     }
   },
   "voce": { "provider": "xai", "voce": "eve", "lingua": "it", "velocita": 1.0 },
-  "pronuncia": { "Swerpify": "suèrpifai" }
+  "pronuncia": {}
 }
 ```
 
@@ -1145,8 +1371,8 @@ giv kit help                            # aiuto; anche giv kit check --help
   `illustrazione`, `no` o una clausola dei preset).
 - **`voce`**: `provider` (`xai` o `gemini`), `modello`, `voce`, `lingua` (es. `it`),
   `velocita` (da 0,7 a 1,5) e `stile` (a parole).
-- **`pronuncia`**: al più 200 parole, ognuna con la sua pronuncia (al più 100 byte
-  ciascuna, su una riga).
+- **`pronuncia`**: al più 200 parole (al più 100 caratteri), ognuna con la sua pronuncia
+  (al più 128), su una riga; vuoto nell'esempio.
 - Serve almeno uno fra `marca`, `personaggi`, `voce` e `pronuncia`; un campo sconosciuto,
   un valore fuori dai limiti o un file del kit oltre 1 MiB escono con codice 2.
 
@@ -1162,8 +1388,12 @@ avere una traccia audio (durata con `ffprobe`): altrimenti codice 2. Senza `ffpr
 misure non si leggono e c'è un avviso. Avvisi, senza cambiare il codice d'uscita: logo
 senza trasparenza (PNG senza alfa, JPEG), font non leggibile (`giv story cut` lo
 rifiuterebbe), più riferimenti di quanti ne accettano i modelli video con limiti noti
-(xAI, Gemini, fal), descrizione oltre 500 caratteri, `velocita` con Gemini (che non ha
-una velocità numerica).
+(xAI, Gemini, fal), descrizione oltre 500 caratteri. `voce` e `pronuncia` passano dagli
+stessi controlli di `giv voice` (provider disponibili, nome della voce, lingua BCP-47 o
+`auto`, velocità da 0,7 a 1,5, pronunce: parola di lettere, cifre, apostrofi e spazi fino
+a 100 caratteri, pronuncia fino a 128, nessuna parola ripetuta a meno delle maiuscole): un
+valore non valido esce con codice 2, gli avvisi di `giv voice` (per esempio lo `stile`
+che xAI ignora) restano avvisi.
 
 Il JSON su stdout ha `kit`, `files` (per file `field`, `file`, `kind` fra `logo`, `font`,
 `musica` e `riferimento`, `bytes`, e secondo il tipo `width`, `height`, `alpha`,
@@ -1184,7 +1414,8 @@ provider, ricette (reference di stile, image-to-video, spot da foto di prodotto,
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
 allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
-con `giv post`, foglio di contatto e fotogrammi, esportazione per canale),
+con `giv post`, foglio di contatto e fotogrammi, esportazione per canale, voce con
+`giv voice`, kit di marca, controllo tecnico con `giv qc`),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -1212,10 +1443,11 @@ internal/presets/         libreria dei preset (presets.json incorporato) e compo
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
 internal/kit/             kit di marca e personaggi: lettura, controlli e percorsi chiusi nella cartella del kit
-internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export) e controllo di giv qc
+internal/speech/          voce e trascrizione: richiesta, controlli, prezzi e stima, pronunce, tempi, WAV, confronto col testo
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export), controllo di giv qc e sottotitoli dai testi
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
-examples/spot/            storyboard d'esempio con file segnaposto
+examples/spot/            storyboard d'esempio con file segnaposto (storyboard-kit.json: col kit, la voce e i sottotitoli dai testi)
 examples/kit/             kit di marca e personaggi d'esempio con file segnaposto
 ```
 
