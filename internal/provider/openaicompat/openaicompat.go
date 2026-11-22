@@ -52,31 +52,15 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 }
 
 // checkRedirect lascia l'Authorization solo ai salti sull'origine dell'API
-// (schema, host e porta): fuori origine la chiave viene tolta. Le GET di attesa
-// dei job (contesto di pollOnly) fuori origine non si seguono: la loro risposta
-// decide se il job è finito male, e deve venire dal provider.
+// (schema, host e porta): fuori origine la chiave viene tolta.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
-	if req.Context().Value(noRedirectKey{}) != nil {
-		return http.ErrUseLastResponse // POST dei comandi sulle clip: mai reinviati, nemmeno sull'origine
-	}
 	if !c.apiOrigin(req.URL) {
-		if req.Context().Value(pollKey{}) != nil {
-			return http.ErrUseLastResponse // il 3xx diventa un errore HTTP: il job resta
-		}
 		req.Header.Del("Authorization")
 	}
 	return nil
-}
-
-type pollKey struct{}
-
-// pollOnly segna le richieste di attesa di un job: redirect solo sull'origine
-// dell'API (i download dei risultati restano liberi, senza chiave).
-func pollOnly(ctx context.Context) context.Context {
-	return context.WithValue(ctx, pollKey{}, true)
 }
 
 func (c *Client) Name() string { return c.name }
@@ -321,11 +305,16 @@ func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*
 		}
 		body["input_references"] = refs
 	}
-	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati;
+	// ripetizioni come prima (httpx.Retry), nessun redirect
 	res := &provider.Result{}
 	for i := 0; i < max(req.N, 1); i++ {
 		var resp imagesResponse
-		if err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/images", body, &resp); err != nil {
+		if err := c.apiCall(ctx, httpx.Retry, http.MethodPost, c.baseURL+"/images", "application/json", payload, &resp); err != nil {
 			return nil, err
 		}
 		media, err := c.mediaFromImages(ctx, resp)
@@ -358,7 +347,7 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 		case d.B64JSON != "":
 			data, err = base64.StdEncoding.DecodeString(d.B64JSON)
 		case d.URL != "":
-			data, err = c.download(ctx, d.URL)
+			data, err = c.fetchResult(ctx, d.URL)
 		default:
 			continue
 		}
@@ -630,16 +619,21 @@ func (c *Client) routerStart(ctx context.Context, req provider.VideoRequest) (pr
 	var job struct {
 		ID         string `json:"id"`
 		PollingURL string `json:"polling_url"`
-		Status     string `json:"status"`
 	}
-	// l'avvio del job non si ripete da solo: con un 5xx o un timeout potrebbe essere partito
-	if err := c.doJSONWith(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos", body, &job); err != nil {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return provider.Job{}, err
+	}
+	// l'avvio del job non si ripete né segue redirect: con un 3xx, un 5xx o un timeout potrebbe essere partito
+	if err := c.apiCall(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/videos", "application/json", payload, &job); err != nil {
 		return provider.Job{}, httpx.Start(err)
 	}
-	if job.PollingURL == "" {
-		return provider.Job{}, httpx.Start(fmt.Errorf("%s: nessuna polling_url nella risposta (job %q, status %q)", c.name, job.ID, job.Status))
+	// id e indirizzo di attesa controllati prima di registrare il job
+	started := provider.Job{ID: job.ID, PollingURL: job.PollingURL}
+	if err := c.startedJob(started); err != nil {
+		return provider.Job{}, httpx.Start(err)
 	}
-	return provider.Job{ID: job.ID, PollingURL: job.PollingURL}, nil
+	return started, nil
 }
 
 // wait attende un job già partito fino al tetto e ne scarica il risultato; con
@@ -690,7 +684,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		Error json.RawMessage `json:"error"`
 		Usage json.RawMessage `json:"usage"` // letto solo dai comandi sulle clip
 	}
-	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.apiCall(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, "", nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -699,8 +693,8 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		if st.Video.URL == "" {
 			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 		}
-		// il video sta su una CDN: scaricato senza chiave
-		data, err := c.download(ctx, st.Video.URL)
+		// il video sta su una CDN: scaricato senza chiave (fetchResult)
+		data, err := c.fetchResult(ctx, st.Video.URL)
 		if err != nil {
 			return nil, err
 		}
@@ -708,17 +702,16 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 			CostUSD: grokClipCost(ctx, st.Usage)}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		detail := string(st.Error)
-		if ci := clipFrom(ctx); ci != nil {
-			detail = ci.jobError(st.Error)
-		}
-		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, detail))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
 	return nil, nil
 }
 
-// routerPoll controlla una volta lo stato di un job OpenRouter: risultato
-// scaricato, errore, oppure nil e nil se il job è ancora in corso.
+// routerPoll controlla una volta lo stato di un job OpenRouter (giv video,
+// giv story, giv upscale e il loro recupero con giv job fetch): risultato
+// scaricato, errore, oppure nil e nil se il job è ancora in corso. Stato e
+// risultati passano da apiCall e fetchResult; il motivo di un job fallito è
+// filtrato.
 func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Result, error) {
 	var st struct {
 		Status       string          `json:"status"`
@@ -728,7 +721,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 			Cost float64 `json:"cost"`
 		} `json:"usage"`
 	}
-	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.apiCall(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, "", nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -739,22 +732,17 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 		}
 		var media []provider.Media
 		for _, u := range st.UnsignedURLs {
-			// le content URL stanno sullo stesso host API e richiedono l'Authorization;
-			// un URL su un altro host si scarica senza chiave
-			get := c.download
-			if c.apiHost(u) {
-				get = c.downloadAuth
-			}
-			data, err := get(ctx, u)
+			// sull'host API con la chiave, altrove senza (fetchResult)
+			data, err := c.fetchResult(ctx, u)
 			if err != nil {
 				return nil, err
 			}
 			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 		}
 		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
-	case "failed", "cancelled", "error":
+	case "failed", "cancelled", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
 	return nil, nil
 }
@@ -822,34 +810,6 @@ func jobTimeout(d time.Duration) time.Duration {
 }
 
 // --- helper ---
-
-func (c *Client) download(ctx context.Context, url string) ([]byte, error) {
-	return c.get(ctx, url, false)
-}
-
-// downloadAuth è per le URL sull'host API del provider: mai usarla su CDN esterne.
-func (c *Client) downloadAuth(ctx context.Context, url string) ([]byte, error) {
-	return c.get(ctx, url, true)
-}
-
-func (c *Client) get(ctx context.Context, url string, auth bool) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if auth {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: download HTTP %d", c.name, resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
-}
 
 func addFilePart(w *multipart.Writer, field, path string) error {
 	h := textproto.MIMEHeader{}
