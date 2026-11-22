@@ -66,6 +66,7 @@ func TestR6CheckRifiuti(t *testing.T) {
 		"logo fuori cartella": {`"logo":{"file":"../logo.png"}`, ""},
 		"font mancante":       {`"stile_testi":{"font":"manca.ttf"}`, ""},
 		"musica mancante":     {`"musica":{"file":"manca.mp3"}`, ""},
+		"titolo tempi fuori":  {`"titoli":[{"testo":"x","da":999,"durata":2}]`, ""},
 		"fuoco fuori":         {``, `"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":2,"fuoco":1.5}]`},
 		"taglio da>=a":        {``, `"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":2,"taglio":{"da":2,"a":1}}]`},
 		"velocita 5":          {``, `"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":2,"velocita":5}]`},
@@ -76,20 +77,6 @@ func TestR6CheckRifiuti(t *testing.T) {
 		if code != 2 {
 			t.Errorf("%s: codice %d, atteso 2\n%s", name, code, se)
 		}
-	}
-}
-
-// Un titolo con i tempi fuori dalla durata del montato: oggi solo un avviso
-// (il developer lo documenta così); il test registra che check lo segnala.
-func TestR6TitoloFuoriDurataSegnalato(t *testing.T) {
-	d := r6Dir(t)
-	p := r6Board(t, d, `"titoli":[{"testo":"x","da":999,"durata":2}]`, "")
-	out, se, code := r6Cmd(t, "check", p)
-	if code != 0 && code != 2 {
-		t.Fatalf("codice %d\n%s", code, se)
-	}
-	if code == 0 && !strings.Contains(strings.ToLower(out+se), "titol") {
-		t.Fatalf("nessun avviso sul titolo fuori durata:\n%s\n%s", out, se)
 	}
 }
 
@@ -166,8 +153,8 @@ func TestR6TaglioVelocitaCambianoDurata(t *testing.T) {
 		return r.Formats[0].DurationS
 	}
 	d0 := dur(base)
-	dTaglio := dur(`"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","taglio":{"da":0,"a":1}}]`)
-	dVel := dur(`"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","velocita":2}]`)
+	dTaglio := dur(`"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":2,"taglio":{"da":0,"a":1}}]`)
+	dVel := dur(`"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":2,"velocita":2}]`)
 	if math.Abs(d0-2) > 0.15 {
 		t.Errorf("senza campi: %.2f, attesa 2", d0)
 	}
