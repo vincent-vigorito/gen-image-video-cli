@@ -202,13 +202,41 @@ func TestVoiceXAITempiEccessiviScartati(t *testing.T) {
 	}
 }
 
-// la stima di Gemini per il tetto è il massimo per richiesta (0,151552 $ flash).
-func TestVoiceGeminiTettoSulMassimo(t *testing.T) {
+// decisione 22: con un tetto (qualsiasi valore) la voce Gemini è non stimabile.
+func TestVoiceGeminiTettoNonStimabile(t *testing.T) {
 	hits, dir := geminiEnv(t, geminiOK(1, nil))
-	if _, se, code := voiceRun(t, "--provider", "gemini", "--max-cost", "0.1", "--out", dir, "Ciao"); code != 2 || *hits != 0 {
-		t.Errorf("sotto il massimo: code=%d hits=%d %s", code, *hits, se)
+	for _, cap := range []string{"0.1", "0.5", "100"} {
+		_, se, code := voiceRun(t, "--provider", "gemini", "--max-cost", cap, "--out", dir, "Ciao")
+		if code != 2 || *hits != 0 || !strings.Contains(se, "non ha un costo massimo garantito") {
+			t.Errorf("tetto %s: code=%d hits=%d %s", cap, code, *hits, se)
+		}
 	}
-	if _, se, code := voiceRun(t, "--provider", "gemini", "--max-cost", "0.5", "--out", dir, "Ciao"); code != 0 || *hits != 1 {
-		t.Errorf("sopra il massimo: code=%d hits=%d %s", code, *hits, se)
+}
+
+// senza tetto parte, col limite dei token in uscita e l'avviso su stderr.
+func TestVoiceGeminiSenzaTettoAvviso(t *testing.T) {
+	var body map[string]any
+	_, dir := geminiEnv(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&body)
+		geminiOK(1, nil)(w, r)
+	})
+	_, se, code := voiceRun(t, "--provider", "gemini", "--out", dir, "Ciao")
+	if code != 0 || !strings.Contains(se, "non ha un massimo garantito") {
+		t.Fatalf("code=%d %s", code, se)
+	}
+	gc, _ := body["generation_config"].(map[string]any)
+	if v, _ := gc["max_output_tokens"].(float64); v != 16384 {
+		t.Errorf("max_output_tokens=%v in %v", gc["max_output_tokens"], gc)
+	}
+}
+
+func TestVoiceGeminiChiaveEscapeNonInErrore(t *testing.T) {
+	_, dir := geminiEnv(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":{"message":"k=\u0066ake-gem-key"}}`))
+	})
+	_, se, code := voiceRun(t, "--provider", "gemini", "--out", dir, "Ciao")
+	if code == 0 || strings.Contains(se, "fake-gem-key") {
+		t.Errorf("code=%d %s", code, se)
 	}
 }
