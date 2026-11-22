@@ -121,6 +121,7 @@ type ClipRequest struct {
 type ClipSource struct {
 	Duration      float64 // secondi del video sorgente
 	Width, Height int     // pixel del video sorgente
+	FPS           float64 // fotogrammi al secondo del video sorgente
 	AudioDuration float64 // secondi dell'audio (avatar)
 }
 

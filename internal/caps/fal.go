@@ -146,8 +146,9 @@ func aspectSize(short int, aspect string) (w, h int, ok bool) {
 // fal, il valore è prudente e va confermato con la prova a pagamento.
 const AvatarAudioWarnS = 60
 
-// FalOps sono le operazioni sulle clip di fal (giv avatar): schede fissate in
-// giv come quelle video. Il primo modello di un'operazione è il default.
+// FalOps sono le operazioni sulle clip di fal (giv avatar, giv upscale):
+// schede fissate in giv come quelle video. Il primo modello di un'operazione è
+// il default.
 func FalOps() []Op {
 	avatar := func(model, endpoint string, rate float64) Op {
 		return Op{
@@ -158,11 +159,63 @@ func FalOps() []Op {
 			Source:  falSource(endpoint),
 		}
 	}
-	return []Op{
+	ops := []Op{
 		avatar("avatar-v2-standard", "fal-ai/kling-video/ai-avatar/v2/standard", 0.0562),
 		avatar("avatar-v2-pro", "fal-ai/kling-video/ai-avatar/v2/pro", 0.115),
+		{
+			// Topaz (modello Proteus, il default della scheda): solo clip e
+			// fattore; limiti del sorgente non documentati, restano quelli
+			// comuni dei file in ingresso
+			Op: "upscale", Model: "topaz-upscale",
+			Flags: []string{"video", "factor"}, Required: []string{"video"},
+			FactorMin: 1, FactorMax: 4, DefaultFactor: 2,
+			Pricing: map[string]float64{"usd_per_second_720p": 0.01, "usd_per_second_1080p": 0.02, "usd_per_second_above_1080p": 0.08},
+			Source:  falSource("fal-ai/topaz/upscale/video"),
+		},
 	}
+	up := &ops[len(ops)-1]
+	up.Price = func(r provider.ClipRequest) (float64, string, string) { return topazPrice(up, r) }
+	return ops
 }
+
+// topazPrice stima Topaz in modo prudente: secondi del sorgente arrotondati in
+// eccesso × tariffa della fascia d'uscita (lati del sorgente × fattore: un
+// lato oltre la fascia vale la successiva), il doppio sopra i 30 fps (la
+// scheda: ×2 a 60 fps). Servono le misure lette con ffprobe; oltre i 60 fps
+// la scheda non ha tariffa.
+func topazPrice(o *Op, r provider.ClipRequest) (float64, string, string) {
+	s := r.Source
+	if !finitePositive(s.Duration) || s.Width <= 0 || s.Height <= 0 || !finitePositive(s.FPS) {
+		return 0, "", "misure del sorgente non note (URL o ffprobe assente) e listino per fascia d'uscita"
+	}
+	if s.FPS > 60.5 {
+		return 0, "", fmt.Sprintf("sorgente a %.2f fps: la scheda di %s non ha la tariffa oltre i 60 fps", s.FPS, o.Model)
+	}
+	f := o.Factor(r)
+	w, h := float64(s.Width)*f, float64(s.Height)*f
+	short, long := math.Min(w, h), math.Max(w, h)
+	tier := "above_1080p"
+	switch {
+	case short <= 720 && long <= 1280:
+		tier = "720p"
+	case short <= 1080 && long <= 1920:
+		tier = "1080p"
+	}
+	rate, ok := o.Pricing["usd_per_second_"+tier]
+	if !ok || f <= 0 {
+		return 0, "", "nessuna tariffa di " + o.Model + " per la fascia " + tier
+	}
+	mult, fps := 1.0, ""
+	if s.FPS > 30.5 {
+		mult, fps = 2, ", ×2 sopra i 30 fps"
+	}
+	secs := math.Ceil(s.Duration)
+	return secs * rate * mult,
+		fmt.Sprintf("%dx%d ×%g = %.0fx%.0f (fascia %s) × %g $/s × %g s (sorgente di %.2f s a %.2f fps, arrotondato al secondo%s; prudente)",
+			s.Width, s.Height, f, w, h, tier, rate, secs, s.Duration, s.FPS, fps), ""
+}
+
+func finitePositive(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 
 // avatarPrice stima l'Avatar v2: la clip dura quanto l'audio, contato per
 // secondi interi in eccesso (prudente: il conteggio di fal non è nella scheda).
