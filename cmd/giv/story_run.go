@@ -232,6 +232,13 @@ func (r *storyRunner) preflight() error {
 			rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
 	}
+	if id := r.abandon; id != "" {
+		// il job lasciato con --new-job non si recupera ma si valida come gli
+		// altri: con un job non valido nello stato non parte nessun avvio
+		if err := r.checkJob(r.st.Scenes[id].Job); err != nil {
+			rejects = append(rejects, fmt.Errorf("scena %s: %w", id, err))
+		}
+	}
 	for _, scene := range r.order {
 		ss := r.st.Scenes[scene.ID]
 		if r.jobOf(scene.ID) != nil {
