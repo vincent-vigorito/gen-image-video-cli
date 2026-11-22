@@ -375,11 +375,12 @@ func (j *clipJob) manifest(req provider.ClipRequest) manifest {
 		Inputs: newClipInputs(j.req), Params: j.plan.Params, Warnings: slices.Clone(j.plan.Warnings)}
 	if in := man.Inputs; in != nil {
 		for _, f := range []struct {
-			in   *inputFile
-			path string
-		}{{in.Video, req.Video}, {in.Audio, req.Audio}, {in.Image, req.Image}} {
+			in    *inputFile
+			path  string
+			limit int64
+		}{{in.Video, req.Video, provider.MaxVideoBytes}, {in.Audio, req.Audio, provider.MaxAudioBytes}, {in.Image, req.Image, provider.MaxInputBytes}} {
 			if f.in != nil && !isURL(f.path) {
-				f.in.SHA256 = shortHash(f.path)
+				f.in.SHA256 = clipHash(f.path, f.limit)
 			}
 		}
 	}

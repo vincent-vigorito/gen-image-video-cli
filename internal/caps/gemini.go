@@ -42,7 +42,7 @@ func Gemini() []Model {
 		Frames: []string{"first_frame", "last_frame"}, Audio: ptr(true), Seed: ptr(false),
 		// primo fotogramma e riferimenti insieme: ruoli non distinguibili nella richiesta
 		MaxRefs: ptr(6), ImageWithRefs: ptr(false),
-		Pricing: geminiPricing(), Source: geminiSource, Prepare: geminiPrepare,
+		Pricing: geminiPricing(), Source: geminiSource, check: geminiCheck,
 	}}
 }
 
@@ -54,33 +54,34 @@ func geminiPricing() map[string]float64 {
 	return p
 }
 
-// geminiPrepare: audio sempre presente, ultimo fotogramma solo dopo il primo e
-// fino a 10 s, durata e risoluzione sempre indicate nella richiesta.
-func geminiPrepare(req *provider.VideoRequest) ([]string, error) {
+// geminiCheck: audio sempre presente, ultimo fotogramma solo dopo il primo e
+// fino a 10 s; completa req con durata e risoluzione, che giv indica sempre
+// nella richiesta.
+func geminiCheck(req *provider.VideoRequest) error {
 	m := GeminiVideoModel
 	if req.Audio != nil && !*req.Audio {
-		return nil, reject("--audio off: %s genera sempre l'audio; per guidarlo scrivilo nel prompt (es. \"No dialogue\")", m)
+		return reject("--audio off: %s genera sempre l'audio; per guidarlo scrivilo nel prompt (es. \"No dialogue\")", m)
 	}
 	if req.LastFrame != "" && req.Image == "" {
-		return nil, reject("--last-frame con %s vuole anche --image: primo e ultimo fotogramma vanno in quest'ordine", m)
+		return reject("--last-frame con %s vuole anche --image: primo e ultimo fotogramma vanno in quest'ordine", m)
 	}
 	if req.LastFrame != "" && len(req.Refs) > 0 {
-		return nil, reject("--last-frame e --ref insieme non supportati da %s: usa uno solo dei due", m)
+		return reject("--last-frame e --ref insieme non supportati da %s: usa uno solo dei due", m)
 	}
 	if req.Duration < 0 {
-		return nil, reject("--duration deve essere un intero positivo di secondi")
+		return reject("--duration deve essere un intero positivo di secondi")
 	}
 	if req.Duration == 0 {
 		req.Duration = GeminiDefaultDuration
 	}
 	if req.LastFrame != "" && req.Duration > geminiFramesMaxDuration {
-		return nil, reject("--duration %d: con --last-frame %s arriva al massimo a %d s", req.Duration, m, geminiFramesMaxDuration)
+		return reject("--duration %d: con --last-frame %s arriva al massimo a %d s", req.Duration, m, geminiFramesMaxDuration)
 	}
 	req.Resolution = strings.ToLower(req.Resolution)
 	if req.Resolution == "" {
 		req.Resolution = GeminiDefaultResolution
 	}
-	return []string{"solo l'inglese è pienamente supportato nei prompt di " + m}, nil
+	return nil
 }
 
 // GeminiOps sono le operazioni di Gemini sui video che ha generato (--from):
