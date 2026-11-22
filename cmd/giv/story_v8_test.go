@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -437,5 +438,134 @@ func TestV8CheckCostoTrascrizione(t *testing.T) {
 	}
 	if !strings.Contains(out, "voice_check_cost_est_usd") || e.stt != 0 || e.tts != 0 {
 		t.Errorf("stt=%d tts=%d\n%s", e.stt, e.tts, out)
+	}
+}
+
+// caso P4: il manifest di story run --voices riporta la spesa del giro (somma
+// delle stime delle voci); un secondo giro senza richieste non ha i campi.
+func TestV8ManifestSpesaDelGiro(t *testing.T) {
+	texts := []string{"Prima frase dello spot.", "Seconda frase, un po' piu' lunga.", "Terza."}
+	var sc []string
+	chars := 0
+	for i, tx := range texts {
+		chars += len([]rune(tx))
+		sc = append(sc, `{"id":"s`+string(rune('1'+i))+`","tipo":"immagine","file":"a.png","durata":3,"testo":"`+tx+`"}`)
+	}
+	b := `{"default":{"provider":"openrouter","modello":"alibaba/wan-3.0","audio":"off","risoluzione":"720p","aspect":"16:9"}` + v7Parlato + `,
+"formato":{"aspect":"16:9","risoluzione":"144p","fps":25},"scene":[` + strings.Join(sc, ",") + `]}`
+	e := newV7Env(t, b)
+	out, se, code := e.story(t, "run", "--voices")
+	if code != 0 || e.tts != 3 {
+		t.Fatalf("code=%d tts=%d\n%s", code, e.tts, se)
+	}
+	var r map[string]any
+	json.Unmarshal([]byte(out), &r)
+	want := float64(chars) * 15 / 1e6
+	for _, k := range []string{"run_cost_est_usd", "run_spent_usd"} {
+		v, ok := r[k].(float64)
+		if !ok || math.Abs(v-want) > 1e-4 {
+			t.Errorf("%s = %v, atteso %v", k, r[k], want)
+		}
+	}
+	out, _, code = e.story(t, "run", "--voices")
+	r = map[string]any{}
+	json.Unmarshal([]byte(out), &r)
+	if code != 0 || e.tts != 3 {
+		t.Fatalf("secondo giro code=%d tts=%d", code, e.tts)
+	}
+	for _, k := range []string{"run_cost_est_usd", "run_spent_usd"} {
+		if _, ok := r[k]; ok {
+			t.Errorf("secondo giro: %s presente", k)
+		}
+	}
+}
+
+func v8State(t *testing.T, e *v7Env, voiceFile string) {
+	st := `{"version":1,"scenes":{"s1":{"status":"","voice":{"file":"` + voiceFile + `","done":"2026-01-01T00:00:00Z"},"voice_status":"fatto","voice_key":"x","charges":[{"kind":"voce","cost_est_usd":0.0006,"at":"2026-01-01T00:00:00Z"}]}}}`
+	if err := os.WriteFile(filepath.Join(e.dir, "spot.stato.json"), []byte(st), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// controllo.voce non trascrive file che non sono una voce generata da giv:
+// altro audio dello storyboard, link, nessuna richiesta e nessun addebito.
+func TestV8ControlloVoceSoloVociGenerate(t *testing.T) {
+	cases := map[string]func(e *v7Env){
+		"altro audio": func(e *v7Env) {
+			os.MkdirAll(filepath.Join(e.dir, "audio"), 0o755)
+			os.WriteFile(filepath.Join(e.dir, "audio", "x.wav"), v7WAV(1), 0o644)
+			v8State(t, e, "audio/x.wav")
+		},
+		"voce/ e' un link a cartella": func(e *v7Env) {
+			os.MkdirAll(filepath.Join(e.dir, "altra"), 0o755)
+			os.WriteFile(filepath.Join(e.dir, "altra", "s1-v1.wav"), v7WAV(1), 0o644)
+			if err := os.Symlink("altra", filepath.Join(e.dir, "voce")); err != nil {
+				t.Skip(err)
+			}
+			v8State(t, e, "voce/s1-v1.wav")
+		},
+		"file voce e' un link": func(e *v7Env) {
+			os.MkdirAll(filepath.Join(e.dir, "voce"), 0o755)
+			os.WriteFile(filepath.Join(e.dir, "vera.wav"), v7WAV(1), 0o644)
+			if err := os.Symlink("../vera.wav", filepath.Join(e.dir, "voce", "s1-v1.wav")); err != nil {
+				t.Skip(err)
+			}
+			v8State(t, e, "voce/s1-v1.wav")
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+			setup(e)
+			_, se, code := e.story(t, "run")
+			if e.stt != 0 || e.tts != 0 {
+				t.Errorf("richieste: stt=%d tts=%d (code=%d)\n%s", e.stt, e.tts, code, se)
+			}
+			ss := e.state(t)["s1"].(map[string]any)
+			if ch, _ := ss["charges"].([]any); len(ch) != 1 {
+				t.Errorf("addebiti cambiati: %v", ss["charges"])
+			}
+		})
+	}
+}
+
+// nomi di voce non canonici nello stato: rifiutati, nessuna richiesta.
+func TestV8NomiVoceNonCanonici(t *testing.T) {
+	for _, n := range []string{"voce/s1-v01.wav", "voce/s1-v0.wav", "voce/s1-v+1.wav"} {
+		e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+		os.MkdirAll(filepath.Join(e.dir, "voce"), 0o755)
+		os.WriteFile(filepath.Join(e.dir, n), v7WAV(1), 0o644)
+		v8State(t, e, n)
+		if _, se, code := e.story(t, "run"); code == 0 || e.stt != 0 || e.tts != 0 {
+			t.Errorf("%s: code=%d stt=%d tts=%d\n%s", n, code, e.stt, e.tts, se)
+		}
+	}
+}
+
+// un file del kit chiamato <nome>.controllo.json (kit nella cartella dello
+// storyboard) non viene sovrascritto dal controllo: avviso, kit intatto.
+func TestV8ControlloNonSovrascriveKit(t *testing.T) {
+	cutNeedFF(t)
+	e := newV7Env(t, v8Board("", ""))
+	v7Copy(t, v7ExamplesKit, e.dir)
+	kit := filepath.Join(e.dir, "spot.controllo.json")
+	if err := os.Rename(filepath.Join(e.dir, "kit.json"), kit); err != nil {
+		t.Fatal(err)
+	}
+	b := strings.Replace(v8VoceBoard(false, `{"tecnico":true}`), `{"default"`, `{"kit":"spot.controllo.json","default"`, 1)
+	os.WriteFile(e.board, []byte(b), 0o644)
+	v8Black(t, e)
+	before, _ := os.ReadFile(kit)
+	for _, a := range []string{"run", "cut"} {
+		_, se, code := e.story(t, a)
+		if code != 0 {
+			t.Fatalf("%s code=%d\n%s", a, code, se)
+		}
+		if !strings.Contains(se, "controllo non scritto") {
+			t.Errorf("%s: nessun avviso 'controllo non scritto':\n%s", a, se)
+		}
+		if after, _ := os.ReadFile(kit); string(after) != string(before) {
+			t.Fatalf("%s: il file del kit e' stato modificato", a)
+		}
 	}
 }
