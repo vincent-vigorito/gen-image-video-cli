@@ -22,8 +22,12 @@ const (
 	Video    = "video"    // generata da un modello video
 	Clip     = "clip"     // file video già pronto (ripresa vera, screencast)
 	Immagine = "immagine" // fermo immagine con durata (cartelli, chiusure)
-	Avatar   = "avatar"   // fuori da giv 0.9.0: rifiutato
+	Avatar   = "avatar"   // personaggio che parla (giv avatar su fal): immagine più voce
 )
+
+// AvatarModelli sono i modelli di avatar.modello e del campo modello di una
+// scena avatar (Kling AI Avatar v2 su fal); il primo è il default.
+var AvatarModelli = []string{"standard", "pro"}
 
 // maxSize è il tetto del file dello storyboard.
 const maxSize = 4 << 20
@@ -33,6 +37,7 @@ type Storyboard struct {
 	Titolo        string              `json:"titolo,omitempty"`
 	Formato       *Formato            `json:"formato,omitempty"`
 	Default       Generazione         `json:"default"`
+	Avatar        *AvatarDefault      `json:"avatar,omitempty"`          // scene avatar
 	TettoCostoUSD *float64            `json:"tetto_costo_usd,omitempty"` // nil = nessun tetto
 	Strict        bool                `json:"strict,omitempty"`          // controlli di rifinitura come errori
 	Riferimenti   map[string][]string `json:"riferimenti,omitempty"`     // insiemi di immagini per nome
@@ -41,6 +46,11 @@ type Storyboard struct {
 
 	// Dir è la cartella dello storyboard: i percorsi sono relativi a questa.
 	Dir string `json:"-"`
+}
+
+// AvatarDefault è il blocco avatar: il modello delle scene avatar che non lo indicano.
+type AvatarDefault struct {
+	Modello string `json:"modello,omitempty"` // standard (default) o pro
 }
 
 // Formato è il formato comune del video: aspect e risoluzione valgono anche per
@@ -71,15 +81,19 @@ type Scene struct {
 	Durata int    `json:"durata,omitempty"` // secondi; video: 0 = default del modello
 
 	// scena video
-	Prompt             string            `json:"prompt,omitempty"`
-	Negative           string            `json:"negative,omitempty"`
-	Preset             []string          `json:"preset,omitempty"`
-	Immagine           string            `json:"immagine,omitempty"`          // primo fotogramma, file o URL
-	UltimoFotogramma   string            `json:"ultimo_fotogramma,omitempty"` // file o URL
-	Usa                []string          `json:"usa,omitempty"`               // insiemi di riferimenti
-	FotogrammaChiave   *FotogrammaChiave `json:"fotogramma_chiave,omitempty"`
-	ContinuaDa         string            `json:"continua_da,omitempty"` // id di una scena precedente
-	CostoDichiaratoUSD *float64          `json:"costo_dichiarato_usd,omitempty"`
+	Prompt           string            `json:"prompt,omitempty"`
+	Negative         string            `json:"negative,omitempty"`
+	Preset           []string          `json:"preset,omitempty"`
+	Immagine         string            `json:"immagine,omitempty"`          // primo fotogramma, file o URL
+	UltimoFotogramma string            `json:"ultimo_fotogramma,omitempty"` // file o URL
+	Usa              []string          `json:"usa,omitempty"`               // insiemi di riferimenti
+	FotogrammaChiave *FotogrammaChiave `json:"fotogramma_chiave,omitempty"`
+	ContinuaDa       string            `json:"continua_da,omitempty"` // id di una scena precedente
+	// fotogrammi intermedi in ordine (file o URL) e inquadrature: valgono
+	// solo coi modelli che li prevedono (story check)
+	FotogrammiIntermedi []string       `json:"fotogrammi_intermedi,omitempty"`
+	Inquadrature        []Inquadratura `json:"inquadrature,omitempty"`
+	CostoDichiaratoUSD  *float64       `json:"costo_dichiarato_usd,omitempty"`
 	Generazione
 
 	// scene clip e immagine
@@ -88,6 +102,13 @@ type Scene struct {
 	// tutte: voce fuori campo, messa al montaggio
 	Voce        string   `json:"voce,omitempty"`
 	RitardoVoce *float64 `json:"ritardo_voce,omitempty"` // secondi dall'inizio della scena; nil = 0
+}
+
+// Inquadratura è una delle inquadrature di una scena video: testo e secondi;
+// la scena dura la loro somma e non ha un prompt suo.
+type Inquadratura struct {
+	Prompt string `json:"prompt"`
+	Durata int    `json:"durata"`
 }
 
 // FotogrammaChiave è l'immagine generata prima della scena e usata come primo
@@ -201,6 +222,9 @@ func (s *Storyboard) Validate() error {
 	if s.TettoCostoUSD != nil && !nonNegative(*s.TettoCostoUSD) {
 		fail("tetto_costo_usd deve essere un importo finito e non negativo in dollari")
 	}
+	if a := s.Avatar; a != nil && a.Modello != "" && !slices.Contains(AvatarModelli, a.Modello) {
+		fail("avatar.modello %q sconosciuto (%s)", a.Modello, strings.Join(AvatarModelli, " o "))
+	}
 	if s.Formato != nil && s.Formato.FPS < 0 {
 		fail("formato.fps deve essere positivo")
 	}
@@ -266,11 +290,11 @@ func (s *Storyboard) Validate() error {
 				fail("%s: una scena immagine vuole la durata in secondi", where)
 			}
 		case Avatar:
-			fail("%s: il tipo avatar non c'è in giv 0.9.0 (arriva con la fase 3, giv avatar); la voce fuori campo va nel campo voce di una scena", where)
+			s.validateAvatar(sc, where, fail, file)
 		case "":
-			fail("%s: tipo mancante (video, clip o immagine)", where)
+			fail("%s: tipo mancante (video, clip, immagine o avatar)", where)
 		default:
-			fail("%s: tipo %q sconosciuto (video, clip o immagine)", where, sc.Tipo)
+			fail("%s: tipo %q sconosciuto (video, clip, immagine o avatar)", where, sc.Tipo)
 		}
 	}
 	if m := s.Montaggio; m != nil {
@@ -303,8 +327,33 @@ func (s *Storyboard) Validate() error {
 
 func (s *Storyboard) validateVideo(sc *Scene, where string, seen map[string]int,
 	fail func(string, ...any), file func(string, string, bool)) {
-	if strings.TrimSpace(sc.Prompt) == "" {
+	if len(sc.Inquadrature) > 0 {
+		// il testo è nelle inquadrature, la durata è la loro somma
+		if sc.Prompt != "" || len(sc.Preset) > 0 {
+			fail("%s: con inquadrature il testo va nelle inquadrature: prompt e preset non valgono", where)
+		}
+		sum := 0
+		for i, q := range sc.Inquadrature {
+			if strings.TrimSpace(q.Prompt) == "" {
+				fail("%s: inquadratura n. %d senza prompt", where, i+1)
+			}
+			if q.Durata < 1 {
+				fail("%s: inquadratura n. %d: durata in secondi interi da 1 in su", where, i+1)
+			}
+			sum += max(q.Durata, 0)
+		}
+		if sc.Durata != 0 && sc.Durata != sum {
+			fail("%s: durata %d diversa dalla somma delle inquadrature (%d s)", where, sc.Durata, sum)
+		}
+	} else if strings.TrimSpace(sc.Prompt) == "" {
 		fail("%s: prompt mancante", where)
+	}
+	for i, p := range sc.FotogrammiIntermedi {
+		if p == "" {
+			fail("%s: fotogrammi_intermedi n. %d vuoto", where, i+1)
+		} else {
+			file(fmt.Sprintf("%s: fotogrammi_intermedi n. %d", where, i+1), p, true)
+		}
 	}
 	if sc.File != "" {
 		fail("%s: file non vale per una scena video (il primo fotogramma è immagine)", where)
@@ -358,6 +407,65 @@ func (s *Storyboard) validateVideo(sc *Scene, where string, seen map[string]int,
 	}
 }
 
+// avatarFields sono i campi di una scena video che valgono anche per una scena avatar.
+var avatarFields = []string{"prompt", "immagine", "costo_dichiarato_usd", "provider", "modello"}
+
+// validateAvatar controlla una scena avatar: immagine e voce sono file della
+// cartella dello storyboard; la scena dura quanto la voce, che guida il labiale
+// dall'inizio e resta nella clip (al montaggio non si aggiunge una seconda volta).
+func (s *Storyboard) validateAvatar(sc *Scene, where string, fail func(string, ...any), file func(string, string, bool)) {
+	if sc.Immagine == "" {
+		fail("%s: immagine mancante (scena avatar)", where)
+	} else {
+		file(where+": immagine", sc.Immagine, false)
+	}
+	if sc.Voce == "" {
+		fail("%s: voce mancante (scena avatar: l'audio che guida il labiale)", where)
+	}
+	if sc.Durata != 0 {
+		fail("%s: durata non vale per una scena avatar (dura quanto la voce)", where)
+	}
+	if sc.RitardoVoce != nil {
+		fail("%s: ritardo_voce non vale per una scena avatar (la voce guida il labiale dall'inizio)", where)
+	}
+	if sc.File != "" {
+		fail("%s: file non vale per una scena avatar (l'immagine del personaggio è immagine)", where)
+	}
+	extra := slices.DeleteFunc(sc.videoFields(), func(f string) bool { return slices.Contains(avatarFields, f) })
+	if len(extra) > 0 {
+		verb := "non valgono"
+		if len(extra) == 1 {
+			verb = "non vale"
+		}
+		fail("%s: %s %s per una scena avatar", where, strings.Join(extra, ", "), verb)
+	}
+	if p := sc.Provider; p != "" && p != "fal" {
+		fail("%s: provider %q: una scena avatar si genera solo con fal", where, p)
+	}
+	if m := sc.Modello; m != "" && !slices.Contains(AvatarModelli, m) {
+		fail("%s: modello %q sconosciuto per una scena avatar (%s)", where, m, strings.Join(AvatarModelli, " o "))
+	}
+	if sc.CostoDichiaratoUSD != nil && !nonNegative(*sc.CostoDichiaratoUSD) {
+		fail("%s: costo_dichiarato_usd deve essere un importo finito e non negativo", where)
+	}
+}
+
+// AvatarModello è il modello della scena avatar: quello della scena, poi
+// avatar.modello, poi il default.
+func (s *Storyboard) AvatarModello(sc *Scene) string {
+	switch {
+	case sc.Modello != "":
+		return sc.Modello
+	case s.Avatar != nil && s.Avatar.Modello != "":
+		return s.Avatar.Modello
+	}
+	return AvatarModelli[0]
+}
+
+// Generata dice se la scena si genera con giv story run (video o avatar) e ha
+// quindi uno stato, una clip e un costo.
+func (sc *Scene) Generata() bool { return sc.Tipo == Video || sc.Tipo == Avatar }
+
 // videoFields sono i campi di una scena video impostati su una scena di altro tipo.
 func (sc *Scene) videoFields() []string {
 	var out []string
@@ -374,6 +482,8 @@ func (sc *Scene) videoFields() []string {
 	add(len(sc.Usa) > 0, "usa")
 	add(sc.FotogrammaChiave != nil, "fotogramma_chiave")
 	add(sc.ContinuaDa != "", "continua_da")
+	add(len(sc.FotogrammiIntermedi) > 0, "fotogrammi_intermedi")
+	add(len(sc.Inquadrature) > 0, "inquadrature")
 	add(sc.CostoDichiaratoUSD != nil, "costo_dichiarato_usd")
 	g := sc.Generazione
 	add(g.Provider != "", "provider")

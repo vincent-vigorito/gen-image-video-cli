@@ -19,7 +19,7 @@ import (
 func TestFetchRedirectPollingFuoriOrigineRifiutatoDownloadSenzaBearer(t *testing.T) {
 	fastPoll(t)
 	var otherAuth, otherHits int32
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&otherHits, 1)
 		if r.Header.Get("Authorization") != "" {
 			atomic.AddInt32(&otherAuth, 1)
@@ -28,9 +28,12 @@ func TestFetchRedirectPollingFuoriOrigineRifiutatoDownloadSenzaBearer(t *testing
 			w.Write([]byte("MP4DATA"))
 			return
 		}
-		fmt.Fprintf(w, `{"status":"completed","unsigned_urls":["http://%s/file"]}`, r.Host)
+		fmt.Fprintf(w, `{"status":"completed","unsigned_urls":["https://%s/file"]}`, r.Host)
 	}))
 	defer other.Close()
+	oldRT := resultTransport
+	resultTransport = other.Client().Transport
+	defer func() { resultTransport = oldRT }()
 	var apiAuthSame int32
 	var api *httptest.Server
 	api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +77,7 @@ func TestFetchRedirectPollingFuoriOrigineRifiutatoDownloadSenzaBearer(t *testing
 	if n := atomic.LoadInt32(&otherAuth); n != 0 {
 		t.Errorf("Authorization arrivata fuori origine %d volte", n)
 	}
-	// stessa origine: la chiave resta
+	// stessa origine: il redirect si segue e la chiave resta
 	if _, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-43", PollingURL: api.URL + "/videos/job-43"}, time.Minute); err != nil {
 		t.Fatal(err)
 	}

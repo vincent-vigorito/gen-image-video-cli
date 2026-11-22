@@ -121,6 +121,9 @@ giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
                                               # modelli disponibili; --caps (con --kind video): capacità e $/s
 giv image   [flag] "<prompt>"                 # genera immagini
 giv video   [flag] "<prompt>"                 # genera video (job asincrono, 1-5 min)
+giv extend  --video <mp4|url> [--duration 2-10] "<come continua>"
+                                              # allunga una clip (xai, job asincrono, a pagamento)
+giv edit    --video <mp4|url> "<cosa cambiare>"  # modifica una clip (xai, job asincrono, a pagamento)
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                               # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
@@ -133,6 +136,8 @@ giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                  [--tutela prodotto|illustrazione] [--strict]
                                               # frase finale dei preset per quel modello, senza chiamate
+giv upscale --video <file|url> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]
+                                              # ingrandisce una clip (openrouter o fal, a pagamento)
 giv version
 ```
 
@@ -162,6 +167,8 @@ Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 | `--image <file\|url>` | primo fotogramma (image-to-video) |
 | `--last-frame <file\|url>` | ultimo fotogramma (xai 1.5 e 1.5-lite, openrouter dove il modello lo prevede) |
 | `--ref <file\|url>` | immagine di riferimento, ripetibile (xai `reference_images`, openrouter `input_references`) |
+| `--keyframe <file\|url>` | fotogramma intermedio, ripetibile e in ordine (fal kling-4.0, al massimo 8) |
+| `--shot "<s>:<testo>"` | inquadratura, ripetibile (fal kling-4.0 e kling-v3-pro): niente prompt né `--preset`, la durata è la somma |
 | `--audio on\|off` | audio nativo; senza flag il default del modello |
 | `--seed <n>` | seed (openrouter dove il modello lo rispetta; xai lo ignora con avviso) |
 | `--param k=v` | parametro passante del modello, ripetibile (openrouter; valore JSON o stringa): solo i parametri che il modello elenca |
@@ -256,6 +263,32 @@ inputs, cost_est_usd, cost_source, warnings}`; serve comunque la chiave del prov
 - `./giv-presets.json` e `~/.config/giv/presets.json` aggiungono o sostituiscono preset
   (vince il primo), nello stesso formato della libreria incorporata
   (`internal/presets/presets.json`); un file malformato esce con codice 2.
+
+## Allungare e modificare una clip (xAI)
+
+```bash
+giv extend --video clip.mp4 --duration 6 "la camera si allontana e mostra la città"
+giv edit --video https://example.com/clip.mp4 "aggiungi la pioggia"
+giv extend --video clip.mp4 --dry-run --max-cost 1.00 "…"       # stima, nessuna chiamata
+```
+
+- **sorgente**: `--video` è un file mp4 locale (riconosciuto dai byte, al massimo 50 MiB),
+  caricato su xAI (`/v1/files`, scade dopo un'ora), oppure un URL `https` che finisce in
+  `.mp4`, passato così com'è (giv non lo scarica). Solo `grok-imagine-video`.
+- **limiti, codice 2 prima di ogni chiamata**: prompt obbligatorio; `extend` aggiunge da 2
+  a 10 s (default 6) a un sorgente di 2-15 s; `edit` vuole un sorgente fino a 8,7 s e non
+  ha `--duration`; non ammessi `--image`, `--audio`, `--resolution`, `--aspect`,
+  `--seed`, `--negative`, `--ref`. Sorgente oltre 720p: avviso (l'uscita resta a 720p),
+  errore con `--strict`. Durata e altezza si leggono con ffprobe: senza ffprobe, o da URL,
+  i limiti non si controllano (avviso).
+- **costo**: la stima prende il caso più caro finché non è verificato: `extend` =
+  (sorgente + aggiunta) × 0,07 $/s + sorgente × 0,01 $/s, `edit` = sorgente × 0,08 $/s.
+  Senza la durata misurata del sorgente (URL o ffprobe assente) la stima non c'è e
+  `--max-cost` rifiuta con codice 2. A fine job il manifest riporta il costo reale di xAI
+  (`cost_usd`).
+- manifest con `command` `extend`/`edit`, `inputs.video` (percorso e impronta, o solo
+  schema e host per un URL); il job resta in `giv-jobs.jsonl` e si recupera con
+  `giv job fetch --provider xai <id>`.
 
 ## Recupero dei job video
 

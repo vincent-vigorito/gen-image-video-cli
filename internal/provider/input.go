@@ -15,6 +15,7 @@ const (
 	MaxInputBytes = 20 << 20 // per immagine
 	MaxInputTotal = 50 << 20 // somma delle immagini di un video
 	MaxRefs       = 14       // --ref per video: il massimo dei modelli (xAI 1.5)
+	MaxKeyframes  = 8        // --keyframe per video: il massimo dei modelli (Kling 4.0)
 
 	// ingressi delle operazioni sulle clip (giv extend, edit, upscale, avatar)
 	MaxVideoBytes = 50 << 20 // clip sorgente: tetto di POST /v1/files di xAI e dell'edit di OpenRouter

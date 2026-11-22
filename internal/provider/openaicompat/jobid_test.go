@@ -26,15 +26,18 @@ func TestVideoRiuscitoRiportaJobID(t *testing.T) {
 		}
 	})
 	t.Run("xai", func(t *testing.T) {
-		var srv *httptest.Server
-		srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// il video sta su una CDN https, scaricata senza chiave dal trasporto di prova
+		cdn := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("MP4DATA")) }))
+		defer cdn.Close()
+		old := resultTransport
+		resultTransport = cdn.Client().Transport
+		defer func() { resultTransport = old }()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/videos/generations":
 				fmt.Fprint(w, `{"request_id":"req-7"}`)
 			case r.URL.Path == "/videos/req-7":
-				fmt.Fprintf(w, `{"status":"done","video":{"url":%q}}`, srv.URL+"/file.mp4")
-			case r.URL.Path == "/file.mp4":
-				w.Write([]byte("MP4DATA"))
+				fmt.Fprintf(w, `{"status":"done","video":{"url":%q}}`, cdn.URL+"/file.mp4")
 			default:
 				t.Errorf("richiesta inattesa %s %s", r.Method, r.URL.Path)
 			}

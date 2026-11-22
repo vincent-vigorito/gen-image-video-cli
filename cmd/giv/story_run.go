@@ -134,7 +134,7 @@ func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) 
 		if target == nil {
 			return nil, usageError("--scene %s: scena inesistente in %s", only, path)
 		}
-		if target.Tipo != story.Video {
+		if !target.Generata() {
 			return nil, usageError("--scene %s: scena %s, niente da generare", only, target.Tipo)
 		}
 		if newKeyframe && target.FotogrammaChiave == nil {
@@ -167,7 +167,7 @@ func runStory(ctx context.Context, path, only string, newKeyframe, newJob bool) 
 	r.sc.out = filepath.Join(s.Dir, storyClipDir)
 	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: st.Path(), Titolo: s.Titolo, CapUSD: s.TettoCostoUSD}
 	for i := range s.Scene {
-		if sc := &s.Scene[i]; sc.Tipo == story.Video && (only == "" || sc.ID == only) {
+		if sc := &s.Scene[i]; sc.Generata() && (only == "" || sc.ID == only) {
 			r.order = append(r.order, sc)
 		}
 	}
@@ -212,7 +212,7 @@ func (r *storyRunner) stopped(err error) error {
 	var errs []error
 	for _, id := range r.failed {
 		redo := fmt.Sprintf("per rifarla: giv story run --scene %s %s", id, r.path)
-		if sc := r.s.Scena(id); sc == nil || sc.Tipo != story.Video {
+		if sc := r.s.Scena(id); sc == nil || !sc.Generata() {
 			redo = "non è più una scena video dello storyboard"
 		}
 		errs = append(errs, fmt.Errorf("scena %s fallita sul provider (spesa contata): %s; %s", id, r.st.Scenes[id].Error, redo))
@@ -272,7 +272,7 @@ func (r *storyRunner) pending() []*story.Scene {
 		scene := &r.s.Scene[i]
 		seen[scene.ID] = true
 		if r.jobOf(scene.ID) != nil {
-			if scene.Tipo != story.Video {
+			if !scene.Generata() {
 				scene = &story.Scene{ID: scene.ID, Tipo: story.Video}
 			}
 			out = append(out, scene)
@@ -371,6 +371,13 @@ func (r *storyRunner) plan(scenes []*story.Scene, all bool) error {
 			missing = append(missing, c.ID)
 		}
 		scene := r.s.Scena(c.ID)
+		if job := r.sc.clips[c.ID]; job != nil {
+			// la chiave di una scena avatar serve solo qui: senza, nessun avvio
+			// e nessuna scrittura dello stato, come per le scene video
+			if _, err := r.sc.client(job.provider); err != nil {
+				return fmt.Errorf("scena %s: %w", c.ID, err)
+			}
+		}
 		if r.needKeyframe(scene) && scene.FotogrammaChiave.CostoDichiaratoUSD == nil {
 			missing = append(missing, c.ID+" (fotogramma_chiave)")
 		}
@@ -558,6 +565,9 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 		r.save()
 		return err
 	}
+	if scene.Tipo == story.Avatar {
+		return r.launchAvatar(ctx, i, scene, ss, fail)
+	}
 	// copie private degli ingressi: il provider legge solo file letti qui
 	// dentro la cartella dello storyboard e controllati
 	work, err := montage.TempDir("giv-story-") // rifiuta una TMPDIR condivisa senza sticky bit
@@ -570,10 +580,18 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 
 	req := job.req
 	req.Refs = slices.Clone(job.req.Refs)
+	req.Keyframes = slices.Clone(job.req.Keyframes)
 	shown := newManifestInputs(req) // come nello storyboard
 	if err := r.staleKeyframe(scene); err != nil {
 		return err // nessuna richiesta: il fotogramma si rigenera solo con --new-keyframe
 	}
+	// fotogrammi intermedi da URL scaricati e controllati prima del fotogramma
+	// chiave a pagamento: uno non valido ferma la scena senza spesa
+	remote := provider.VideoRequest{LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: req.Keyframes}
+	if err := tmp.resolveURLs(&remote, "--keyframe"); err != nil {
+		return fail(err)
+	}
+	req.Keyframes = remote.Keyframes
 	switch {
 	case scene.FotogrammaChiave != nil:
 		if r.needKeyframe(scene) {
@@ -597,18 +615,18 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 			return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 		}
 		req.Image = p
-		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs})
+		shown = newManifestInputs(provider.VideoRequest{Image: r.s.Path(ss.Keyframe.File), LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: job.req.Keyframes})
 	case scene.ContinuaDa != "":
 		p, err := r.lastFrame(ctx, scene, work)
 		if err != nil {
 			return fail(err)
 		}
 		req.Image = p
-		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs})
+		shown = newManifestInputs(provider.VideoRequest{Image: "ultimo fotogramma di " + scene.ContinuaDa, LastFrame: req.LastFrame, Refs: req.Refs, Keyframes: job.req.Keyframes})
 	}
 	for _, in := range videoInputs(&req) {
-		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) {
-			continue
+		if *in.path == "" || isURL(*in.path) || strings.HasPrefix(*in.path, work+string(filepath.Separator)) || slices.Contains(tmp, *in.path) {
+			continue // URL e copie già private
 		}
 		rel, err := r.s.Rel(*in.path)
 		if err != nil {
@@ -626,7 +644,15 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 		return r.saveFiles(slug, res.Media)
 	}
 
-	ch := story.Charge{Kind: story.ChargeClip, CostEstUSD: job.plan.costExact}
+	return r.startClip(ctx, i, scene, ss, job.plan.costExact, job.run, fail, "story video")
+}
+
+// startClip riserva la generazione della clip della scena (stima est, senza
+// stima il costo dichiarato), la avvia con run e registra lo stato: all'avvio
+// del job (partito, con l'id), alla fine (fatto) o all'errore.
+func (r *storyRunner) startClip(ctx context.Context, i int, scene *story.Scene, ss *story.SceneState, est *float64,
+	run func(context.Context) (manifest, error), fail func(error) error, command string) error {
+	ch := story.Charge{Kind: story.ChargeClip, CostEstUSD: est}
 	if ch.CostEstUSD == nil {
 		ch.CostDeclaredUSD = scene.CostoDichiaratoUSD
 	}
@@ -649,7 +675,7 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 	}
 	defer func() { provider.OnJobStart = prev }()
 
-	man, err := job.run(ctx)
+	man, err := run(ctx)
 	if err != nil {
 		var se *httpx.StartError
 		switch {
@@ -668,7 +694,7 @@ func (r *storyRunner) launch(ctx context.Context, i int, scene *story.Scene) err
 		return fail(err)
 	}
 	r.thisRun[scene.ID] = "generata"
-	return r.done(scene, ss, man, "story video")
+	return r.done(scene, ss, man, command)
 }
 
 // reserve ricontrolla il tetto con la spesa fatta fin qui e registra la
@@ -942,7 +968,7 @@ func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 		ss.Status = story.Partito
 		r.save()
 		hint := ""
-		if sc := r.s.Scena(scene.ID); sc != nil && sc.Tipo == story.Video {
+		if sc := r.s.Scena(scene.ID); sc != nil && sc.Generata() {
 			hint = fmt.Sprintf("; se non si scarica più, per abbandonarlo e rifare la scena: giv story run --scene %s --new-job %s", scene.ID, r.path)
 		}
 		return fmt.Errorf("%w (il job resta: si recupera alla prossima esecuzione%s)", err, hint)
@@ -957,7 +983,7 @@ func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 	man.done(files, res)
 	r.man.Recovered++
 	r.thisRun[scene.ID] = "recuperata"
-	return r.done(scene, ss, man, "story video")
+	return r.done(scene, ss, man, storyCommand(scene))
 }
 
 // done registra la nuova ripresa della scena (la precedente resta in previous,
@@ -1015,7 +1041,7 @@ func (r *storyRunner) summary() {
 	for i := range r.s.Scene {
 		scene := &r.s.Scene[i]
 		row := sceneRun{ID: scene.ID, Tipo: scene.Tipo}
-		if scene.Tipo != story.Video {
+		if !scene.Generata() {
 			row.File = scene.File
 			r.man.Scenes = append(r.man.Scenes, row)
 			continue
