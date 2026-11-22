@@ -87,9 +87,10 @@ func (o *Op) Mode(req provider.ClipRequest) string {
 
 // CheckOpFlags controlla req sull'operazione o del provider prov prima di
 // leggere i file (o nil = modello che non fa l'operazione): modello, flag
-// ammessi e obbligatori, valori di --duration, --factor e --mode. set sono i
-// flag dei comandi sulle clip indicati dall'utente, senza --, con "prompt" se
-// c'è. Un rifiuto è un *Rejection (codice 2).
+// ammessi e obbligatori (questi sul valore effettivo in req), valori di
+// --duration, --factor e --mode. set sono i flag dei comandi sulle clip
+// indicati dall'utente, senza --, con "prompt" se c'è. Un rifiuto è un
+// *Rejection (codice 2).
 func CheckOpFlags(prov string, o *Op, ops []Op, req provider.ClipRequest, set []string) error {
 	if o == nil {
 		models := OpModels(ops, req.Op)
@@ -109,7 +110,7 @@ func CheckOpFlags(prov string, o *Op, ops []Op, req provider.ClipRequest, set []
 		return reject("--%s non ammesso da %s", f, who)
 	}
 	for _, f := range o.Required {
-		if slices.Contains(set, f) {
+		if opValue(req, f) {
 			continue
 		}
 		if f == "prompt" {
@@ -152,6 +153,30 @@ func CheckOpSource(prov string, o *Op, req provider.ClipRequest, strict bool) ([
 		warns = append(warns, msg)
 	}
 	return warns, nil
+}
+
+// opValue dice se req ha un valore effettivo per il flag f ("prompt" per il
+// prompt): un flag indicato vuoto, o a zero, non soddisfa un obbligatorio.
+func opValue(req provider.ClipRequest, f string) bool {
+	switch f {
+	case "prompt":
+		return strings.TrimSpace(req.Prompt) != ""
+	case "video":
+		return strings.TrimSpace(req.Video) != ""
+	case "from":
+		return strings.TrimSpace(req.From) != ""
+	case "image":
+		return strings.TrimSpace(req.Image) != ""
+	case "audio":
+		return strings.TrimSpace(req.Audio) != ""
+	case "mode":
+		return strings.TrimSpace(req.Mode) != ""
+	case "duration":
+		return req.Duration > 0
+	case "factor":
+		return req.Factor > 0
+	}
+	return false
 }
 
 func (o *Op) who(prov string) string { return fmt.Sprintf("giv %s con %s/%s", o.Op, prov, o.Model) }
