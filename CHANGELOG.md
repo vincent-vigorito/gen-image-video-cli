@@ -4,6 +4,81 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.12.0] - in preparazione
+
+> **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
+> `giv voice` (xAI, a pagamento: frazioni di centesimo per spot); il kit (`kit.json`) e il
+> controllo tecnico (`giv qc`) sono gratuiti e lavorano in locale. I comandi e gli
+> storyboard della 0.11.0 danno lo stesso risultato, salvo il picco audio, ora entro
+> -1 dBTP.
+
+### Aggiunto
+
+- **`giv voice "<testo>"`** (xAI, `POST /v1/tts`, chiave `XAI_API_KEY`): voce fuori campo
+  WAV (24 kHz) da un testo fra virgolette o da `--text-file` (UTF-8, al più 15.000
+  caratteri), con i tempi per carattere in `<nome>.tempi.json`. Voce predefinita `eve`,
+  scelta dopo l'ascolto dei campioni in italiano; lingua `it` (`--lang` BCP-47 o `auto`),
+  `--speed` da 0,7 a 1,5, `--style` (solo gemini: xai lo ignora con un avviso),
+  `--pronuncia <file.json>` (dizionario di al più 200 parole inviato a xAI, codice 2 fuori
+  dai limiti prima di qualsiasi chiamata), `--voices` (elenco delle voci, gratuito),
+  `--out`, `--name` (un file che c'è già non si sovrascrive: `-2`, `-3`…), `--dry-run`,
+  `--max-cost`. Prezzo 15 $ per milione di caratteri del testo inviato (uno spot da 375
+  caratteri costa circa 0,006 $): xAI non riporta il costo, il manifest ha la stima
+  (`cost_est_usd`). Una sola richiesta, mai ripetuta: un esito incerto (redirect, errore
+  del server, rete, risposta non valida) esce con codice 5 e una riga `failed` nel
+  registro; voce sconosciuta codice 3.
+- **Kit di marca e personaggi** (`kit.json`) e **`giv kit check <kit.json>`**: colori, logo,
+  font, cartello finale, musica e volume della marca, personaggi con immagini di
+  riferimento, descrizione e tutela, voce e pronunce, scritti una volta. Il kit è in sola
+  lettura e chiuso nella sua cartella (percorsi relativi, anche attraverso i link, solo
+  file normali, niente URL). `giv kit check` controlla forma e valori (campo sconosciuto,
+  valore fuori dai limiti, file fuori dalla cartella o non valido: codice 2, un problema
+  per riga) ed elenca i file con le misure, senza rete né spesa e senza scrivere niente;
+  avvisa per logo senza trasparenza, font non leggibile, troppi riferimenti per i modelli
+  video, descrizione lunga, `velocita` con Gemini. Esempio in `examples/kit/` (segnaposto
+  e font libero DejaVu Sans Bold con la sua licenza).
+- **`giv qc <file|storyboard.json>`**: controllo tecnico in locale con `ffprobe` e
+  `ffmpeg`, gratuito, senza scrivere file. Controlli `duration`, `size`, `fps`, `audio`,
+  `black`, `freeze` (esclusi i tratti neri), `silence`, `loudness`, `peak` (picco vero
+  sopra -1 dBTP avviso, sopra 0 difetto) e `streams`, ognuno `ok`, `avviso` o `difetto`
+  coi tratti trovati; attese `--expect-duration`, `--expect-size`, `--expect-fps`,
+  `--expect-audio`, `--expect-loudness`; soglie `--black-min`, `--freeze-min`,
+  `--freeze-noise`, `--silence-min`, `--silence-noise`. Con `--for <canali>` il confronto
+  col profilo di ogni canale di `giv export` (misure, fps, durata, codec, indice `moov` in
+  testa, volume). Con uno storyboard una riga per scena (la clip in uso, con durata e
+  audio chiesti) e una per montato di `giv story cut`; scene non generate e montati che
+  mancano sono `assente`. Esce con 0 anche con difetti, con `--strict` un difetto esce
+  con 1. Avvisa e basta: non corregge, non rigenera, non spende. I tratti si leggono
+  mentre ffmpeg scrive: nessun evento si perde anche con un'analisi lunga.
+
+### Modificato
+
+- **Picco audio entro -1 dBTP** nei file di `giv post mix`, `giv export` e `giv story cut`:
+  la normalizzazione chiede -1,5 dBTP e lascia il margine alla codifica AAC, che alzava il
+  picco oltre -1 (sullo spot di prova della 0.11.0: da -0,8 a -1,3 dBTP, volume integrato
+  -14,1 LUFS come prima). Il grafo dei filtri cambia solo nel parametro del picco.
+- **Voce in ritardo** (`ritardo_voce` nello storyboard, `--voice-at` in `giv post mix`): il
+  silenzio davanti alla voce si genera invece di tenerlo in memoria con `adelay`, così la
+  memoria non cresce col ritardo con nessuna versione di ffmpeg (con ffmpeg 7.1 non
+  cresceva già); la voce parte allo stesso campione di prima. Senza ritardo il grafo non
+  cambia.
+
+### Sicurezza
+
+- Il file `.ass` di lavoro convertito da un `.srt` (sottotitoli di `giv story cut` nei
+  margini sicuri) torna a 0600 prima di essere riscritto: prima restava coi permessi con
+  cui l'aveva creato ffmpeg.
+
+### Limiti noti
+
+- **Voce su xAI**: xAI conserva richieste e risposte per 30 giorni: solo testi di
+  marketing, mai dati di clienti. I tempi per carattere sono quelli di ciò che la voce ha
+  detto (col dizionario, la pronuncia): giv li riallinea al testo scritto; se mancano o
+  non tornano, solo il WAV, con un avviso.
+- **`giv qc`, scene quasi ferme**: con la soglia predefinita (`--freeze-noise -60`) una
+  ripresa quasi ferma ma non immobile può non risultare ferma; -50 la trova più spesso, a
+  costo di qualche falso allarme. Soglie da tarare sulle clip vere.
+
 ## [0.11.0] - 2026-11-22
 
 > **Tutto in locale**: i comandi nuovi lavorano con `ffmpeg` e `ffprobe` sui file che ci

@@ -537,8 +537,8 @@ giv voice --text-file testi/s2.txt --voice eve --lang it --out voce
 giv voice --voices
 ```
 
-- **provider**: xAI (chiave `XAI_API_KEY`), `POST /v1/tts`. La voce predefinita `eve` è
-  **provvisoria**: la scelta finale si fa dopo l'ascolto. Lingua predefinita `it`
+- **provider**: xAI (chiave `XAI_API_KEY`), `POST /v1/tts`. Voce predefinita `eve`,
+  scelta dopo l'ascolto dei campioni in italiano. Lingua predefinita `it`
   (`--lang` accetta un codice BCP-47 o `auto`). `--style` vale solo per gemini: xai lo
   ignora con un avviso (per ritmo e pause: `--speed` e i tag nel testo, come `[pause]`).
 - **testo**: fra virgolette oppure `--text-file` (UTF-8), al massimo 15.000 caratteri per
@@ -650,7 +650,9 @@ logo in pixel (`logo.box`, `end_card.logo_box`), i margini e `duration_out`.
   (default 0); la parte oltre la fine del video si taglia;
 - `--loudness <LUFS>`: volume finale in LUFS integrati, da -70 a -5, misurato e corretto in
   due passate (`loudnorm`); default **-14**, la convenzione dei social (nessuna fonte
-  ufficiale, quindi impostabile); `off` lascia il volume com'è.
+  ufficiale, quindi impostabile); `off` lascia il volume com'è. Il picco vero del file
+  scritto resta entro -1 dBTP anche dopo la codifica AAC (la normalizzazione chiede
+  -1,5 dBTP per lasciare il margine).
 
 L'audio del video resta e si somma a voce e musica (senza audio si parte dal silenzio); il
 video si copia senza ricodifica se è già H.264. Serve almeno uno fra `--music`, `--voice` e
@@ -1073,7 +1075,8 @@ montaggio resta quello di prima):
   parlano le voci (serve almeno una scena con `voce`) e `sfuma_fine` sono i secondi di
   dissolvenza in chiusura (da 0 a 60).
 - **`volume`**: volume finale in LUFS integrati, da -70 a -5 (es. -14, la convenzione dei
-  social), misurato e corretto in due passate; senza il campo il volume resta com'è.
+  social), misurato e corretto in due passate, col picco vero entro -1 dBTP; senza il
+  campo il volume resta com'è.
 
 Testi di titoli e cartello: alla lettera (al più 2000 byte, UTF-8), in un file `.ass`
 generato da giv, mai nella stringa dei filtri di ffmpeg. Font, logo e musica devono stare
@@ -1184,7 +1187,8 @@ provider, ricette (reference di stile, image-to-video, spot da foto di prodotto,
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
 allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
-con `giv post`, foglio di contatto e fotogrammi, esportazione per canale),
+con `giv post`, foglio di contatto e fotogrammi, esportazione per canale, voce con
+`giv voice`, kit di marca, controllo tecnico con `giv qc`),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -1212,7 +1216,8 @@ internal/presets/         libreria dei preset (presets.json incorporato) e compo
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
 internal/kit/             kit di marca e personaggi: lettura, controlli e percorsi chiusi nella cartella del kit
-internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export) e controllo di giv qc
+internal/speech/          voce: richiesta comune ai provider, tempi per carattere, prezzi, dizionario delle pronunce, WAV
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export), controllo di giv qc e sottotitoli dai testi
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto

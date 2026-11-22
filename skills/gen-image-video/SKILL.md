@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI, frazioni di centesimo, con dizionario delle pronunce), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -72,6 +72,14 @@ giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
                                                 # GIF animata (default 480 px, 12 fps), gratis
 giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
                                                 # un file per canale col suo profilo, in locale e gratis
+giv voice   [--voice eve] [--lang it] [--speed 0.7-1.5] [--pronuncia <f.json>] [--out D] [--name S]
+            [--dry-run] [--max-cost <usd>] "<testo>" | --text-file <f>
+                                                # voce fuori campo WAV + tempi per carattere (xai, a pagamento)
+giv voice   --voices                            # elenco delle voci del provider (gratis)
+giv kit check <kit.json>                        # controlla il kit di marca e personaggi, gratis, non scrive niente
+giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>]
+            [--expect-audio on|off] [--for <canali>] [--strict]
+                                                # controllo tecnico in locale (neri, fermi, muti, volume, canali), gratis
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
@@ -136,6 +144,21 @@ oppure `--frames 1-100`, `--cols 1-12` (default 4, al più 200 riquadri), `--lab
 1:1; tiktok 9:16; youtube 16:9, Shorts in 9:16/1:1/4:5; linkedin 16:9) `[--fit] [--focus]
 [--loudness -14|off]` → `<nome>-<canale>-<formato>.mp4` per canale; durata fuori dai
 limiti del canale = codice 2 prima di scrivere; convenzioni in `exports[].convention`.
+`voice` (xai, chiave `XAI_API_KEY`): testo fra virgolette o `--text-file` (al più 15.000
+caratteri), voce predefinita `eve`, `--lang it` (BCP-47 o `auto`), `--speed 0.7-1.5`,
+`--pronuncia <file.json>` (`{"Swerpify": "suèrpifai"}`, al più 200 parole, parola intera e
+senza maiuscole) → `<nome>.wav` (24 kHz) e `<nome>.tempi.json` (`chars[]` con `c`,
+`start`, `end`); stima `cost_est_usd` (xai non riporta il costo). Codice 5 = esito
+incerto, la voce può essere stata addebitata: **non rilanciare** senza controllare.
+`kit check <kit.json>`: forma, valori e file del kit (dentro la sua cartella, solo file
+normali) con le misure; JSON `files`, `characters`, `voice`, `pronunciations`,
+`warnings`; kit non valido = codice 2, un problema per riga.
+`qc` (locale, non scrive niente, nemmeno `giv-log.jsonl`): controlli `duration`, `size`,
+`fps`, `audio`, `black`, `freeze`, `silence`, `loudness`, `peak`, `streams`, ognuno
+`ok`/`avviso`/`difetto`; soglie `--black-min 0.5`, `--freeze-min 2`, `--freeze-noise -60`,
+`--silence-min 2`, `--silence-noise -50`; `--for` aggiunge `channels[]` col profilo di ogni
+canale; con uno storyboard `scenes[]` e `outputs[]` (`assente` se non ancora fatti; le
+`--expect-*` valgono solo su un file); `--strict` = codice 1 con un difetto, senza = 0.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -437,15 +460,21 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
      storyboard (una riga per scena): guardarlo per primo; `"foglio_contatto": false`
      per non farlo.
 
-**Voce fuori campo** (sintesi locale, nessun costo; giv non sintetizza la voce, riceve i
-file già pronti):
+**Voce fuori campo** (`giv voice`, xAI: 15 $ per milione di caratteri, uno spot da 30 s
+costa meno di un centesimo):
 
 1. Un testo breve per scena: l'italiano parlato va a circa 15 caratteri al secondo, una
    scena da 5 s regge una settantina di caratteri.
-2. Sintesi con la voce locale del progetto: si fissa una voce di riferimento e si clona la
-   stessa voce per tutte le scene, così il timbro non cambia fra una scena e l'altra
-   (circa 12 s di calcolo per secondo di audio). Un WAV per scena: `voce/s1.wav`,
-   `voce/s2.wav`…
+2. Una voce per scena, sempre la stessa (`eve`, predefinita), così il timbro non cambia
+   fra una scena e l'altra; i nomi propri con il dizionario delle pronunce:
+
+   ```bash
+   ./bin/giv voice --dry-run --pronuncia pronunce.json "Swerpify ti porta dove vuoi."   # stima
+   ./bin/giv voice --pronuncia pronunce.json --out voce --name s1 --max-cost 0.01 \
+     "Swerpify ti porta dove vuoi."            # → voce/s1.wav e voce/s1.tempi.json
+   ```
+
+   Ascoltare il WAV prima di montare; dopo un codice 5 non rilanciare alla cieca.
 3. Ogni voce deve finire prima che parta quella della scena successiva:
    `ffprobe -v error -show_entries format=duration -of csv=p=0 voce/s1.wav`.
    `giv story check` lo controlla sulla linea del tempo del montaggio (durate,
@@ -454,8 +483,8 @@ file già pronti):
    bene.
 4. Nello storyboard `"voce": "voce/s1.wav"` sulla scena, e `"ritardo_voce": 1.5` per
    farla partire dopo. I tempi delle frasi per i sottotitoli (`montaggio.sottotitoli`) si
-   ricavano dalla trascrizione automatica del WAV, a partire dall'inizio della scena:
-   `giv story cut` sposta da solo le righe del `ritardo_voce`.
+   ricavano da `voce/s1.tempi.json` (tempi per carattere), a partire dall'inizio della
+   scena: `giv story cut` sposta da solo le righe del `ritardo_voce`.
 
 **Rifinire uno spot in locale** (gratis, nessuna chiamata; ogni passo scrive un file nuovo
 in `--out` e ne dà il percorso in `files[0].path` del JSON):
@@ -485,6 +514,26 @@ in `--out` e ne dà il percorso in `files[0].path` del JSON):
 per i video guardare un foglio di contatto (`giv sheet out/clip.mp4 --frames 8 --labels`,
 o `giv sheet storyboard.json --labels` per tutte le scene) o l'ultimo fotogramma
 (`giv frame --video out/clip.mp4 --last`) e controllare: stile coerente, palette giusta, **nessun testo/lettera** indesiderato.
+
+**Controllo tecnico prima di consegnare** (gratis, in locale; avvisa e basta, non corregge
+e non rigenera):
+
+```bash
+./bin/giv qc out/clip.mp4 --expect-duration 5 --expect-audio off   # una clip
+./bin/giv qc storyboard.json                                        # clip in uso e montati
+./bin/giv qc out/spot-9x16.mp4 --for instagram,tiktok --strict      # profilo dei canali
+```
+
+- `difetto` (troppo corta, nera o ferma o muta per metà della durata, misure o fps
+  sbagliati, picco sopra 0 dBTP): rigenerare è a pagamento, va chiesto (`giv story run
+  --scene <id> --new-job`). `avviso`: valutare guardando il foglio di contatto.
+- Una ripresa quasi ferma sfugge alla soglia predefinita: `--freeze-noise -50`.
+- Gli avvisi di canale (codec, indice `moov`, volume, misure dello stesso formato) li
+  sistema `giv export`.
+
+**Kit di marca e personaggi**: prima di usarlo `./bin/giv kit check kit.json` (gratis):
+file con le misure, avvisi su logo senza trasparenza, font, riferimenti e descrizione;
+codice 2 con un problema per riga se qualcosa non va. Esempio in `examples/kit/`.
 
 ## Costi
 
@@ -521,6 +570,8 @@ o `giv sheet storyboard.json --labels` per tutte le scene) o l'ultimo fotogramma
   sorgente, con il costo vero di xAI in `cost_usd` a fine job e la stima accanto; extend
   ed edit gemini come `giv video` gemini; upscale openrouter senza stima (da URL), con
   `cost_usd` di openrouter; upscale fal a secondi per fascia, solo stima.
+- Voce: xai 15 $ per milione di caratteri del testo inviato (le pronunce non contano);
+  stima `cost_est_usd` nel manifest, xai non riporta il costo. Kit e `giv qc` gratis.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 
