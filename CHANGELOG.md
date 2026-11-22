@@ -4,6 +4,76 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.10.0] - in preparazione
+
+### Aggiunto
+
+- **`giv extend` e `giv edit`** (xAI, `grok-imagine-video`): allungano una clip di 2-10 s
+  (`--duration`, default 6) o la modificano col prompt. `--video` è un file mp4 locale
+  (al massimo 50 MiB, caricato su xAI con scadenza di un'ora) o un URL `https` che finisce
+  in `.mp4`. Limiti del sorgente (2-15 s per extend, fino a 8,7 s per edit) controllati
+  con ffprobe; stima sul caso più caro finché non è verificato; il manifest riporta il
+  costo reale di xAI (`cost_usd`).
+- **`giv upscale`** (OpenRouter, `black-forest-labs/flux-video-upscale`): `--factor` 1,5-3
+  (default 2), `--mode precise|creative` (default `precise`), prompt facoltativo; un file
+  locale va come data URI (non documentato da OpenRouter: se lo rifiuta serve un URL
+  `https`). Stima a megapixel-secondo sulle misure del sorgente.
+- **`giv avatar`** (fal, Kling AI Avatar v2): un personaggio che parla da `--image` e
+  `--audio` (wav o mp3 locale), `--model standard|pro`; la clip dura quanto l'audio. Stima
+  sulla durata dell'audio; oltre 60 s un avviso (con `--strict` codice 2).
+- I comandi sulle clip hanno i controlli di `giv video` prima di ogni chiamata, `--dry-run`,
+  `--max-cost`, `--strict`, `--timeout`, manifest con `command` e `inputs` e job
+  recuperabili con `giv job fetch`. Senza `--provider` vale il provider dell'operazione.
+- **Provider fal** (chiave `FAL_KEY`): `giv video --provider fal` con le schede
+  `kling-v3-pro` (default) e `seedance-2.0-ref`, capacità, regole e prezzi fissati in giv
+  (`giv models --provider fal --kind video --caps`); coda di fal con avvio non ripetuto,
+  immagini locali caricate sullo storage di fal con scadenza di un'ora, `giv job fetch
+  --provider fal`.
+- **Storyboard**:
+  - `ritardo_voce` per scena: la voce parte dopo l'inizio della scena; `giv story cut`
+    ritarda voce e righe dei sottotitoli (in una copia del file);
+  - `giv story check` avvisa quando una voce si sovrappone a quella della scena successiva
+    o supera la fine del montaggio, sulla linea del tempo con durate, dissolvenze e
+    ritardi;
+  - scene `avatar` (immagine e voce, modello `standard` o `pro`, blocco `avatar` per il
+    default), generate da `giv story run` con fal con la stessa riserva, lo stesso tetto e
+    lo stesso recupero dei job delle scene video; con `tetto_costo_usd` serve la durata
+    della voce misurata;
+  - `giv story run --scene <id> --new-job` abbandona un job partito che non si scarica più
+    (addebito contato, job fra le riprese precedenti) e ne avvia uno nuovo.
+
+### Modificato
+
+- Con `--max-cost`, una configurazione ammessa dal modello ma senza tariffa nel listino
+  (audio o risoluzione non indicati) rende la stima insufficiente: codice 2 col nome della
+  configurazione e il flag da indicare. Per esempio `google/gemini-omni-1.2-flash` vuole
+  `--audio on`. Senza `--max-cost` stima e piano non cambiano.
+- `giv video` via OpenRouter rifiuta con codice 2, prima della chiamata, `--image` con
+  `--ref` sui modelli `x-ai/…` (OpenRouter risponde 400) e propone `--provider xai`.
+- `giv image` su OpenRouter non ripete più da solo la richiesta dopo un errore del server o
+  un timeout e non segue redirect: l'immagine potrebbe essere stata generata e pagata
+  (codice 5 con un suggerimento).
+- I file generati non sovrascrivono mai un file che c'è già, né seguono un link al suo
+  posto: il nuovo prende il suffisso `-2`, `-3`…
+- Il motivo di un job fallito riporta solo codice e messaggio del provider, ripuliti, non
+  più il campo `error` così com'è.
+
+### Sicurezza
+
+- I risultati indicati dal provider fuori dalla sua API si scaricano solo da `https` verso
+  indirizzi pubblici (controllati sull'indirizzo effettivo), senza chiave né credenziali,
+  coi redirect ricontrollati e senza `Referer`; video e immagini di xai sempre senza
+  chiave. I messaggi d'errore dei provider sono filtrati: niente corpo grezzo, URL ridotti
+  a schema e host.
+- Avvii a pagamento e caricamenti di file non seguono redirect e non si ripetono da soli.
+- Montaggio e scene avatar lavorano in una cartella privata e si fermano se `TMPDIR` o una
+  cartella sopra è scrivibile da altri senza sticky bit; `giv story cut` tiene aperta la
+  cartella dello storyboard fino alla pubblicazione del file finale, che compare solo
+  completo.
+- `giv story run`: se lo stato col costo reale del fotogramma chiave non si salva, la
+  scena si ferma prima del video; il job lasciato con `--new-job` si controlla come quelli
+  da recuperare.
+
 ## [0.9.1] - 2026-11-21
 
 ### Aggiunto
