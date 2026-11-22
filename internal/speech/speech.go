@@ -1,0 +1,151 @@
+// Package speech è la base della voce di giv (giv voice e, nello storyboard,
+// la voce delle scene): richiesta e risultato comuni ai provider, controlli
+// prima di spendere, prezzi e stima, dizionario delle pronunce, tempi per
+// carattere e lettura del WAV. Nessuna chiamata di rete: i provider stanno in
+// internal/provider e implementano Synthesizer.
+package speech
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+)
+
+// Provider della voce.
+const (
+	XAI    = "xai"
+	Gemini = "gemini"
+)
+
+// Limiti di giv, controllati prima di ogni richiesta.
+const (
+	// MaxTextChars: caratteri per richiesta. xAI ne accetta 60.000; giv si
+	// ferma prima (circa un quarto d'ora di parlato) perché la risposta, un
+	// WAV in base64, deve stare entro MaxResponseBytes.
+	MaxTextChars = 15000
+	// MaxResponseBytes: risposta del provider (audio e tempi).
+	MaxResponseBytes = 160 << 20
+	// MaxTextFileBytes: file del testo (--text-file).
+	MaxTextFileBytes = 256 << 10
+	// MinSpeed e MaxSpeed: velocità ammesse (xAI).
+	MinSpeed, MaxSpeed = 0.7, 1.5
+	// SampleRate: frequenza del WAV chiesto al provider.
+	SampleRate = 24000
+)
+
+// Predefiniti della voce. La voce xAI è provvisoria fino alla scelta dopo
+// l'ascolto (decisione K4).
+const (
+	DefaultProvider = XAI
+	DefaultLanguage = "it"
+	DefaultXAIVoice = "eve"
+)
+
+// Request è una richiesta di voce, uguale per tutti i provider.
+type Request struct {
+	Provider string     // xai, gemini; "" = DefaultProvider
+	Model    string     // modello (gemini); xai non ne ha
+	Voice    string     // "" = la voce predefinita del provider
+	Language string     // BCP-47 o auto; "" = DefaultLanguage
+	Speed    float64    // 0 = velocità del provider (xai 1.0)
+	Style    string     // stile a parole (gemini); xai lo ignora con un avviso
+	Text     string     // testo da dire, come scritto (i sottotitoli usano questo)
+	Dict     Dictionary // pronunce: parola scritta -> come dirla
+}
+
+// Result è la voce generata.
+type Result struct {
+	Audio     []byte     // WAV
+	WAV       WAVInfo    // misure lette dal file
+	DurationS float64    // durata misurata sul WAV
+	Timings   []CharTime // tempi per carattere; nil = il provider non li ha dati
+	Chars     int        // caratteri fatturati (xai: quelli del testo inviato)
+	CostUSD   float64    // costo riportato dal provider; 0 = non riportato
+	// stima dai consumi riportati (gemini: token), accanto a quella da listino
+	UsageUSD    float64
+	UsageSource string
+	Warnings    []string // risposta tollerata (tempi scartati, durate diverse…)
+}
+
+// Voice è una voce dell'elenco del provider.
+type Voice struct {
+	ID       string `json:"voice_id"`
+	Name     string `json:"name,omitempty"`
+	Language string `json:"language,omitempty"`
+}
+
+// Synthesizer genera una voce: una sola richiesta a pagamento, mai ripetuta.
+// Gli errori sono classificati con httpx.Start: un 4xx o una connessione mai
+// aperta dicono che la richiesta non è partita; ogni altro esito (3xx, 5xx,
+// rete, risposta non valida) è un *httpx.StartError: la voce può essere
+// stata addebitata e non si rilancia da sola.
+type Synthesizer interface {
+	Synthesize(ctx context.Context, req Request) (*Result, error)
+}
+
+// VoiceLister elenca le voci del provider (gratuito).
+type VoiceLister interface {
+	Voices(ctx context.Context) ([]Voice, error)
+}
+
+var (
+	voiceRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+	languageRe = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$`)
+)
+
+// Check controlla una richiesta prima di stimarla e di spendere, e la
+// restituisce coi predefiniti: provider, voce, lingua, testo senza spazi in
+// testa e in coda. Ogni errore è un uso sbagliato (in giv codice 2); gli
+// avvisi dicono cosa il provider non userà.
+func Check(req Request) (Request, []string, error) {
+	var warns []string
+	if req.Provider == "" {
+		req.Provider = DefaultProvider
+	}
+	switch req.Provider {
+	case XAI:
+	case Gemini:
+		return req, nil, errors.New("voce con gemini non ancora disponibile: usa xai")
+	default:
+		return req, nil, fmt.Errorf("provider della voce sconosciuto: %q (validi: xai)", req.Provider)
+	}
+	if !utf8.ValidString(req.Text) {
+		return req, nil, errors.New("testo non valido: serve UTF-8")
+	}
+	req.Text = strings.TrimSpace(req.Text)
+	if req.Text == "" {
+		return req, nil, errors.New("manca il testo da dire")
+	}
+	if n := utf8.RuneCountInString(req.Text); n > MaxTextChars {
+		return req, nil, fmt.Errorf("testo di %d caratteri: al massimo %d per richiesta", n, MaxTextChars)
+	}
+	if req.Model != "" {
+		return req, nil, fmt.Errorf("%s: la voce non ha modelli da scegliere (modello %q)", req.Provider, req.Model)
+	}
+	if req.Voice == "" {
+		req.Voice = DefaultXAIVoice
+	}
+	if !voiceRe.MatchString(req.Voice) {
+		return req, nil, fmt.Errorf("voce non valida: %q (lettere, cifre, - e _, al massimo 64)", req.Voice)
+	}
+	if req.Language == "" {
+		req.Language = DefaultLanguage
+	}
+	if !strings.EqualFold(req.Language, "auto") && !languageRe.MatchString(req.Language) {
+		return req, nil, fmt.Errorf("lingua non valida: %q (codice BCP-47 come it, en, pt-BR, oppure auto)", req.Language)
+	}
+	if req.Speed != 0 && (math.IsNaN(req.Speed) || math.IsInf(req.Speed, 0) || req.Speed < MinSpeed || req.Speed > MaxSpeed) {
+		return req, nil, fmt.Errorf("velocità %g fuori dai limiti: da %.1f a %.1f", req.Speed, MinSpeed, MaxSpeed)
+	}
+	if strings.TrimSpace(req.Style) != "" {
+		warns = append(warns, "xai non ha uno stile a parole: stile ignorato (usa la velocità e i tag nel testo, come [pause])")
+	}
+	if err := req.Dict.Check(); err != nil {
+		return req, nil, err
+	}
+	return req, warns, nil
+}
