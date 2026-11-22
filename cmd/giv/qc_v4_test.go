@@ -295,3 +295,72 @@ func TestV4Storyboard(t *testing.T) {
 		t.Errorf("scene: %+v", m.Scenes)
 	}
 }
+
+// Storyboard con scena video (clip dallo stato), clip, immagine e scena da fare.
+func TestV4StoryboardStatoEMontato(t *testing.T) {
+	dir := t.TempDir()
+	v4clip(t, dir, "clip-s1.mp4", "testsrc=size=256x144:rate=24", "sine=frequency=440", 5)
+	v4clip(t, dir, "c2.mp4", "testsrc=size=256x144:rate=24", "sine=frequency=440", 3)
+	v4ff(t, filepath.Join(dir, "i3.png"), "-f", "lavfi", "-i", "testsrc=size=256x144", "-frames:v", "1")
+	v4clip(t, dir, "spot.mp4", "testsrc=size=256x144:rate=24", "sine=frequency=440", 4)
+	os.WriteFile(filepath.Join(dir, "spot.json"), []byte(`{"default":{"provider":"xai"},"formato":{"aspect":"16:9","risoluzione":"144p","fps":24},"scene":[{"id":"s1","tipo":"video","prompt":"x","durata":5,"audio":"on"},{"id":"s2","tipo":"clip","file":"c2.mp4"},{"id":"s3","tipo":"immagine","file":"i3.png","durata":2},{"id":"s4","tipo":"video","prompt":"y"}]}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "spot.stato.json"), []byte(`{"version":1,"scenes":{"s1":{"status":"fatto","clip":{"file":"clip-s1.mp4","job_id":"j0","done":"2026-01-01T00:00:00Z"}}}}`), 0o644)
+
+	run := func(args ...string) ([]byte, int) {
+		cmd := exec.Command(binPath, append([]string{"qc"}, args...)...)
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+		out, err := cmd.Output()
+		if ee, ok := err.(*exec.ExitError); ok {
+			return out, ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return out, 0
+	}
+	out, code := run("spot.json")
+	if code != 0 {
+		t.Fatalf("codice %d\n%s", code, out)
+	}
+	var m struct {
+		Scenes []struct {
+			ID      string `json:"id"`
+			Result  string `json:"result"`
+			Message string `json:"message"`
+		} `json:"scenes"`
+		Outputs []struct {
+			File   string `json:"file"`
+			Result string `json:"result"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Scenes) != 4 {
+		t.Fatalf("scene: %+v", m.Scenes)
+	}
+	for i, id := range []string{"s1", "s2", "s3", "s4"} {
+		if m.Scenes[i].ID != id {
+			t.Errorf("scena %d: %s", i, m.Scenes[i].ID)
+		}
+	}
+	for _, s := range m.Scenes[:3] {
+		if s.Result == "difetto" {
+			t.Errorf("%s: difetto", s.ID)
+		}
+	}
+	if m.Scenes[3].Result != "assente" {
+		t.Errorf("s4: %q, attesa assente", m.Scenes[3].Result)
+	}
+	if len(m.Outputs) != 1 || m.Outputs[0].Result == "assente" || m.Outputs[0].Result == "difetto" {
+		t.Errorf("montato: %+v", m.Outputs)
+	}
+	// una scena assente non conta per --strict
+	if _, code := run("spot.json", "--strict"); code != 0 {
+		t.Errorf("--strict: codice %d", code)
+	}
+	// --expect-* con uno storyboard: rifiuto
+	if _, code := run("spot.json", "--expect-duration", "5"); code != 2 {
+		t.Errorf("--expect-* con storyboard: codice %d, atteso 2", code)
+	}
+}
