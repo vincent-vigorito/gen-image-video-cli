@@ -973,7 +973,7 @@ da `giv story run` **prima dei video**, in `voce/<id>-v<N>.wav` accanto allo sto
 (con i tempi per carattere in `voce/<id>-v<N>.tempi.json`, dove il provider li dà), mai
 sovrascritta; `giv story cut` la monta come la `voce` della scena. La richiesta è quella
 di `giv voice` coi valori del blocco `parlato` (fuso col kit; predefiniti `xai`, voce
-`eve` provvisoria, lingua `it`) e passa dalla stessa riserva e dallo stesso tetto di ogni
+`eve`, lingua `it`) e passa dalla stessa riserva e dallo stesso tetto di ogni
 richiesta a pagamento: prima di inviarla la spesa registrata più le stime delle voci e dei
 video ancora da fare, sul valore non arrotondato, non deve superare `tetto_costo_usd`, e
 la voce si registra nello stato come incerta; con un tetto una voce non stimabile esce con
@@ -1213,7 +1213,7 @@ giv kit help                            # aiuto; anche giv kit check --help
     }
   },
   "voce": { "provider": "xai", "voce": "eve", "lingua": "it", "velocita": 1.0 },
-  "pronuncia": { "Swerpify": "suèrpifai" }
+  "pronuncia": {}
 }
 ```
 
@@ -1228,7 +1228,7 @@ giv kit help                            # aiuto; anche giv kit check --help
 - **`voce`**: `provider` (`xai` o `gemini`), `modello`, `voce`, `lingua` (es. `it`),
   `velocita` (da 0,7 a 1,5) e `stile` (a parole).
 - **`pronuncia`**: al più 200 parole (al più 100 caratteri), ognuna con la sua pronuncia
-  (al più 128), su una riga.
+  (al più 128), su una riga; vuoto nell'esempio.
 - Serve almeno uno fra `marca`, `personaggi`, `voce` e `pronuncia`; un campo sconosciuto,
   un valore fuori dai limiti o un file del kit oltre 1 MiB escono con codice 2.
 

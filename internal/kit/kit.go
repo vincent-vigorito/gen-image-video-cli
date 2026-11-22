@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math"
 	"net/url"
 	"os"
@@ -40,6 +41,9 @@ type Kit struct {
 	// Dir è la cartella del kit (quella del file JSON): i file sono relativi a lei.
 	Dir string `json:"-"`
 }
+
+// kitFields sono i campi di primo livello del kit.
+var kitFields = []string{"marca", "personaggi", "voce", "pronuncia"}
 
 // Marca sono i predefiniti del montaggio. Logo, StileTesti, CartelloFinale e
 // Musica hanno gli stessi campi del blocco montaggio dello storyboard, con i
@@ -190,6 +194,14 @@ func readLimited(path string) ([]byte, error) {
 
 // Parse decodifica un kit: un solo oggetto JSON, nessun campo sconosciuto.
 func Parse(data []byte) (*Kit, error) {
+	// un oggetto JSON senza nessun campo del kit (un altro file indicato per
+	// errore): errore generico, senza nomi di campi presi dal file
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) == nil && len(top) > 0 && !slices.ContainsFunc(slices.Collect(maps.Keys(top)), func(k string) bool {
+		return slices.ContainsFunc(kitFields, func(f string) bool { return strings.EqualFold(k, f) })
+	}) {
+		return nil, errors.New("non è un kit di giv: nessuno dei campi marca, personaggi, voce, pronuncia")
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var k Kit

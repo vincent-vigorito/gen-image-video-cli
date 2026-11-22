@@ -18,6 +18,9 @@ import (
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/provider"
+	"gen-image-video-cli/internal/provider/fal"
+	"gen-image-video-cli/internal/provider/gemini"
+	"gen-image-video-cli/internal/provider/openaicompat"
 	"gen-image-video-cli/internal/speech"
 	"gen-image-video-cli/internal/story"
 )
@@ -291,15 +294,20 @@ func (r *storyRunner) preflight() error {
 	if err := r.voicePreflight(); err != nil {
 		return err
 	}
-	if r.voicesOnly {
-		return r.checkCap(0)
-	}
 	var rejects []error
 	var launch []*story.Scene
 	for _, scene := range r.pending() {
 		if err := r.checkJob(r.jobOf(scene.ID)); err != nil {
 			rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
 		}
+	}
+	if r.voicesOnly {
+		// i job in corso non si recuperano, ma con un job non valido nello
+		// stato non parte nessuna voce
+		if len(rejects) > 0 {
+			return storyError(r.st.Path(), errors.Join(rejects...))
+		}
+		return r.checkCap(0)
 	}
 	if id := r.abandon; id != "" {
 		// il job lasciato con --new-job non si recupera ma si valida come gli
@@ -393,7 +401,8 @@ func (r *storyRunner) abandonJob(id string) error {
 }
 
 // checkJob controlla, senza richieste, un job del file di stato: provider con
-// job video e indirizzo di attesa sull'host del provider.
+// job video e indirizzo di attesa sull'host del provider (con --voices senza
+// chiave video: jobChecker).
 func (r *storyRunner) checkJob(j *story.Job) error {
 	if err := checkProvider(j.Provider); err != nil {
 		return err
@@ -401,11 +410,20 @@ func (r *storyRunner) checkJob(j *story.Job) error {
 	if _, ok := defaultVideoModels[j.Provider]; !ok {
 		return usageError("job %s: %s non ha job video", j.ID, j.Provider)
 	}
-	c, err := r.sc.client(j.Provider)
-	if err != nil {
-		return err
+	var p provider.Provider
+	if r.voicesOnly {
+		var err error
+		if p, err = jobChecker(j.Provider); err != nil {
+			return usageError("job %s: %v", j.ID, err)
+		}
+	} else {
+		c, err := r.sc.client(j.Provider)
+		if err != nil {
+			return err
+		}
+		p = c.Provider
 	}
-	f, ok := c.Provider.(provider.JobFetcher)
+	f, ok := p.(provider.JobFetcher)
 	if !ok {
 		return usageError("job %s: %s non sa recuperare i job video", j.ID, j.Provider)
 	}
@@ -413,6 +431,25 @@ func (r *storyRunner) checkJob(j *story.Job) error {
 		return usageError("job %s: %v", j.ID, err)
 	}
 	return nil
+}
+
+// jobChecker è il provider dei job video senza chiave, con le stesse origini
+// di newProvider, solo per CheckJob: con --voices i job in corso si validano
+// (nessuna richiesta, nessun recupero) e la chiave video non serve.
+func jobChecker(name string) (provider.Provider, error) {
+	switch name {
+	case "gemini":
+		c := gemini.New("")
+		c.Base = baseURLs["gemini"]
+		return c, nil
+	case "fal":
+		return fal.New("", falConfig)
+	case "xai":
+		return openaicompat.New("xai", baseURLs["xai"], "", openaicompat.Options{B64Param: true, Grok: true}), nil
+	case "openrouter":
+		return openaicompat.New("openrouter", baseURLs["openrouter"], "", openaicompat.Options{Router: true}), nil
+	}
+	return nil, fmt.Errorf("%s non ha job video", name)
 }
 
 // plan prepara le scene da generare e controlla il tetto: spesa già fatta più
