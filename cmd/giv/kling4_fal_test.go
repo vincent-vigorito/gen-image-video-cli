@@ -121,7 +121,25 @@ func TestKling4Rifiuti(t *testing.T) {
 			t.Errorf("%s: code %d (atteso 2): %s", name, code, se)
 		}
 	}
-	// altri provider: stesso rifiuto
+	for name, args := range map[string][]string{
+		"keyframe vuoto":        {"--model", "kling-4.0", "--image", img, "--keyframe", "", "--duration", "5", "x"},
+		"shot con durata < 0":   {"--model", "kling-4.0", "--image", img, "--shot", "3:a", "--duration", "-2"},
+		"keyframe con userinfo": {"--model", "kling-4.0", "--image", img, "--keyframe", "https://utente:pw@example.com/k.png", "--duration", "5", "x"},
+	} {
+		if _, se, code := falVideo(t, args...); code != 2 {
+			t.Errorf("%s: code %d (atteso 2): %s", name, code, se)
+		}
+	}
+	// altri provider: stesso rifiuto, anche senza chiave né catalogo
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("FAL_KEY", "")
+	if _, _, code := cutArgsVideoProv("openrouter", []string{"--image", img, "--keyframe", k, "--shot", "3:a"}); code != 2 {
+		t.Errorf("openrouter senza chiave con --keyframe/--shot: code %d", code)
+	}
+	if _, _, code := falVideo(t, "--model", "kling-v3-pro", "--image", img, "--keyframe", k); code != 2 {
+		t.Errorf("v3 senza chiave con --keyframe: code %d", code)
+	}
+	t.Setenv("FAL_KEY", falKey)
 	t.Setenv("OPENROUTER_API_KEY", "fake")
 	if _, _, code := cutArgsVideoProv("openrouter", []string{"--image", img, "--keyframe", k, "--shot", "3:a"}); code != 2 {
 		t.Errorf("openrouter con --keyframe/--shot: code %d", code)
