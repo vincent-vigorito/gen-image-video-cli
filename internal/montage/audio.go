@@ -25,8 +25,12 @@ const (
 
 // Valori fissi della normalizzazione e dell'abbassamento della musica.
 const (
-	loudTP  = -1.0 // picco vero massimo, dBTP
-	loudLRA = 11.0 // escursione chiesta a loudnorm, LU (il suo default)
+	loudTP = -1.0 // picco vero massimo dei file prodotti, dBTP
+	// picco vero chiesto a loudnorm: sotto loudTP, perché il ritorno a 48 kHz
+	// e la codifica AAC alzano il picco di qualche decimo (prova 0.11.0:
+	// -0,8 dBTP sui montati chiedendo -1)
+	loudTPTarget = loudTP - 0.5
+	loudLRA      = 11.0 // escursione chiesta a loudnorm, LU (il suo default)
 	// escursione massima chiesta nella seconda passata: loudnorm resta lineare
 	// se la richiesta non è sotto quella misurata (20: il tetto dei ffmpeg vecchi)
 	maxLRA = 20.0
@@ -192,7 +196,16 @@ func (m Mix) Filters(base string, total float64, voiceIn []int, musicIn int, out
 			return nil, errors.New("missaggio: indice di una voce non valido")
 		}
 		at := int64(math.Round(v.At * sampleRate))
-		g = append(g, fmt.Sprintf("[%d:a:0]%s,adelay=delays=%dS:all=1,apad,atrim=duration=%s[mixvoce%d]", voiceIn[i], audioFmt, at, d, i))
+		if at == 0 {
+			g = append(g, fmt.Sprintf("[%d:a:0]%s,adelay=delays=0S:all=1,apad,atrim=duration=%s[mixvoce%d]", voiceIn[i], audioFmt, d, i))
+		} else {
+			// silenzio generato davanti alla voce: adelay terrebbe in memoria
+			// un buffer lungo quanto il ritardo
+			g = append(g,
+				fmt.Sprintf("anullsrc=r=%d:cl=stereo,atrim=end_sample=%d,%s[mixmuto%d]", sampleRate, at, audioFmt, i),
+				fmt.Sprintf("[%d:a:0]%s,asetpts=PTS-STARTPTS[mixparla%d]", voiceIn[i], audioFmt, i),
+				fmt.Sprintf("[mixmuto%d][mixparla%d]concat=n=2:v=0:a=1,apad,atrim=duration=%s[mixvoce%d]", i, i, d, i))
+		}
 		voices = append(voices, fmt.Sprintf("[mixvoce%d]", i))
 	}
 	key := ""
@@ -240,18 +253,19 @@ func MusicInputOpts() []string { return []string{"-stream_loop", "-1"} }
 func clamp(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
 
 // LoudnormFilter è il filtro loudnorm per il volume finale target (già
-// controllato con CheckLoudness). Con measured nil è quello della prima
+// controllato con CheckLoudness), col picco vero a loudTPTarget perché il
+// file codificato resti entro loudTP. Con measured nil è quello della prima
 // passata, che scrive la misura sullo stderr (ParseLoudnorm); altrimenti
 // quello della seconda, lineare quando la misura lo permette, seguito dal
 // ritorno a 48 kHz (loudnorm lavora a 192 kHz).
 func LoudnormFilter(target float64, measured *Loudness) string {
 	if measured == nil {
-		return fmt.Sprintf("loudnorm=I=%s:TP=%s:LRA=%s:print_format=json", num(target), num(loudTP), num(loudLRA))
+		return fmt.Sprintf("loudnorm=I=%s:TP=%s:LRA=%s:print_format=json", num(target), num(loudTPTarget), num(loudLRA))
 	}
 	m := measured
 	lra := clamp(math.Ceil(m.LRA)+1, loudLRA, maxLRA)
 	return fmt.Sprintf("loudnorm=I=%s:TP=%s:LRA=%s:measured_I=%s:measured_TP=%s:measured_LRA=%s:measured_thresh=%s:offset=%s:linear=true,aresample=%d",
-		num(target), num(loudTP), num(lra),
+		num(target), num(loudTPTarget), num(lra),
 		num(clamp(m.I, -99, 0)), num(clamp(m.TP, -99, 99)), num(clamp(m.LRA, 0, 99)),
 		num(clamp(m.Thresh, -99, 0)), num(clamp(m.Offset, -99, 99)), sampleRate)
 }

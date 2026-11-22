@@ -175,6 +175,10 @@ giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|p
 giv voice   "<testo>" | --text-file <f> [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--pronuncia <file.json>]
                                               # voce fuori campo WAV con i tempi per carattere (xai, a pagamento; giv voice help)
 giv voice   --voices                          # elenco delle voci del provider (gratuito)
+giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>]
+            [--expect-audio on|off] [--expect-loudness <lufs>] [--for <canali>] [--strict]
+                                              # controllo tecnico: durata, misure, neri, fermi, muti, volume,
+                                              # profilo dei canali (locale con ffprobe e ffmpeg, gratuito)
 giv version
 ```
 
@@ -202,6 +206,7 @@ prima o dopo.
 | `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
 | `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
+| `qc` | file o storyboard come argomento · `--expect-duration <s>` · `--expect-size <LxA>` · `--expect-fps <n>` · `--expect-audio on\|off` · `--expect-loudness <lufs>` (attese, solo per un file) · `--for <canali>` (come `giv export`) · `--strict` (un difetto = codice 1) · soglie `--black-min <s>` (default 0.5) · `--freeze-min <s>` (2) · `--freeze-noise <dB>` (-60) · `--silence-min <s>` (2) · `--silence-noise <dB>` (-50): vedi [Controllo tecnico](#controllo-tecnico-giv-qc) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -719,6 +724,59 @@ I valori che non vengono da una specifica ufficiale del canale (i -14 LUFS, le m
 feed di Instagram 4:5 e 1:1, il formato di TikTok) sono **convenzioni**: il manifest le
 elenca in `exports[].convention`.
 
+## Controllo tecnico: `giv qc`
+
+`giv qc` misura un video (o un audio) e dice se è troppo corto, nero, fermo, muto o fuori
+dalle misure di un canale, in locale con `ffprobe` e `ffmpeg`: niente rete, nessuna spesa,
+**nessun file scritto** (neanche la riga in `giv-log.jsonl`). Il controllo avvisa e basta:
+non corregge, non rigenera, non spende.
+
+```bash
+giv qc clip.mp4 --expect-duration 5 --expect-size 720x1280 --expect-audio on
+giv qc spot-9x16.mp4 --for instagram,tiktok --strict
+giv qc spot.json                      # le clip in uso e i montati dello storyboard
+```
+
+Ogni controllo ha `result` `ok`, `avviso` o `difetto`, con `value` (la misura),
+`expected`, `threshold`, `unit` e, per i tratti, `intervals` (`start_s`, `end_s`,
+`duration_s`); quelli che non si applicano (l'audio di un video senza traccia audio, i
+tratti fermi di un'immagine) hanno `skipped`. Sempre tutti, in quest'ordine:
+
+| Controllo | Esito |
+|---|---|
+| `duration` | sotto `--expect-duration` difetto, sopra avviso (tolleranza 0,2 s o il 2%); senza attesa, sotto 1 s avviso |
+| `size` | diverse da `--expect-size` (es. `1080x1920`): difetto |
+| `fps` | scarto oltre 0,1 da `--expect-fps`: difetto |
+| `audio` | traccia audio diversa da `--expect-audio on\|off`: difetto; assente senza attesa: avviso |
+| `black` | tratti neri lunghi almeno `--black-min` (0,5 s): avviso; per metà della durata o più: difetto |
+| `freeze` | tratti fermi lunghi almeno `--freeze-min` (2 s), esclusi quelli neri: avviso; per metà o più: difetto. `--freeze-noise` (default -60 dB) più alto, es. -50, trova anche le scene quasi ferme |
+| `silence` | tratti sotto `--silence-noise` (-50 dB) lunghi almeno `--silence-min` (2 s): avviso; per metà o più: difetto |
+| `loudness` | volume integrato in LUFS; scarto oltre 1 LU da `--expect-loudness`: avviso; audio muto: avviso |
+| `peak` | picco vero sopra -1 dBTP: avviso; sopra 0: difetto |
+| `streams` | tracce in più (seconda traccia video o audio, sottotitoli, dati, copertina): avviso |
+
+Con `--for <canali>` (come in `giv export`, es. `instagram:4:5,youtube`) il file si
+confronta col profilo di ogni canale, in `channels[]` con `channel`, `aspect`, `result` e
+`checks`: `size` (misura del profilo ok, stesso formato con misura diversa avviso, altro
+formato difetto), `fps` e `duration` fuori dai limiti del canale difetto, `video_codec`
+diverso da H.264 e `audio_codec` diverso da AAC avviso, `faststart` (indice `moov` in
+testa; in coda, o contenitore non MP4, avviso) e `loudness` lontano da -14 LUFS avviso.
+`giv export` sistema tutto ciò che è avviso.
+
+Il JSON ha `command` `qc`, `mode` (`file` o `storyboard`), `result` (il peggiore),
+`counts` (controlli per esito, saltati esclusi), le misure del file, `checks`, `channels`
+e `params` (soglie usate, canali, `strict`). Esce con 0 anche con difetti; con `--strict`
+un difetto esce con 1 (il JSON resta su stdout). File mancante o illeggibile, canale o
+valore non valido (zero, negativo, vuoto): codice 2.
+
+Con uno storyboard: `scenes[]`, una riga per scena con `id`, `tipo`, `take` e il controllo
+della clip in uso (`giv story run`) o del file della scena, con la `durata` e l'`audio`
+chiesti dallo storyboard (una scena `immagine` non ha tratti fermi); `outputs[]`, una riga
+per montato di `giv story cut` con `format`, misure e fps del formato (con scene
+`immagine` niente tratti fermi). `--for` vale per i montati del formato del canale. Una
+scena non ancora generata o un montato che manca hanno `result` `assente` (non conta per
+`--strict`); le attese `--expect-*` valgono solo per un file.
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -1154,7 +1212,7 @@ internal/presets/         libreria dei preset (presets.json incorporato) e compo
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
 internal/kit/             kit di marca e personaggi: lettura, controlli e percorsi chiusi nella cartella del kit
-internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…, sheet, frame, gif, export)
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export) e controllo di giv qc
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto
