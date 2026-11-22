@@ -707,8 +707,9 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		if st.Video.URL == "" {
 			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 		}
-		// il video sta su una CDN: scaricato senza chiave (fetchResult)
-		data, err := c.fetchResult(ctx, st.Video.URL)
+		// il video sta su una CDN: sempre senza chiave, anche se l'indirizzo
+		// è sull'origine dell'API (externalGet)
+		data, err := c.externalGet(ctx, st.Video.URL)
 		if err != nil {
 			return nil, err
 		}
