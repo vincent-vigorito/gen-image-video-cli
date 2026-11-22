@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI, frazioni di centesimo, con dizionario delle pronunce), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI con frazioni di centesimo e dizionario delle pronunce, o Gemini), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -72,10 +72,12 @@ giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
                                                 # GIF animata (default 480 px, 12 fps), gratis
 giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
                                                 # un file per canale col suo profilo, in locale e gratis
-giv voice   [--voice eve] [--lang it] [--speed 0.7-1.5] [--pronuncia <f.json>] [--out D] [--name S]
-            [--dry-run] [--max-cost <usd>] "<testo>" | --text-file <f>
+giv voice   [--voice eve] [--lang it] [--speed 0.7-1.5] [--pronuncia <f.json>] [--kit <kit.json>]
+            [--out D] [--name S] [--dry-run] [--max-cost <usd>] "<testo>" | --text-file <f>
                                                 # voce fuori campo WAV + tempi per carattere (xai, a pagamento)
-giv voice   --voices                            # elenco delle voci del provider (gratis)
+giv voice   --provider gemini [--model gemini-3.8-flash-tts|gemini-3.8-flash-lite-tts] [--voice Kore]
+            [--style "<t>"] "<testo>"           # seconda via: solo WAV, niente tempi, mai con --max-cost
+giv voice   --voices [--provider xai|gemini]    # elenco delle voci del provider (gratis)
 giv kit check <kit.json>                        # controlla il kit di marca e personaggi, gratis, non scrive niente
 giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>]
             [--expect-audio on|off] [--for <canali>] [--strict]
@@ -150,6 +152,11 @@ caratteri), voce predefinita `eve`, `--lang it` (BCP-47 o `auto`), `--speed 0.7-
 senza maiuscole) → `<nome>.wav` (24 kHz) e `<nome>.tempi.json` (`chars[]` con `c`,
 `start`, `end`); stima `cost_est_usd` (xai non riporta il costo). Codice 5 = esito
 incerto, la voce può essere stata addebitata: **non rilanciare** senza controllare.
+`--kit <kit.json>`: voce e pronunce del kit come predefiniti (i flag vincono). Con
+`--provider gemini` (chiave `GEMINI_API_KEY`): voce `Kore`, `--style` a parole, lingua dal
+testo, `--speed` ignorata, al più 6000 caratteri; pronunce sostituite nel testo, solo il
+WAV (sottotitoli distribuiti sulla durata). Il costo Gemini non ha un massimo garantito:
+con `--max-cost` (o `tetto_costo_usd`) esce **sempre** con codice 2; per un tetto usare xai.
 `kit check <kit.json>`: forma, valori e file del kit (dentro la sua cartella, solo file
 normali) con le misure; JSON `files`, `characters`, `voice`, `pronunciations`,
 `warnings`; kit non valido = codice 2, un problema per riga.
@@ -571,7 +578,10 @@ codice 2 con un problema per riga se qualcosa non va. Esempio in `examples/kit/`
   ed edit gemini come `giv video` gemini; upscale openrouter senza stima (da URL), con
   `cost_usd` di openrouter; upscale fal a secondi per fascia, solo stima.
 - Voce: xai 15 $ per milione di caratteri del testo inviato (le pronunce non contano);
-  stima `cost_est_usd` nel manifest, xai non riporta il costo. Kit e `giv qc` gratis.
+  stima `cost_est_usd` nel manifest, xai non riporta il costo. Gemini 0,50 $ per milione
+  di token di testo e 9 $ (flash-lite 6 $) per milione di token audio (25 al secondo), il
+  doppio dal 01/01/2027: stima *probabile* di circa 0,15 $ a richiesta, costo dai token in
+  `cost_usage_usd`. Kit e `giv qc` gratis.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 

@@ -7,7 +7,8 @@ versioning [SemVer](https://semver.org/lang/it/).
 ## [0.12.0] - in preparazione
 
 > **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
-> `giv voice` (xAI, a pagamento: frazioni di centesimo per spot); il kit (`kit.json`) e il
+> `giv voice` (xAI predefinita, voce `eve`; Gemini seconda via), a pagamento: con xAI
+> frazioni di centesimo per spot; il kit (`kit.json`) e il
 > controllo tecnico (`giv qc`) sono gratuiti e lavorano in locale. I comandi e gli
 > storyboard della 0.11.0 danno lo stesso risultato, salvo il picco audio, ora entro
 > -1 dBTP.
@@ -29,14 +30,19 @@ versioning [SemVer](https://semver.org/lang/it/).
   registro; voce sconosciuta codice 3.
 - **Voce con Gemini**, seconda via (`giv voice --provider gemini`, chiave
   `GEMINI_API_KEY`, `POST /v1beta/interactions`): modelli `gemini-3.8-flash-tts`
-  (predefinito) e `gemini-3.8-flash-lite-tts`, voce predefinita `Kore`, `--style` a parole,
-  lingua rilevata dal testo, `--speed` ignorata con un avviso. Gemini non ha dizionario né
-  tempi: le pronunce si sostituiscono nel testo e i sottotitoli si distribuiscono sulla
-  durata. Listino: 0,50 $ per milione di token di testo e 9 $ (flash-lite 6 $) per milione
-  di token audio, 25 al secondo; **dal 1° gennaio 2027 il doppio**. Il costo viene dai
-  token riportati o dalla durata. `giv voice --voices --provider gemini` elenca le voci
-  (gratuito). `--kit <kit.json>` dà a `giv voice` i predefiniti del blocco `voce` e le
-  pronunce del kit (i flag vincono).
+  (predefinito) e `gemini-3.8-flash-lite-tts` (`--model`), voce predefinita `Kore`,
+  `--style` a parole (al più 1000 caratteri), lingua rilevata dal testo (`--lang` non
+  viene inviato), `--speed` ignorata con un avviso; al più 6000 caratteri detti, pronunce
+  comprese. Gemini non ha dizionario né tempi: giv sostituisce le pronunce nel testo
+  inviato, l'uscita è solo il WAV (24 kHz, niente `.tempi.json`) e i sottotitoli dai testi
+  si distribuiscono sulla durata. Listino: 0,50 $ per milione di token di testo e 9 $
+  (flash-lite 6 $) per milione di token audio, 25 al secondo; **dal 1° gennaio 2027 il
+  doppio** (1 $ e 18 $, flash-lite 1 $ e 12 $). Dopo la generazione `cost_usage_usd` e
+  `cost_usage_source` danno il costo dai token riportati o dalla durata. `giv voice
+  --voices --provider gemini` elenca le voci (`GET /v1beta/voices`, gratuito).
+- **`giv voice --kit <kit.json>`**: il blocco `voce` e le pronunce del kit fanno da
+  predefiniti; i flag vincono e `--pronuncia` va sopra le pronunce del kit. Con un
+  `--provider` diverso da quello del kit valgono solo lingua e pronunce, con un avviso.
 - **Kit di marca e personaggi** (`kit.json`) e **`giv kit check <kit.json>`**: colori, logo,
   font, cartello finale, musica e volume della marca, personaggi con immagini di
   riferimento, descrizione e tutela, voce e pronunce, scritti una volta. Il kit è in sola
@@ -86,11 +92,13 @@ versioning [SemVer](https://semver.org/lang/it/).
   detto (col dizionario, la pronuncia): giv li riallinea al testo scritto; se mancano o
   non tornano, solo il WAV, con un avviso.
 - **Voce con Gemini senza un costo massimo garantito**: ogni richiesta porta il limite di
-  token in uscita e la stima usa quel limite, ma finché una prova reale non conferma che
-  l'API lo rispetta, con un tetto attivo (`--max-cost` o `tetto_costo_usd`) la voce Gemini
-  non è stimabile: codice 2 prima di qualsiasi richiesta (`giv story check` rifiuta lo
-  storyboard allo stesso modo); per un tetto si usa xAI. Senza tetto parte con un avviso e
-  una stima probabile (circa 0,15 $ a richiesta, 0,30 $ dal 2027), mai esatta.
+  16.384 token in uscita e la stima (8192 token in ingresso più il limite in uscita:
+  0,15 $ a richiesta con flash, 0,10 $ con flash-lite, il doppio dal 2027) è *probabile*,
+  non un massimo. Finché una prova reale non conferma che l'API rispetta il limite, con un
+  tetto attivo (`--max-cost` o `tetto_costo_usd`) la voce Gemini non è stimabile: codice 2
+  prima di qualsiasi richiesta («usa xai o togli il tetto»), e `giv story check` rifiuta
+  allo stesso modo uno storyboard con tetto e voce Gemini. Senza tetto parte, con un avviso
+  su stderr. La voce xAI (prezzo per carattere, stima esatta) non cambia.
 - **`giv qc`, scene quasi ferme**: con la soglia predefinita (`--freeze-noise -60`) una
   ripresa quasi ferma ma non immobile può non risultare ferma; -50 la trova più spesso, a
   costo di qualche falso allarme. Soglie da tarare sulle clip vere.
