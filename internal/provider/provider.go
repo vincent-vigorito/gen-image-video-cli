@@ -93,3 +93,48 @@ func (jobFailed) Is(target error) bool { return target == ErrJobFailed }
 // OnJobStart, se impostata, riceve ogni job video appena avviato, prima
 // dell'attesa: il CLI la usa per salvarne lo stato (giv job fetch).
 var OnJobStart func(prov string, job Job, req VideoRequest)
+
+// --- operazioni su una clip esistente: giv extend, edit, upscale, avatar ---
+
+// ClipRequest è un'operazione su una clip esistente; i campi a zero non sono
+// indicati dall'utente.
+type ClipRequest struct {
+	Op     string // extend, edit, upscale, avatar
+	Model  string
+	Prompt string // "" = senza prompt (upscale, avatar)
+
+	Video string // clip sorgente: file locale mp4 o URL https passato così com'è
+	From  string // job di partenza (Gemini: video generato da giv)
+	Image string // avatar: immagine, file locale (gli URL già scaricati)
+	Audio string // avatar: voce, file locale wav o mp3
+
+	Duration int     // extend: secondi aggiunti
+	Factor   float64 // upscale: fattore di ingrandimento
+	Mode     string  // upscale: precise, creative
+
+	Source  ClipSource    // misure dei file locali lette prima dell'invio
+	Timeout time.Duration // tetto di attesa del job, 0 = 15 minuti
+}
+
+// ClipSource sono le misure degli ingressi lette con ffprobe; zero = non note
+// (ffprobe assente o sorgente da URL).
+type ClipSource struct {
+	Duration      float64 // secondi del video sorgente
+	Width, Height int     // pixel del video sorgente
+	AudioDuration float64 // secondi dell'audio (avatar)
+}
+
+// ClipGenerator è un provider che lavora su clip esistenti: avvia il job (mai
+// ripetuto), lo segnala con ClipJobStarted, lo attende e scarica il risultato.
+// Gli errori dopo l'avvio portano l'id del job (httpx.Job), come per i video.
+type ClipGenerator interface {
+	GenerateClip(ctx context.Context, req ClipRequest) (*Result, error)
+}
+
+// ClipJobStarted segnala a OnJobStart un job di clip appena avviato, prima
+// dell'attesa (registro dei job per giv job fetch).
+func ClipJobStarted(prov string, job Job, req ClipRequest) {
+	if OnJobStart != nil {
+		OnJobStart(prov, job, VideoRequest{Model: req.Model, Prompt: req.Prompt})
+	}
+}
