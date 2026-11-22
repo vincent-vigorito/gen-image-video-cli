@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -29,9 +32,85 @@ const (
 	grokUploadName  = "giv-clip.mp4"
 )
 
-// clipCostKey segna l'attesa di un job dei comandi sulle clip: solo lì il
-// costo riportato da xAI entra nel risultato (giv video resta com'è).
-type clipCostKey struct{}
+// noRedirectKey segna i POST dei comandi sulle clip (caricamento e avvio):
+// nessun redirect seguito, così corpo e file non partono una seconda volta né
+// verso un altro host.
+type noRedirectKey struct{}
+
+func noRedirect(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRedirectKey{}, true)
+}
+
+// clipInfo accompagna nel contesto le richieste di un comando sulle clip:
+// solo lì il costo riportato da xAI entra nel risultato (giv video resta
+// com'è) e i messaggi d'errore perdono URL e file_id.
+type clipInfo struct {
+	hidden []string // URL del sorgente e file_id: mai nei messaggi
+}
+
+type clipKey struct{}
+
+func clipFrom(ctx context.Context) *clipInfo {
+	ci, _ := ctx.Value(clipKey{}).(*clipInfo)
+	return ci
+}
+
+var urlInText = regexp.MustCompile(`https?://[^\s"'<>\\]+`)
+
+// redact toglie da un testo i valori nascosti e riduce ogni URL a schema e host.
+func (ci *clipInfo) redact(s string) string {
+	for _, h := range ci.hidden {
+		if h != "" {
+			s = strings.ReplaceAll(s, h, "<…>")
+		}
+	}
+	return urlInText.ReplaceAllStringFunc(s, shortURL)
+}
+
+// scrub ripulisce i messaggi del provider e gli URL degli errori di rete nella
+// catena di err, lasciando tipi e classificazione (avvio incerto, job, stato
+// HTTP).
+func (ci *clipInfo) scrub(err error) error {
+	if err == nil {
+		return nil
+	}
+	var he *httpx.Error
+	if errors.As(err, &he) {
+		he.Msg = ci.redact(he.Msg)
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		ue.URL = shortURL(ue.URL)
+	}
+	return err
+}
+
+// jobError è il motivo di un job fallito: codice e messaggio di xAI ripuliti.
+func (ci *clipInfo) jobError(raw json.RawMessage) string {
+	var e struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &e); err != nil {
+		if json.Unmarshal(raw, &e.Message) != nil {
+			return "(dettaglio non leggibile)"
+		}
+	}
+	msg := strings.TrimSpace(e.Message)
+	if e.Code != "" {
+		msg = strings.TrimSpace(e.Code + ": " + msg)
+	}
+	return ci.redact(msg)
+}
+
+// shortURL riduce un URL a schema e host.
+func shortURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "<url>"
+	}
+	return u.Scheme + "://" + u.Host + "/…"
+}
 
 // GenerateClip esegue un'operazione su una clip esistente; ogni dialetto ha il
 // suo caso (xAI qui).
@@ -43,10 +122,20 @@ func (c *Client) GenerateClip(ctx context.Context, req provider.ClipRequest) (*p
 	return nil, fmt.Errorf("%s: giv %s non supportato", c.name, req.Op)
 }
 
-// grokClip avvia extend o edit, registra il job e ne attende il risultato.
-// Clip, prompt e file_id vanno solo all'origine dell'API (redirect fuori
-// origine non seguiti); l'avvio non si ripete da solo.
+// grokClip è grokClipRun con i messaggi d'errore ripuliti da URL e file_id.
 func (c *Client) grokClip(ctx context.Context, req provider.ClipRequest) (*provider.Result, error) {
+	ci := &clipInfo{}
+	if strings.HasPrefix(req.Video, "https://") {
+		ci.hidden = append(ci.hidden, req.Video)
+	}
+	res, err := c.grokClipRun(context.WithValue(ctx, clipKey{}, ci), ci, req)
+	return res, ci.scrub(err)
+}
+
+// grokClipRun avvia extend o edit, registra il job e ne attende il risultato.
+// Clip, prompt e file_id vanno solo all'API; caricamento e avvio non si
+// ripetono e non seguono redirect.
+func (c *Client) grokClipRun(ctx context.Context, ci *clipInfo, req provider.ClipRequest) (*provider.Result, error) {
 	var path string
 	switch req.Op {
 	case "extend":
@@ -76,13 +165,14 @@ func (c *Client) grokClip(ctx context.Context, req provider.ClipRequest) (*provi
 		if err != nil {
 			return nil, err
 		}
+		ci.hidden = append(ci.hidden, id)
 		body["video"] = map[string]string{"file_id": id}
 	}
 
 	var started struct {
 		RequestID string `json:"request_id"`
 	}
-	if err := c.doJSONWith(pollOnly(ctx), httpx.NoRetry, http.MethodPost, c.baseURL+path, body, &started); err != nil {
+	if err := c.doJSONWith(noRedirect(ctx), httpx.NoRetry, http.MethodPost, c.baseURL+path, body, &started); err != nil {
 		return nil, httpx.Start(err)
 	}
 	if started.RequestID == "" {
@@ -91,13 +181,14 @@ func (c *Client) grokClip(ctx context.Context, req provider.ClipRequest) (*provi
 	job := provider.Job{ID: started.RequestID, PollingURL: c.grokPollURL(started.RequestID)}
 	fmt.Fprintf(os.Stderr, "job avviato: %s (polling ogni %s)\n", job.ID, pollInterval)
 	provider.ClipJobStarted(c.name, job, req)
-	return c.wait(context.WithValue(ctx, clipCostKey{}, true), job, req.Timeout, false)
+	return c.wait(ctx, job, req.Timeout, false)
 }
 
 // grokUpload carica una clip locale con POST /files sull'origine dell'API e
 // restituisce il file_id della risposta: file regolare mp4 entro
 // MaxVideoBytes (controllato prima di leggerlo), letto al massimo per la
-// dimensione controllata, nome fisso, scadenza dopo un'ora.
+// dimensione controllata, nome fisso, scadenza dopo un'ora. Una sola
+// richiesta, senza redirect: lo stesso file non parte due volte.
 func (c *Client) grokUpload(ctx context.Context, path string) (string, error) {
 	f, mime, size, err := provider.OpenVideo(path)
 	if err != nil {
@@ -127,8 +218,7 @@ func (c *Client) grokUpload(ctx context.Context, path string) (string, error) {
 		ID     string `json:"id"`
 		FileID string `json:"file_id"`
 	}
-	// redirect fuori origine non seguiti: il file parte solo verso xAI
-	if err := c.do(pollOnly(ctx), http.MethodPost, c.baseURL+"/files", w.FormDataContentType(), buf.Bytes(), &up); err != nil {
+	if err := c.doWith(noRedirect(ctx), httpx.NoRetry, http.MethodPost, c.baseURL+"/files", w.FormDataContentType(), buf.Bytes(), &up); err != nil {
 		return "", fmt.Errorf("caricamento di --video: %w", err)
 	}
 	id := up.ID
@@ -158,9 +248,10 @@ func validFileID(id string) bool {
 }
 
 // grokClipCost è il costo riportato nel GET di un job dei comandi sulle clip
-// (usage.cost_in_usd_ticks), 0 se manca o non è un numero valido.
+// (usage.cost_in_usd_ticks), 0 se manca, non è un numero valido o il job non è
+// di un comando sulle clip.
 func grokClipCost(ctx context.Context, usage json.RawMessage) float64 {
-	if ctx.Value(clipCostKey{}) == nil || len(usage) == 0 {
+	if clipFrom(ctx) == nil || len(usage) == 0 {
 		return 0
 	}
 	var u struct {

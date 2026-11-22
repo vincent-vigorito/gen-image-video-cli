@@ -192,10 +192,11 @@ func prepareClip(spec clipSpec, o clipOptions) (*clipJob, error) {
 	if o.MaxCost != nil && (math.IsNaN(*o.MaxCost) || math.IsInf(*o.MaxCost, 0) || *o.MaxCost < 0) {
 		return nil, usageError("--max-cost deve essere un importo finito e non negativo in dollari")
 	}
-	if o.Duration < 0 {
+	// uno zero esplicito non vale come "default": si rifiuta
+	if o.Duration < 0 || o.Duration == 0 && slices.Contains(o.Set, "duration") {
 		return nil, usageError("--duration deve essere un intero positivo di secondi")
 	}
-	if math.IsNaN(o.Factor) || math.IsInf(o.Factor, 0) || o.Factor < 0 {
+	if math.IsNaN(o.Factor) || math.IsInf(o.Factor, 0) || o.Factor < 0 || o.Factor == 0 && slices.Contains(o.Set, "factor") {
 		return nil, usageError("--factor deve essere un numero finito e positivo")
 	}
 	if o.From != "" && !validJobID(o.From) {

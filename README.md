@@ -278,9 +278,10 @@ giv extend --video clip.mp4 --dry-run --max-cost 1.00 "…"       # stima, nessu
   errore con `--strict`. Durata e altezza si leggono con ffprobe: senza ffprobe, o da URL,
   i limiti non si controllano (avviso).
 - **costo**: la stima prende il caso più caro finché non è verificato: `extend` =
-  (sorgente + aggiunta) × 0,07 $/s + sorgente × 0,01 $/s, `edit` = sorgente × 0,08 $/s;
-  con il sorgente non misurato vale la durata massima (15 o 8,7 s). `--max-cost` vale su
-  questa stima; a fine job il manifest riporta il costo reale di xAI (`cost_usd`).
+  (sorgente + aggiunta) × 0,07 $/s + sorgente × 0,01 $/s, `edit` = sorgente × 0,08 $/s.
+  Senza la durata misurata del sorgente (URL o ffprobe assente) la stima non c'è e
+  `--max-cost` rifiuta con codice 2. A fine job il manifest riporta il costo reale di xAI
+  (`cost_usd`).
 - manifest con `command` `extend`/`edit`, `inputs.video` (percorso e impronta, o solo
   schema e host per un URL); il job resta in `giv-jobs.jsonl` e si recupera con
   `giv job fetch --provider xai <id>`.

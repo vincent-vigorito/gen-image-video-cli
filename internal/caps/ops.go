@@ -229,10 +229,15 @@ const (
 	xaiClipOut      = xaiClipOutCents / 100.0
 )
 
+// xaiUnmeasured è il motivo di una stima che non si fa: il prezzo dipende
+// dalla durata del sorgente.
+const xaiUnmeasured = "durata del sorgente non misurata (video da URL o ffprobe assente)"
+
 // XAIOps è la tabella fissa delle operazioni sulle clip di xAI: giv extend e
 // giv edit, solo grok-imagine-video. Finché non è verificato cosa si paga
 // (solo i secondi aggiunti o tutta la clip d'uscita, la risoluzione
-// d'uscita) la stima prende il caso più caro e lo scrive.
+// d'uscita) la stima prende il caso più caro e lo scrive; senza la durata
+// misurata del sorgente non c'è stima (con --max-cost è un rifiuto).
 func XAIOps() []Op {
 	pricing := map[string]float64{"input_video_per_s": xaiClipIn, "output_480p_per_s": 0.05, "output_720p_per_s": xaiClipOut}
 	return []Op{
@@ -243,15 +248,18 @@ func XAIOps() []Op {
 			SourceMin: 2, SourceMax: 15, MaxHeight: 720, VideoURLExt: ".mp4",
 			Pricing: pricing, Source: xaiOpsSource,
 			Price: func(req provider.ClipRequest) (float64, string, string) {
-				src, note := xaiSourceSeconds(req, 15)
+				src := req.Source.Duration
+				if src <= 0 {
+					return 0, "", xaiUnmeasured
+				}
 				add := req.Duration
 				if add <= 0 {
 					add = 6
 				}
 				out := src + float64(add)
 				usd := (out*xaiClipOutCents + src*xaiClipInCents) / 100
-				return usd, fmt.Sprintf("uscita %.2f s (sorgente + %d s) × %g $/s a 720p + ingresso %.2f s × %g $/s; caso più caro: tutta l'uscita a pagamento (non verificato)%s",
-					out, add, xaiClipOut, src, xaiClipIn, note), ""
+				return usd, fmt.Sprintf("uscita %.2f s (sorgente + %d s) × %g $/s a 720p + ingresso %.2f s × %g $/s; caso più caro: tutta l'uscita a pagamento (non verificato)",
+					out, add, xaiClipOut, src, xaiClipIn), ""
 			},
 		},
 		{
@@ -260,20 +268,14 @@ func XAIOps() []Op {
 			SourceMax: 8.7, MaxHeight: 720, VideoURLExt: ".mp4",
 			Pricing: pricing, Source: xaiOpsSource,
 			Price: func(req provider.ClipRequest) (float64, string, string) {
-				src, note := xaiSourceSeconds(req, 8.7)
+				src := req.Source.Duration
+				if src <= 0 {
+					return 0, "", xaiUnmeasured
+				}
 				usd := src * (xaiClipOutCents + xaiClipInCents) / 100
-				return usd, fmt.Sprintf("%.2f s × (%g $/s uscita a 720p + %g $/s ingresso); caso più caro: uscita a 720p (non verificato)%s",
-					src, xaiClipOut, xaiClipIn, note), ""
+				return usd, fmt.Sprintf("%.2f s × (%g $/s uscita a 720p + %g $/s ingresso); caso più caro: uscita a 720p (non verificato)",
+					src, xaiClipOut, xaiClipIn), ""
 			},
 		},
 	}
-}
-
-// xaiSourceSeconds è la durata del sorgente per la stima: quella misurata o, se
-// non è nota (URL o ffprobe assente), il massimo ammesso, con la nota.
-func xaiSourceSeconds(req provider.ClipRequest, max float64) (float64, string) {
-	if req.Source.Duration > 0 {
-		return req.Source.Duration, ""
-	}
-	return max, fmt.Sprintf("; sorgente non misurato: calcolato sul massimo di %g s", max)
 }
