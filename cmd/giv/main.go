@@ -220,7 +220,7 @@ Uso:
   giv sheet <file|cartella|storyboard.json> [--every <s>|--frames <n>] [--cols <n>] [--labels]  foglio di contatto JPEG, in locale (gratuito)
   giv frame --video <file> --at <s>|--last [--width <px>]  un fotogramma PNG (con --width la miniatura), in locale (gratuito)
   giv gif --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]  GIF animata in locale (default 480 px, 12 fps; gratuita)
-  giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito (aiuto: giv export --help)
+  giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito
   giv version                      stampa la versione
 
 Flag comuni:
