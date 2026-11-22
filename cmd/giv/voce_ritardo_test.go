@@ -96,16 +96,23 @@ func TestStoryCheckRitardoVoceNonValido(t *testing.T) {
 	}
 }
 
-// caso 4: ritardo + durata della voce oltre la fine della scena.
-func TestStoryCheckRitardoVoceAvviso(t *testing.T) {
+// caso 4: sovrapposizione fra la voce di una scena e quella della successiva
+// sulla linea del tempo del montaggio.
+func ritardoCheck(t *testing.T, trans, extra2, voice1 string) (scenes []struct {
+	ID       string   `json:"id"`
+	Warnings []string `json:"warnings"`
+}, stderr string) {
+	t.Helper()
 	cutNeedFF(t)
 	n := capsServer(t)
 	dir := t.TempDir()
 	cutClip(t, filepath.Join(dir, "a.mp4"), "160x90", 24, "3")
-	cutFF(t, "-f", "lavfi", "-i", "sine=frequency=500:duration=1.5", filepath.Join(dir, "v.wav"))
+	cutFF(t, "-f", "lavfi", "-i", "sine=frequency=500:duration="+voice1, filepath.Join(dir, "v1.wav"))
+	cutFF(t, "-f", "lavfi", "-i", "sine=frequency=500:duration=1", filepath.Join(dir, "v2.wav"))
 	board := `{"default":{"provider":"openrouter","modello":"alibaba/wan-3.0","audio":"off","risoluzione":"720p","aspect":"16:9"},
-"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":3,"voce":"v.wav","ritardo_voce":2},
-{"id":"s2","tipo":"clip","file":"a.mp4","durata":3,"voce":"v.wav","ritardo_voce":1}]}`
+"montaggio":{"transizione":"` + trans + `"},
+"scene":[{"id":"s1","tipo":"clip","file":"a.mp4","durata":3,"voce":"v1.wav"},
+{"id":"s2","tipo":"clip","file":"a.mp4","durata":3,"voce":"v2.wav"` + extra2 + `}]}`
 	p := filepath.Join(dir, "sb.json")
 	os.WriteFile(p, []byte(board), 0o644)
 	out, se, code, _ := storyRun(t, p, n)
@@ -115,24 +122,52 @@ func TestStoryCheckRitardoVoceAvviso(t *testing.T) {
 	var r struct {
 		Scenes []struct {
 			ID       string   `json:"id"`
-			Delay    float64  `json:"voice_delay_s"`
 			Warnings []string `json:"warnings"`
 		} `json:"scenes"`
 	}
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if len(r.Scenes) != 2 {
-		t.Fatalf("scene %d", len(r.Scenes))
+	return r.Scenes, se
+}
+
+// 4a: con la dissolvenza s2 parte a 2,5 s; la voce di s1 (2,9 s) la tocca di 0,4 s.
+func TestStoryCheckVoceSiSovrappone(t *testing.T) {
+	sc, se := ritardoCheck(t, "dissolvenza", "", "2.9")
+	if len(sc) != 2 || len(sc[0].Warnings) != 1 || len(sc[1].Warnings) != 0 {
+		t.Fatalf("avvisi: %+v", sc)
 	}
-	s1, s2 := r.Scenes[0], r.Scenes[1]
-	if s1.Delay != 2 || len(s1.Warnings) != 1 || !strings.Contains(s1.Warnings[0], "oltre la fine della scena") {
-		t.Errorf("s1: %+v", s1)
+	w := sc[0].Warnings[0]
+	if !strings.Contains(w, "si sovrappone di 0.4 s") || !strings.Contains(w, "s2") {
+		t.Errorf("avviso: %q", w)
 	}
-	if len(s2.Warnings) != 0 { // 1 + 1,5 = 2,5 <= 3
-		t.Errorf("s2 non doveva avvisare: %+v", s2)
+	if !strings.Contains(se, "avviso: scena s1:") {
+		t.Errorf("stderr: %q", se)
 	}
-	if !strings.Contains(se, "avviso: scena s1:") || strings.Contains(se, "scena s2:") {
+}
+
+// 4b: ritardo_voce 0,5 su s2 sposta la sua voce a 3 s: nessuna sovrapposizione.
+func TestStoryCheckVoceRitardoEvitaSovrapposizione(t *testing.T) {
+	sc, se := ritardoCheck(t, "dissolvenza", `,"ritardo_voce":0.5`, "2.9")
+	for _, s := range sc {
+		if len(s.Warnings) != 0 {
+			t.Errorf("avviso inatteso: %+v", s)
+		}
+	}
+	if strings.Contains(se, "avviso:") {
+		t.Errorf("stderr: %q", se)
+	}
+}
+
+// 4c: la voce di s1 (3,5 s) supera la sua scena (3 s) ma s2 parte a 4 s: nessun avviso.
+func TestStoryCheckVoceOltreScenaSenzaToccareAltre(t *testing.T) {
+	sc, se := ritardoCheck(t, "", `,"ritardo_voce":1`, "3.5")
+	for _, s := range sc {
+		if len(s.Warnings) != 0 {
+			t.Errorf("avviso inatteso: %+v", s)
+		}
+	}
+	if strings.Contains(se, "avviso:") {
 		t.Errorf("stderr: %q", se)
 	}
 }
