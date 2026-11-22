@@ -150,6 +150,8 @@ func main() {
 		err = cmdPresets(os.Args[2:])
 	case "story":
 		err = cmdStory(os.Args[2:])
+	case "upscale":
+		err = cmdUpscale(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -186,6 +188,7 @@ Uso:
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
+  giv upscale --video <file|url> [--factor 1.5-3] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter, a pagamento)
   giv version                      stampa la versione
 
 Flag comuni:

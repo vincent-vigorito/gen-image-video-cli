@@ -133,6 +133,8 @@ giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                  [--tutela prodotto|illustrazione] [--strict]
                                               # frase finale dei preset per quel modello, senza chiamate
+giv upscale --video <file|url> [--factor 1.5-3] [--mode precise|creative] ["<prompt>"]
+                                              # ingrandisce una clip (openrouter, a pagamento)
 giv version
 ```
 

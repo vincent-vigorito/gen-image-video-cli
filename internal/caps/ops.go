@@ -69,6 +69,22 @@ func (o *Op) Duration(req provider.ClipRequest) int {
 	return o.DefaultDuration
 }
 
+// Factor è il fattore di ingrandimento usato per la richiesta: quello indicato o il default.
+func (o *Op) Factor(req provider.ClipRequest) float64 {
+	if req.Factor > 0 {
+		return req.Factor
+	}
+	return o.DefaultFactor
+}
+
+// Mode è la modalità usata per la richiesta: quella indicata o la prima ammessa.
+func (o *Op) Mode(req provider.ClipRequest) string {
+	if req.Mode != "" || len(o.Modes) == 0 {
+		return req.Mode
+	}
+	return o.Modes[0]
+}
+
 // CheckOpFlags controlla req sull'operazione o del provider prov prima di
 // leggere i file (o nil = modello che non fa l'operazione): modello, flag
 // ammessi e obbligatori, valori di --duration, --factor e --mode. set sono i
