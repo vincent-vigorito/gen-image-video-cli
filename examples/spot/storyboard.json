@@ -7,7 +7,7 @@
   "scene": [
     {
       "id": "s1", "tipo": "video", "durata": 5,
-      "immagine": "img/prodotto.png", "preset": ["dolly-in"],
+      "immagine": "img/prodotto.png", "preset": ["dolly-in"], "fuoco": 0.4,
       "prompt": "il vasetto di crema su un piano di legno chiaro, luce del mattino da una finestra",
       "voce": "voce/s1.wav"
     },
@@ -19,7 +19,7 @@
     },
     {
       "id": "s3", "tipo": "video", "durata": 5,
-      "usa": ["prodotto"], "preset": ["static"],
+      "usa": ["prodotto"], "preset": ["static"], "taglio": { "da": 0.5 },
       "prompt": "una mano apre il vasetto e mostra la crema bianca e morbida"
     },
     {
@@ -27,5 +27,15 @@
       "file": "img/logo.png", "voce": "voce/chiusura.wav"
     }
   ],
-  "montaggio": { "transizione": "dissolvenza", "uscita": "spot.mp4" }
+  "montaggio": {
+    "transizione": "dissolvenza", "uscita": "spot.mp4",
+    "formati": ["16:9", "9:16"], "adatta": "ritaglio",
+    "musica": { "file": "musica/musica.wav", "volume": 0.2, "sotto_voce": true, "sfuma_fine": 2 },
+    "logo": { "file": "img/logo.png", "posizione": "alto-destra", "larghezza": 0.12 },
+    "titoli": [ { "testo": "Crema alle erbe", "scena": "s1", "da": 0.5, "durata": 3 } ],
+    "cartello_finale": { "durata": 3, "sfondo": "#1E3A2B", "testo": "Crema alle erbe",
+                         "sottotesto": "in erboristeria" },
+    "stile_testi": { "colore": "#FFFFFF", "bordo": "#000000" },
+    "volume": -14
+  }
 }

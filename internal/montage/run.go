@@ -739,14 +739,14 @@ func (t Tool) prepareExtended(w *Work, p *Plan, starts []float64, total float64,
 		x.End = min(x.End, outTotal)
 		texts = append(texts, x)
 	}
+	m := SafeMargins(p.Width, p.Height)
+	if p.Margins != nil {
+		m = *p.Margins
+	}
 	if p.EndCard != nil {
-		texts = append(texts, EndCardTexts(*p.EndCard, total, p.Height)...)
+		texts = append(texts, EndCardTexts(*p.EndCard, total, p.Height, m)...)
 	}
 	if len(texts) > 0 {
-		m := SafeMargins(p.Width, p.Height)
-		if p.Margins != nil {
-			m = *p.Margins
-		}
 		data, err := ASS(p.Width, p.Height, m, texts)
 		if err != nil {
 			return 0, err
