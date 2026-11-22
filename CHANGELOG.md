@@ -39,7 +39,9 @@ versioning [SemVer](https://semver.org/lang/it/).
   (flash-lite 6 $) per milione di token audio, 25 al secondo; **dal 1° gennaio 2027 il
   doppio** (1 $ e 18 $, flash-lite 1 $ e 12 $). Dopo la generazione `cost_usage_usd` e
   `cost_usage_source` danno il costo dai token riportati o dalla durata. `giv voice
-  --voices --provider gemini` elenca le voci (`GET /v1beta/voices`, gratuito).
+  --voices --provider gemini` elenca le voci, gratuito: le 30 voci studio (`Kore`…) e poi
+  la libreria di Gemini (`GET /v1beta/voices`, a pagine, fino a 10.000 voci; un elenco
+  tagliato ha un avviso e `warnings` nel JSON, codice 0).
 - **`giv voice --kit <kit.json>`**: il blocco `voce` e le pronunce del kit fanno da
   predefiniti; i flag vincono e `--pronuncia` va sopra le pronunce del kit. Con un
   `--provider` diverso da quello del kit valgono solo lingua e pronunce, con un avviso.

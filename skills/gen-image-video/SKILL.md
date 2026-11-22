@@ -77,7 +77,8 @@ giv voice   [--voice eve] [--lang it] [--speed 0.7-1.5] [--pronuncia <f.json>] [
                                                 # voce fuori campo WAV + tempi per carattere (xai, a pagamento)
 giv voice   --provider gemini [--model gemini-3.8-flash-tts|gemini-3.8-flash-lite-tts] [--voice Kore]
             [--style "<t>"] "<testo>"           # seconda via: solo WAV, niente tempi, mai con --max-cost
-giv voice   --voices [--provider xai|gemini]    # elenco delle voci del provider (gratis)
+giv voice   --voices [--provider xai|gemini]    # elenco delle voci del provider (gratis; gemini: 30 voci
+                                                # studio poi la libreria, fino a 10.000, avviso se tagliata)
 giv kit check <kit.json>                        # controlla il kit di marca e personaggi, gratis, non scrive niente
 giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>]
             [--expect-audio on|off] [--for <canali>] [--strict]
