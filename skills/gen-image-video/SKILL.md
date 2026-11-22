@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -70,6 +70,8 @@ giv frame   --video <file> --at <s> | --last [--width <px>]
                                                 # un fotogramma PNG (con --width la miniatura), gratis
 giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
                                                 # GIF animata (default 480 px, 12 fps), gratis
+giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
+                                                # un file per canale col suo profilo, in locale e gratis
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
@@ -128,6 +130,10 @@ oppure `--frames 1-100`, `--cols 1-12` (default 4, al più 200 riquadri), `--lab
 `<nome>-foglio.jpg`. `frame --video <file> --at <s>|--last [--width 16-7680]` →
 `<nome>-fotogramma.png`. `gif --video <file> [--start] [--end] (al più 60 s) [--width
 16-1920, default 480] [--fps 1-30, default 12]` → `<nome>-gif.gif`.
+`export --video <file> --for <canale>[:<formato>],…` (instagram 9:16 Reel, anche 4:5 e
+1:1; tiktok 9:16; youtube 16:9, Shorts in 9:16/1:1/4:5; linkedin 16:9) `[--fit] [--focus]
+[--loudness -14|off]` → `<nome>-<canale>-<formato>.mp4` per canale; durata fuori dai
+limiti del canale = codice 2 prima di scrivere; convenzioni in `exports[].convention`.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -448,6 +454,8 @@ in `--out` e ne dà il percorso in `files[0].path` del JSON):
   allunga il video di `--end-duration` (default 3 s) con audio muto: per una musica che
   copra anche il cartello fare `mix` **dopo** `overlay`.
 - `mix --loudness -14` è una convenzione dei social, non un requisito ufficiale.
+- Per più canali in un colpo, sul video finito: `giv export --video out/spot.mp4 --for
+  instagram,tiktok,youtube,linkedin` (cambio formato, fps e volume del canale per ogni file).
 
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
 per i video guardare un foglio di contatto (`giv sheet out/clip.mp4 --frames 8 --labels`,

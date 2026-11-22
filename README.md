@@ -168,6 +168,8 @@ giv frame   --video <file> --at <s> | --last [--width <px>]
                                               # un fotogramma PNG, con --width la miniatura (locale, gratuito)
 giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
                                               # GIF animata, palette in due passate (locale, gratuita)
+giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
+                                              # un file per canale col suo profilo, in locale con ffmpeg (gratuito)
 giv version
 ```
 
@@ -192,6 +194,7 @@ prima o dopo.
 | `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
 | `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
 | `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
+| `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -638,6 +641,37 @@ giv gif   --video spot.mp4 --start 2 --end 5 --width 480 --fps 12
   (default la fine), al più 60 s; `--width` da 16 a 1920 (default 480, mai oltre la
   larghezza del video: in quel caso un avviso), `--fps` da 1 a 30 (default 12).
 
+## Esportazione per canale: `giv export`
+
+`giv export` prende un video finito e scrive **un file per canale** col suo profilo, in
+locale con `ffmpeg` (niente rete, nessuna spesa; regole comuni di `giv post`):
+
+```bash
+giv export --video spot.mp4 --for instagram,tiktok,youtube,linkedin
+giv export --video spot.mp4 --for instagram:4:5,youtube:9:16 --fit blur --loudness -16
+```
+
+- `--for <canali>` (obbligatorio): `instagram`, `tiktok`, `youtube`, `linkedin` separati da
+  virgole, ognuno col formato facoltativo `<canale>:<formato>`. Formato predefinito: 9:16
+  per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; YouTube in 9:16, 1:1 o 4:5 è
+  uno Short.
+- `--fit crop|pad|blur` e `--focus <x>[,<y>]` come in `giv post reframe`;
+  `--loudness <lufs>|off` come in `giv post mix` (default -14 LUFS, picco -1 dBTP).
+- Misure 1080×1920, 1080×1080, 1080×1350, 1920×1080; H.264 High, AAC 48 kHz stereo,
+  `moov` in testa. Fotogrammi al secondo: 30 per Instagram e TikTok; per YouTube quelli
+  del video (altrimenti 30); per LinkedIn quelli del video se fra 10 e 60 (altrimenti 30).
+- Durata: Instagram da 3 s a 15 min, TikTok fino a 10 min, YouTube fino a 15 min (Shorts
+  3 min), LinkedIn da 3 s a 10 min. Un video fuori dai limiti di un canale esce con
+  codice 2 prima di scrivere qualsiasi file.
+- File `<nome>-<canale>-<formato>.mp4` in `--out` (es. `spot-instagram-9x16.mp4`;
+  `<nome>` è `--name` o il nome del video), una riga a costo zero in `giv-log.jsonl` per
+  file. Il JSON ha `command` `export`, `files` ed `exports[]` con `channel`, `aspect`,
+  `file` (con `--dry-run` `output`), misure, codec, `loudness_lufs` e `convention`.
+
+I valori che non vengono da una specifica ufficiale del canale (i -14 LUFS, le misure del
+feed di Instagram 4:5 e 1:1, il formato di TikTok) sono **convenzioni**: il manifest le
+elenca in `exports[].convention`.
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -890,7 +924,7 @@ provider, ricette (reference di stile, image-to-video, spot da foto di prodotto,
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
 allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
-con `giv post`, foglio di contatto e fotogrammi),
+con `giv post`, foglio di contatto e fotogrammi, esportazione per canale),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -917,7 +951,7 @@ internal/caps/            capacità e prezzi dei modelli video (OpenRouter /vide
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
-internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…, sheet, frame, gif)
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…, sheet, frame, gif, export)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto

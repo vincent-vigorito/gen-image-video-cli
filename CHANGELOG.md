@@ -42,6 +42,13 @@ versioning [SemVer](https://semver.org/lang/it/).
   sua miniatura, in locale.
 - **`giv gif --video <file> [--start] [--end] [--width] [--fps]`**: GIF animata in locale
   con la palette calcolata in due passate (default 480 px, 12 fps, al più 60 s).
+- **`giv export --video <file> --for <canali>`**: un file per canale (`instagram`,
+  `tiktok`, `youtube`, `linkedin`, ognuno con `:<formato>` facoltativo; predefiniti 9:16
+  per Instagram Reel e TikTok, 16:9 per YouTube e LinkedIn) col profilo del canale
+  (misure, fps, H.264 High, AAC 48 kHz, volume a -14 LUFS con `--loudness`, `--fit` e
+  `--focus` come `reframe`); una durata fuori dai limiti del canale esce con codice 2
+  prima di scrivere. Le convenzioni non ufficiali (volume, misure del feed di Instagram,
+  formato di TikTok) sono elencate nel manifest in `exports[].convention`.
 
 ## [0.10.0] - 2026-11-22
 
