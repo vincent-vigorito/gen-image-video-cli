@@ -154,8 +154,8 @@ giv presets [--json]                          # preset di camera ed effetti
 giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
                  [--tutela prodotto|illustrazione] [--strict]
                                               # frase finale dei preset per quel modello, senza chiamate
-giv upscale --video <file|url> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]
-                                              # ingrandisce una clip (openrouter o fal, a pagamento)
+giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]
+                                              # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                               # personaggio che parla (fal, job asincrono, a pagamento)
 giv version

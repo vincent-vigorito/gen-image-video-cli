@@ -2,7 +2,6 @@ package openaicompat
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,47 +135,27 @@ func TestUpscaleRouterPreciseSenzaPrompt(t *testing.T) {
 	}
 }
 
-// caso 2: file locale come data URI col contenuto del file.
-func TestUpscaleRouterFileLocaleDataURI(t *testing.T) {
+// O-T11: un file locale non parte: nessuna richiesta, errore con le due vie.
+func TestUpscaleRouterFileLocaleRifiutato(t *testing.T) {
 	f := newUpFake(t)
 	p := filepath.Join(t.TempDir(), "in.mp4")
 	os.WriteFile(p, fakeMP4, 0o600)
-	if _, err := upRun(f, upReq(p)); err != nil {
-		t.Fatal(err)
+	_, err := upRun(f, upReq(p))
+	if err == nil || !strings.Contains(err.Error(), "https") || !strings.Contains(err.Error(), "--provider fal") {
+		t.Fatalf("err=%v", err)
 	}
-	u := refURL(t, f.body)
-	b64, ok := strings.CutPrefix(u, "data:video/mp4;base64,")
-	if !ok {
-		t.Fatalf("non è un data URI mp4: %.40s", u)
-	}
-	if raw, err := base64.StdEncoding.DecodeString(b64); err != nil || string(raw) != string(fakeMP4) {
-		t.Errorf("contenuto: %v", err)
+	if f.posts != 0 {
+		t.Errorf("POST=%d", f.posts)
 	}
 }
 
-// caso 3: il provider rifiuta il data URI -> errore che chiede un URL https.
-func TestUpscaleRouterDataURIRifiutato(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "in.mp4")
-	os.WriteFile(p, fakeMP4, 0o600)
-	for _, st := range []int{400, 413, 415, 422} {
-		f := newUpFake(t)
-		f.postErr = st
-		_, err := upRun(f, upReq(p))
-		if err == nil || !strings.Contains(err.Error(), "URL https") || f.posts != 1 {
-			t.Errorf("status %d: err=%v posts=%d", st, err, f.posts)
-		}
-	}
-	// job fallito dopo l'avvio con file locale: stesso suggerimento
+// URL https rifiutato dal provider: errore ordinario, senza suggerimenti sul file locale.
+func TestUpscaleRouterURLRifiutato(t *testing.T) {
 	f := newUpFake(t)
-	f.jobState = "failed"
-	if _, err := upRun(f, upReq(p)); err == nil || !strings.Contains(err.Error(), "URL https") {
-		t.Errorf("job failed locale: %v", err)
-	}
-	// con URL https nessun suggerimento
-	f = newUpFake(t)
 	f.postErr = 400
-	if _, err := upRun(f, upReq("https://example.com/in.mp4")); err == nil || strings.Contains(err.Error(), "data URI") {
-		t.Errorf("URL: %v", err)
+	_, err := upRun(f, upReq("https://example.com/in.mp4"))
+	if err == nil || strings.Contains(err.Error(), "data URI") || f.posts != 1 {
+		t.Errorf("err=%v posts=%d", err, f.posts)
 	}
 }
 

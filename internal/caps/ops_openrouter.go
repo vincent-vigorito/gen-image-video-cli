@@ -16,11 +16,13 @@ const OpenRouterUpscaleModel = "black-forest-labs/flux-video-upscale"
 
 // OpenRouterOps è la tabella fissa delle operazioni sulle clip di OpenRouter.
 // Limiti di durata, peso e risoluzione dell'upscale non sono documentati:
-// restano quelli comuni dei file in ingresso.
+// restano quelli comuni dei file in ingresso. La clip va solo da URL https:
+// la prova CLI-929 del 22/11/2026 ha avuto 400 «Only HTTPS URLs are allowed»
+// col file locale come data URI.
 func OpenRouterOps() []Op {
 	ops := []Op{{
 		Op: "upscale", Model: OpenRouterUpscaleModel,
-		Flags: []string{"video", "factor", "mode", "prompt"}, Required: []string{"video"},
+		Flags: []string{"video", "factor", "mode", "prompt"}, Required: []string{"video"}, VideoURLOnly: true,
 		FactorMin: 1.5, FactorMax: 3, DefaultFactor: 2, Modes: []string{"precise", "creative"},
 		Pricing: map[string]float64{"megapixel_seconds_precise": 0.035, "megapixel_seconds_creative": 0.05},
 		Source:  openRouterOpsSource,

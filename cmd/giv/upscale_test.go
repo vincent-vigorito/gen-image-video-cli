@@ -120,50 +120,27 @@ func TestUpscaleCmdURL(t *testing.T) {
 	}
 }
 
-// caso 2 + manifest col costo stimato: file locale come data URI.
-func TestUpscaleCmdFileLocale(t *testing.T) {
+// O-T11: giv upscale con openrouter e --video locale: codice 2, nessuna richiesta, le due vie nel messaggio.
+func TestUpscaleCmdFileLocaleRifiutato(t *testing.T) {
 	u := upEnv(t)
-	u.noCost = true
 	p := upClip(t)
-	out, se, code := upGiv(t, "--video", p, "--factor", "2", "--out", "o")
-	if code != 0 {
-		t.Fatalf("code=%d %s", code, se)
+	for _, extra := range [][]string{nil, {"--dry-run"}, {"--max-cost", "1"}, {"--provider", "openrouter"}} {
+		_, se, code := upGiv(t, append([]string{"--video", p}, extra...)...)
+		if code != 2 {
+			t.Fatalf("%v: code=%d %s", extra, code, se)
+		}
+		if !strings.Contains(se, "https") || !strings.Contains(se, "--provider fal") {
+			t.Errorf("%v: messaggio senza le due vie: %s", extra, se)
+		}
 	}
-	refs := u.posts[0]["input_references"].([]any)
-	url := refs[0].(map[string]any)["video_url"].(map[string]any)["url"].(string)
-	if !strings.HasPrefix(url, "data:video/mp4;base64,") {
-		t.Errorf("url non è un data URI: %.40s", url)
-	}
-	if !strings.Contains(se, "data URI") {
-		t.Errorf("manca l'avviso del data URI: %s", se)
-	}
-	m := upJSON(t, out)
-	est, _ := m["cost_est_usd"].(float64)
-	// 320x240 x2^2 = 0,3072 MP x 1 s x 0,035 $
-	if est < 0.0105 || est > 0.011 || m["cost_source"] == nil || m["cost_source"] == "" {
-		t.Errorf("stima: %v (%v)", m["cost_est_usd"], m["cost_source"])
-	}
-	in, _ := m["inputs"].(map[string]any)["video"].(map[string]any)
-	if in == nil || in["path"] != p || in["sha256"] == nil && in["sha"] == nil {
-		t.Errorf("inputs.video: %v", m["inputs"])
-	}
-}
-
-// caso 3: il provider rifiuta il data URI -> exit 5 e messaggio con URL https.
-func TestUpscaleCmdDataURIRifiutato(t *testing.T) {
-	u := upEnv(t)
-	u.fail = 400
-	p := upClip(t)
-	_, se, code := upGiv(t, "--video", p)
-	if code != 5 || !strings.Contains(se, "URL https") || len(u.posts) != 1 {
-		t.Fatalf("code=%d posts=%d %s", code, len(u.posts), se)
+	if u.reqs != 0 {
+		t.Errorf("richieste al provider: %d", u.reqs)
 	}
 }
 
 // caso 4 e 5 (rifiuti): codice 2 e nessuna richiesta.
 func TestUpscaleCmdRifiuti(t *testing.T) {
 	u := upEnv(t)
-	clip := upClip(t)
 	txt := filepath.Join(t.TempDir(), "x.txt")
 	os.WriteFile(txt, []byte("non un mp4"), 0o600)
 	cases := map[string][]string{
@@ -171,13 +148,12 @@ func TestUpscaleCmdRifiuti(t *testing.T) {
 		"non mp4":             {"--video", txt},
 		"http":                {"--video", "http://example.com/in.mp4"},
 		"senza video":         {},
-		"fattore sopra":       {"--video", clip, "--factor", "4"},
-		"fattore sotto":       {"--video", clip, "--factor", "1.2"},
-		"mode sconosciuto":    {"--video", clip, "--mode", "x"},
-		"duration":            {"--video", clip, "--duration", "5"},
-		"provider xai":        {"--video", clip, "--provider", "xai"},
-		"modello sconosciuto": {"--video", clip, "--model", "altro/modello"},
-		"tetto superato":      {"--video", clip, "--max-cost", "0.001"},
+		"fattore sopra":       {"--video", "https://example.com/in.mp4", "--factor", "4"},
+		"fattore sotto":       {"--video", "https://example.com/in.mp4", "--factor", "1.2"},
+		"mode sconosciuto":    {"--video", "https://example.com/in.mp4", "--mode", "x"},
+		"duration":            {"--video", "https://example.com/in.mp4", "--duration", "5"},
+		"provider xai":        {"--video", "https://example.com/in.mp4", "--provider", "xai"},
+		"modello sconosciuto": {"--video", "https://example.com/in.mp4", "--model", "altro/modello"},
 		"tetto non stimabile": {"--video", "https://example.com/in.mp4", "--max-cost", "5"},
 	}
 	for name, args := range cases {
@@ -189,28 +165,16 @@ func TestUpscaleCmdRifiuti(t *testing.T) {
 	if u.reqs != 0 {
 		t.Errorf("richieste al provider: %d", u.reqs)
 	}
-	if !strings.Contains(func() string { _, se, _ := upGiv(t, "--video", clip, "--max-cost", "0.001"); return se }(), "--max-cost") {
+	if _, se, _ := upGiv(t, "--video", "https://example.com/in.mp4", "--max-cost", "5"); !strings.Contains(se, "--max-cost") {
 		t.Error("messaggio del tetto senza --max-cost")
 	}
 }
 
-// caso 5: --dry-run stampa la stima e non avvia nulla; con tetto sufficiente idem.
+// caso 5: --dry-run su openrouter (solo URL: nessuna misura, nessuna stima) e tetto senza stima.
 func TestUpscaleCmdDryRun(t *testing.T) {
 	u := upEnv(t)
-	p := upClip(t)
-	for _, extra := range [][]string{nil, {"--max-cost", "1"}} {
-		out, se, code := upGiv(t, append([]string{"--video", p, "--dry-run"}, extra...)...)
-		if code != 0 {
-			t.Fatalf("code=%d %s", code, se)
-		}
-		m := upJSON(t, out)
-		if m["dry_run"] != true || m["command"] != "upscale" || m["cost_est_usd"] == nil {
-			t.Errorf("piano: %v", m)
-		}
-	}
-	// da URL la stima non c'è: dry-run ok con avviso, e con tetto è codice 2
 	out, _, code := upGiv(t, "--video", "https://example.com/in.mp4", "--dry-run")
-	if code != 0 || upJSON(t, out)["cost_est_usd"] != nil {
+	if code != 0 || upJSON(t, out)["dry_run"] != true || upJSON(t, out)["cost_est_usd"] != nil {
 		t.Errorf("dry-run URL: code=%d %s", code, out)
 	}
 	if _, _, code := upGiv(t, "--video", "https://example.com/in.mp4", "--dry-run", "--max-cost", "1"); code != 2 {
