@@ -30,6 +30,16 @@ var docCommands = []struct {
 	{"edit", []string{"edit", "--help"}, nil, false},
 	{"upscale", []string{"upscale", "--help"}, nil, false},
 	{"avatar", []string{"avatar", "--help"}, nil, false},
+	{"post trim", []string{"post", "trim", "--help"}, nil, false},
+	{"post speed", []string{"post", "speed", "--help"}, nil, false},
+	{"post freeze", []string{"post", "freeze", "--help"}, nil, false},
+	{"post reframe", []string{"post", "reframe", "--help"}, nil, false},
+	{"post overlay", []string{"post", "overlay", "--help"}, nil, false},
+	{"post mix", []string{"post", "mix", "--help"}, nil, false},
+	{"sheet", []string{"sheet", "--help"}, nil, false},
+	{"frame", []string{"frame", "--help"}, nil, false},
+	{"gif", []string{"gif", "--help"}, nil, false},
+	{"export", []string{"export", "--help"}, nil, false},
 }
 
 // flag elencati da un help: "-nome" (pacchetto flag) o "--nome" (testo di giv story)
@@ -170,12 +180,12 @@ func copyTree(t *testing.T, from, to string) {
 	})
 }
 
-// 3) versione: 0.9.1 fino al cambio, 0.10.0 sulla punta finale.
+// 3) versione: 0.9.1 fino al cambio, 0.11.0 sulla punta finale.
 func TestVersioneRilascio(t *testing.T) {
 	so, _, code, _ := runGiv(t, nil, "version")
 	want := os.Getenv("GIV_ATTESA_VERSIONE")
 	if want == "" {
-		want = "0.10.0"
+		want = "0.11.0"
 	}
 	if code != 0 || strings.TrimSpace(so) != "giv "+want {
 		t.Fatalf("code=%d out=%q, atteso giv %s", code, so, want)

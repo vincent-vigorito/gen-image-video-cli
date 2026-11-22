@@ -19,6 +19,14 @@ func TestHelpFlagsMatchReadme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// i comandi locali (decisione 8) hanno nell'help generale una riga sola: ne unisco gli help
+	for _, c := range docCommands0110 {
+		so, se, hc, _ := runGiv(t, nil, append(append([]string{}, c...), "--help")...)
+		if hc != 0 {
+			t.Fatalf("giv %v --help: exit %d", c, hc)
+		}
+		help += "\n" + so + "\n" + se
+	}
 	re := regexp.MustCompile(`(?:^|[\s\[|` + "`" + `(])(--[a-z][a-z-]*)`)
 	set := func(s string) map[string]bool {
 		m := map[string]bool{}
@@ -28,7 +36,8 @@ func TestHelpFlagsMatchReadme(t *testing.T) {
 		return m
 	}
 	h, r := set(help), set(string(readme))
-	delete(r, "--help") // flag standard, non elencato nell'help
+	delete(r, "--help") // flag standard
+	delete(h, "--help")
 	for f := range h {
 		if !r[f] {
 			t.Errorf("flag nell'help ma non nel README: %s", f)
