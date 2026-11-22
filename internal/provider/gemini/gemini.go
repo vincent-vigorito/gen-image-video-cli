@@ -23,10 +23,14 @@ const baseURL = "https://generativelanguage.googleapis.com/v1beta"
 type Client struct {
 	APIKey string
 	HTTP   *http.Client
+	Base   string // endpoint delle richieste video ("" = baseURL; i test lo puntano a un server finto)
 }
 
 func New(apiKey string) *Client {
-	return &Client{APIKey: apiKey, HTTP: &http.Client{Timeout: 180 * time.Second}}
+	c := &Client{APIKey: apiKey, Base: baseURL}
+	// la chiave non segue i redirect verso altri host (checkRedirect)
+	c.HTTP = &http.Client{Timeout: 180 * time.Second, CheckRedirect: c.checkRedirect}
+	return c
 }
 
 func (c *Client) Name() string { return "gemini" }
@@ -134,7 +138,7 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 func classify(name string, methods []string) string {
 	lower := strings.ToLower(name)
 	switch {
-	case strings.Contains(lower, "veo"):
+	case strings.Contains(lower, "veo"), strings.Contains(lower, "omni"):
 		return "video"
 	case strings.Contains(lower, "image"):
 		return "image"
@@ -247,12 +251,4 @@ func mimeForFile(path string) string {
 	default:
 		return "application/octet-stream"
 	}
-}
-
-// --- video ---
-
-// GenerateVideo rifiuta sempre: Veo sulla Gemini API e' spento dal 22/10/2026 e
-// il sostituto (Gemini Omni) usa un'altra API, non implementata. Nessuna chiamata.
-func (c *Client) GenerateVideo(ctx context.Context, req provider.VideoRequest) (*provider.Result, error) {
-	return nil, fmt.Errorf("gemini: generazione video non disponibile (Veo spento sulla Gemini API): usa --provider openrouter")
 }

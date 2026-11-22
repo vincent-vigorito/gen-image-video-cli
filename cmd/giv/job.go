@@ -57,7 +57,7 @@ func cmdJobFetch(args []string) error {
 	}
 	// solo i provider con un'API video hanno job da recuperare
 	if _, ok := defaultVideoModels[*prov]; !ok {
-		return usageError("%s non ha job video da recuperare (provider con job: xai, openrouter)", *prov)
+		return usageError("%s non ha job video da recuperare (provider con job: gemini, xai, openrouter)", *prov)
 	}
 	if *timeout <= 0 {
 		return usageError("--timeout deve essere una durata positiva (es. 20m)")

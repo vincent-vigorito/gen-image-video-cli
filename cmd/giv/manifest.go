@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -118,8 +119,12 @@ func videoManifest(prov, prompt string, pres presets.Result, plan *videoPlan, in
 // costo riportato dal provider prende il posto della stima.
 func (man *manifest) done(files []output.FileInfo, res *provider.Result) {
 	man.Files, man.JobID = files, res.JobID
-	if res.CostUSD > 0 {
+	switch {
+	case res.CostUSD > 0:
 		man.CostUSD, man.CostEstUSD, man.CostSource = res.CostUSD, 0, ""
+	case res.CostEstUSD > 0: // stima dai consumi riportati: accanto a quella da listino, non al suo posto
+		man.CostUsageUSD, man.CostUsageSource = math.Round(res.CostEstUSD*1e4)/1e4, res.CostSource
+		man.usageEstUSD = res.CostEstUSD
 	}
 	for _, m := range res.Media {
 		if strings.HasPrefix(m.Mime, "video/") {
