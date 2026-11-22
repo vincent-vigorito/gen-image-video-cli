@@ -57,7 +57,7 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 // decide se il job è finito male, e deve venire dal provider.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
-		return fmt.Errorf("%s: troppi redirect", c.name)
+		return redirectError{fmt.Errorf("%s: troppi redirect", c.name)}
 	}
 	if !c.apiOrigin(req.URL) {
 		if req.Context().Value(pollKey{}) != nil {
@@ -361,7 +361,8 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 		case d.B64JSON != "":
 			data, err = base64.StdEncoding.DecodeString(d.B64JSON)
 		case d.URL != "":
-			data, err = c.fetchResult(ctx, d.URL)
+			// sempre senza chiave, come nella 0.9.1, anche sull'origine dell'API
+			data, err = c.externalGet(ctx, d.URL)
 		default:
 			continue
 		}
@@ -696,8 +697,9 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 			URL string `json:"url"`
 		} `json:"video"`
 		Error json.RawMessage `json:"error"`
+		Usage json.RawMessage `json:"usage"` // letto solo dai comandi sulle clip
 	}
-	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.apiCall(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, "", nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -706,15 +708,17 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		if st.Video.URL == "" {
 			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 		}
-		// il video sta su una CDN: scaricato senza chiave
-		data, err := c.download(ctx, st.Video.URL)
+		// il video sta su una CDN: sempre senza chiave, anche se l'indirizzo
+		// è sull'origine dell'API (externalGet)
+		data, err := c.externalGet(ctx, st.Video.URL)
 		if err != nil {
 			return nil, err
 		}
-		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}, nil
+		return &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID,
+			CostUSD: grokClipCost(ctx, st.Usage)}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, string(st.Error)))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
 	return nil, nil
 }
@@ -822,29 +826,6 @@ func jobTimeout(d time.Duration) time.Duration {
 }
 
 // --- helper ---
-
-func (c *Client) download(ctx context.Context, url string) ([]byte, error) {
-	return c.get(ctx, url, false)
-}
-
-func (c *Client) get(ctx context.Context, url string, auth bool) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if auth {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: download HTTP %d", c.name, resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
-}
 
 func addFilePart(w *multipart.Writer, field, path string) error {
 	h := textproto.MIMEHeader{}

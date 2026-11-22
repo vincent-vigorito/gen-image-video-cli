@@ -30,16 +30,6 @@ const dataURIHint = "la clip locale è andata a openrouter come data URI, che Op
 // creativity di flux-video-upscale per --mode
 var routerCreativity = map[string]int{"precise": 0, "creative": 1}
 
-// GenerateClip avvia un'operazione su una clip (avvio mai ripetuto), la
-// segnala al registro dei job, la attende e ne scarica il risultato.
-func (c *Client) GenerateClip(ctx context.Context, req provider.ClipRequest) (*provider.Result, error) {
-	switch {
-	case c.opts.Router:
-		return c.routerClip(ctx, req)
-	}
-	return nil, fmt.Errorf("giv %s non disponibile con %s", req.Op, c.name)
-}
-
 // routerClip fa l'upscale con black-forest-labs/flux-video-upscale: fattore e
 // creativity sempre nel corpo (il default è quello della tabella, su cui è
 // fatta la stima), prompt solo se indicato.
