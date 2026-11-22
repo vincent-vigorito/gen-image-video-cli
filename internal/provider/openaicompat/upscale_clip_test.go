@@ -69,9 +69,9 @@ func newUpFake(t *testing.T) *upFake {
 	}))
 	t.Cleanup(f.srv.Close)
 	t.Cleanup(f.cdn.Close)
-	old := clipTransport
-	clipTransport = f.cdn.Client().Transport
-	t.Cleanup(func() { clipTransport = old })
+	old := resultTransport
+	resultTransport = f.cdn.Client().Transport
+	t.Cleanup(func() { resultTransport = old })
 	return f
 }
 
@@ -216,5 +216,50 @@ func TestUpscaleRouterPollingAltroHost(t *testing.T) {
 	}
 	if evil != 0 {
 		t.Errorf("host estraneo contattato %d volte", evil)
+	}
+}
+
+// unsigned_url verso un host locale in chiaro: rifiutato, nessun download.
+func TestUpscaleRouterRisultatoLocaleRifiutato(t *testing.T) {
+	f := newUpFake(t)
+	plain := 0
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { plain++ }))
+	defer cdn.Close()
+	f.cdn.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { plain++ })
+	old := f.srv.Config.Handler
+	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/videos/job-up" {
+			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q]}`, cdn.URL+"/out.mp4")
+			return
+		}
+		old.ServeHTTP(w, r)
+	})
+	if _, err := upRun(f, upReq("https://example.com/in.mp4")); err == nil {
+		t.Fatal("atteso rifiuto")
+	}
+	if plain != 0 {
+		t.Errorf("host locale contattato %d volte", plain)
+	}
+}
+
+// job fallito: il motivo non riflette data URI, URL firmati o metadata.
+func TestUpscaleRouterMotivoFiltrato(t *testing.T) {
+	f := newUpFake(t)
+	old := f.srv.Config.Handler
+	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/videos/job-up" {
+			fmt.Fprint(w, `{"status":"failed","error":{"message":"rifiutato data:video/mp4;base64,AAAABBBBCCCC e https://x.example/p/a.mp4?sig=SEGRETO","metadata":{"input":"RIFLESSO"}}}`)
+			return
+		}
+		old.ServeHTTP(w, r)
+	})
+	_, err := upRun(f, upReq("https://example.com/in.mp4"))
+	if err == nil {
+		t.Fatal("atteso errore")
+	}
+	for _, bad := range []string{"AAAABBBB", "SEGRETO", "RIFLESSO", "/p/a.mp4"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("il messaggio contiene %q: %v", bad, err)
+		}
 	}
 }

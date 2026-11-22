@@ -49,8 +49,8 @@ func serverVideo(t *testing.T, poll func(n int32, w http.ResponseWriter, r *http
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/videos":
-			fmt.Fprintf(w, `{"id":"job-42","polling_url":%q,"status":"pending"}`, srv.URL+"/poll")
-		case r.URL.Path == "/poll":
+			fmt.Fprintf(w, `{"id":"job-42","polling_url":%q,"status":"pending"}`, srv.URL+"/videos/job-42")
+		case r.URL.Path == "/videos/job-42":
 			poll(atomic.AddInt32(&n, 1), w, r)
 		case r.URL.Path == "/content":
 			w.Write([]byte("MP4DATA"))
