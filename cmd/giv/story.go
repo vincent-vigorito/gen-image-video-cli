@@ -48,13 +48,13 @@ Uso:
   giv story check <storyboard.json>   controlla lo storyboard e ne stima il costo: nessuna
                                       generazione, gratuito
   giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
-                                      genera a pagamento le scene video mancanti; stato e
+                                      genera a pagamento le scene video e avatar mancanti; stato e
                                       spesa in <nome>.stato.json accanto allo storyboard
   giv story cut <storyboard.json>     monta con ffmpeg le scene già pronte in un solo video
   giv story <sottocomando> --help     aiuto e flag del sottocomando
 
 Flag di giv story run (anche dopo il file):
-  --scene <id>       rifà solo questa scena video, anche fatta, incerta o fallita
+  --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita
   --new-keyframe     con --scene: rigenera anche il fotogramma chiave della scena
   --new-job          con --scene: abbandona il job già partito della scena e ne avvia uno nuovo
 
@@ -77,15 +77,16 @@ Flag:
 `,
 	"run": `uso: giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
 
-Genera a pagamento le scene video dello storyboard, in ordine e una richiesta alla volta:
-prima l'eventuale fotogramma chiave, poi la clip, in clip/ accanto allo storyboard. Stato e
+Genera a pagamento le scene video e avatar dello storyboard, in ordine e una richiesta alla
+volta: prima l'eventuale fotogramma chiave, poi la clip, in clip/ accanto allo storyboard
+(scena avatar: immagine e voce caricate su fal, Kling AI Avatar v2; serve FAL_KEY). Stato e
 spesa sono in <nome>.stato.json: una nuova esecuzione recupera i job già partiti senza
 rilanciarli e genera solo le scene mancanti. Con tetto_costo_usd, prima di ogni richiesta
 a pagamento la spesa registrata (anche di scene non più nello storyboard) più le stime
 ancora da fare non deve superare il tetto, altrimenti codice 2 senza nuovi avvii.
 
 Flag (anche dopo il file):
-  --scene <id>       rifà solo questa scena video, anche fatta, incerta o fallita: la
+  --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
                      ripresa precedente resta nello stato e in clip/; il fotogramma
                      chiave già generato si riusa (se il suo file manca, codice 2:
                      serve --new-keyframe)
@@ -102,7 +103,8 @@ Flag (anche dopo il file):
 
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
 clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce,
-musica e sottotitoli del blocco montaggio. Nessuna generazione e nessuna rete; il file
+musica e sottotitoli del blocco montaggio. La voce di una scena avatar è già nella sua clip
+e non si aggiunge una seconda volta. Nessuna generazione e nessuna rete; il file
 d'uscita (montaggio.uscita, altrimenti <nome>.mp4) si riscrive a ogni montaggio.
 
 Flag:
@@ -176,7 +178,7 @@ func removedSpend(s *story.Storyboard, st *story.State) ([]removedScene, float64
 	var total float64
 	for _, id := range sortedKeys(st.Scenes) {
 		ss := st.Scenes[id]
-		if sc := s.Scena(id); (sc != nil && sc.Tipo == story.Video) || len(ss.Charges) == 0 {
+		if sc := s.Scena(id); (sc != nil && sc.Generata()) || len(ss.Charges) == 0 {
 			continue
 		}
 		v := ss.Spent()
@@ -334,6 +336,9 @@ func (sc *storyChecker) exactEstimate(c sceneCheck) float64 {
 	if job := sc.jobs[c.ID]; job != nil && job.plan.costExact != nil {
 		return *job.plan.costExact
 	}
+	if job := sc.clips[c.ID]; job != nil && job.plan.costExact != nil {
+		return *job.plan.costExact
+	}
 	return *c.CostEstUSD
 }
 
@@ -349,11 +354,12 @@ type storyChecker struct {
 	names  map[string]string
 	jobs   map[string]*videoJob
 	images map[string]*imageJob // fotogrammi chiave
+	clips  map[string]*clipJob  // scene avatar
 }
 
 func newStoryChecker(s *story.Storyboard) *storyChecker {
 	return &storyChecker{s: s, clients: map[string]*storyClient{}, names: map[string]string{},
-		jobs: map[string]*videoJob{}, images: map[string]*imageJob{}}
+		jobs: map[string]*videoJob{}, images: map[string]*imageJob{}, clips: map[string]*clipJob{}}
 }
 
 // storyClient è un provider col catalogo video letto una volta sola.
@@ -391,6 +397,9 @@ func (sc *storyChecker) client(name string) (*storyClient, error) {
 
 func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce, VoiceDelayS: scene.RitardoVoce}
+	if scene.Tipo == story.Avatar {
+		return sc.avatar(scene, c)
+	}
 	if scene.Tipo != story.Video {
 		c.File, c.length = scene.File, float64(scene.Durata)
 		return c, nil
@@ -428,6 +437,43 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 		if fk.CostoDichiaratoUSD == nil {
 			sc.notEstimated = append(sc.notEstimated, scene.ID+" (fotogramma_chiave)")
 		}
+	}
+	return c, nil
+}
+
+// avatar controlla una scena avatar come giv avatar --dry-run, senza chiave:
+// modello, immagine, voce (durata letta con ffprobe) e stima; il job pronto
+// resta in sc.clips. La scena dura quanto la voce.
+func (sc *storyChecker) avatar(scene *story.Scene, c sceneCheck) (sceneCheck, error) {
+	s := sc.s
+	o := clipOptions{Provider: "fal", Model: avatarModel(s.AvatarModello(scene)), Prompt: scene.Prompt,
+		Image: s.Path(scene.Immagine), Audio: s.Path(scene.Voce), Timeout: storyTimeout, Strict: s.Strict,
+		Out: sc.out, Name: sc.names[scene.ID], Set: []string{"image", "audio"}}
+	if strings.TrimSpace(scene.Prompt) != "" {
+		o.Set = append(o.Set, "prompt")
+	}
+	fmt.Fprintf(os.Stderr, "scena %s: %s/%s\n", scene.ID, o.Provider, o.Model)
+	job, err := prepareAvatar(o)
+	if err != nil {
+		return c, err
+	}
+	sc.clips[scene.ID] = job
+	plan := job.plan
+	c.Provider, c.Model, c.PromptFinal, c.Warnings = plan.Provider, plan.Model, plan.Prompt, plan.Warnings
+	c.Inputs = map[string]any{"image": plan.Inputs.Image.Path, "audio": plan.Inputs.Audio.Path}
+	if d := job.req.Source.AudioDuration; d > 0 {
+		c.Params, c.length = map[string]any{"audio_duration_s": d}, d
+	}
+	switch {
+	case plan.CostEstUSD != nil:
+		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
+		if scene.CostoDichiaratoUSD != nil {
+			c.Warnings = append(c.Warnings, "costo_dichiarato_usd ignorato: c'è la stima da listino")
+		}
+	case scene.CostoDichiaratoUSD != nil:
+		c.CostDeclaredUSD = scene.CostoDichiaratoUSD
+	default:
+		sc.notEstimated = append(sc.notEstimated, scene.ID)
 	}
 	return c, nil
 }
