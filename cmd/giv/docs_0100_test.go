@@ -80,7 +80,9 @@ func TestHelpPerComandoCoincideConReadme(t *testing.T) {
 		lines := strings.Split(string(readme), "\n")
 		seen := false
 		for _, l := range lines {
-			if strings.Contains(l, "giv "+c.name+" ") || strings.HasSuffix(strings.TrimSpace(l), "giv "+c.name) {
+			// righe d'uso: iniziano con il comando (anche dentro un elenco o fra apici)
+			tl := strings.TrimLeft(strings.TrimSpace(l), "-*` ")
+			if tl == "giv "+c.name || strings.HasPrefix(tl, "giv "+c.name+" ") {
 				seen = true
 				for _, m := range flagRe.FindAllStringSubmatch(l, -1) {
 					onLines[m[1]] = true
