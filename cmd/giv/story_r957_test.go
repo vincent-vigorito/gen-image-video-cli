@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -83,21 +84,44 @@ func TestR957SottotitoliSopraMargineBasso(t *testing.T) {
 	}
 }
 
-// In 9:16 e 4:5, logo e titolo nelle posizioni predefinite non si sovrappongono.
-func TestR957LogoETitoloNonSiSovrappongono(t *testing.T) {
-	for _, format := range []string{"9:16", "4:5"} {
-		d := r6Dir(t)
-		r6Solid(t, d)
-		f, w, h := r957Cut(t, d, `"formati":["`+format+`"],"logo":{"file":"logo.png"},"titoli":[{"testo":"Titolo di prova","da":0,"durata":2.5}]`, format)
-		px := r957Frame(t, f, w, h, 1)
-		logo, nl := r957Box(px, w, h, r957Red)
-		title, nt := r957Box(px, w, h, r957White)
-		if nl < 20 || nt < 20 {
-			t.Fatalf("%s: logo (%d px) o titolo (%d px) non visibili", format, nl, nt)
+// Titolo in alto e logo in alto in un formato verticale: story check e story cut
+// avvisano (nessuno spostamento, nessun errore).
+func TestR957TitoloELogoInAltoAvviso(t *testing.T) {
+	d := r6Dir(t)
+	r6Solid(t, d)
+	m := `"formati":["9:16"],"logo":{"file":"logo.png"},"titoli":[{"testo":"Titolo","da":0,"durata":2.5,"posizione":"alto"}]`
+	p := r6Board(t, d, m, "")
+	for _, args := range [][]string{{"check", p}, {"cut", p}} {
+		out, se, code := r6Cmd(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: codice %d, atteso 0\n%s", args, code, se)
 		}
-		if logo.Overlaps(title) {
-			t.Errorf("%s: logo %v e titolo %v si sovrappongono", format, logo, title)
+		all := strings.ToLower(out + se)
+		if !strings.Contains(all, "logo") || !strings.Contains(all, "titol") {
+			t.Errorf("%v: nessun avviso su titolo e logo in alto:\n%s%s", args, out, se)
 		}
+	}
+}
+
+// Senza montaggio.formati i sottotitoli restano dove sono oggi (nessun margine sicuro).
+func TestR957SottotitoliSenzaFormatiInvariati(t *testing.T) {
+	d := r6Dir(t)
+	r6Solid(t, d)
+	srt := "1\n00:00:00,000 --> 00:00:03,000\nSottotitolo di prova\n"
+	os.WriteFile(filepath.Join(d, "sub.srt"), []byte(srt), 0o644)
+	p := r6Board(t, d, `"sottotitoli":"sub.srt"`, "")
+	out, se, code := r6Cmd(t, "cut", p)
+	if code != 0 {
+		t.Fatalf("cut: codice %d\n%s", code, se)
+	}
+	var r struct {
+		Output        string
+		Width, Height int
+	}
+	json.Unmarshal([]byte(out), &r)
+	box, n := r957Box(r957Frame(t, r.Output, r.Width, r.Height, 1), r.Width, r.Height, func(r, g, b byte) bool { return r > 120 && g > 120 && b > 120 })
+	if n < 5 || box.Max.Y < int(float64(r.Height)*0.8) {
+		t.Errorf("sottotitoli senza formati cambiati: %d pixel, fino a y=%d su %d", n, box.Max.Y, r.Height)
 	}
 }
 
