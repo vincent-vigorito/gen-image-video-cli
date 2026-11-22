@@ -236,3 +236,32 @@ func TestQCVoiceAudioOltreLUnitaDiAddebito(t *testing.T) {
 		t.Errorf("cost_est_usd=%v (attesi 2 minuti)", m["cost_est_usd"])
 	}
 }
+
+// più tracce audio = codice 2 prima di ogni richiesta, anche in dry-run e con tetto.
+func TestQCVoiceDueTracceAudioRifiutato(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg assente")
+	}
+	hits, dir := voiceEnv(t, sttResp("x"))
+	due := filepath.Join(dir, "due.m4a")
+	if out, err := exec.Command("ffmpeg", "-nostdin", "-y", "-f", "lavfi", "-i", "sine=d=3", "-f", "lavfi", "-i", "sine=f=600:d=90",
+		"-map", "0", "-map", "1", "-c:a", "aac", due).CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg non produce il file: %v %.200s", err, out)
+	}
+	for _, extra := range [][]string{nil, {"--dry-run"}, {"--max-cost", "1"}} {
+		args := append([]string{due, "--script", "x"}, extra...)
+		_, se, code := qcVoiceRun(t, args...)
+		if code != 2 || !strings.Contains(se, "tracce audio") {
+			t.Errorf("%v: code=%d %s", extra, code, se)
+		}
+	}
+	if *hits != 0 {
+		t.Errorf("chiamate=%d", *hits)
+	}
+	// una sola traccia: invariato
+	uno := filepath.Join(dir, "uno.wav")
+	os.WriteFile(uno, fakeWAV(1), 0o600)
+	if _, se, code := qcVoiceRun(t, uno, "--script", "x"); code != 0 || *hits != 1 {
+		t.Errorf("una traccia: code=%d hits=%d %s", code, *hits, se)
+	}
+}
