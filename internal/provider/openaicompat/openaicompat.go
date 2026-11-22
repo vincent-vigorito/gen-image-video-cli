@@ -57,7 +57,7 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 // decide se il job è finito male, e deve venire dal provider.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
-		return fmt.Errorf("%s: troppi redirect", c.name)
+		return redirectError{fmt.Errorf("%s: troppi redirect", c.name)}
 	}
 	if !c.apiOrigin(req.URL) {
 		if req.Context().Value(pollKey{}) != nil {
