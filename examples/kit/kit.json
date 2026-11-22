@@ -1,0 +1,19 @@
+{
+  "marca": {
+    "colori": { "primario": "#1E3A2B", "testo": "#FFFFFF" },
+    "logo": { "file": "logo.png", "posizione": "alto-destra", "larghezza": 0.12 },
+    "stile_testi": { "font": "font/DejaVuSans-Bold.ttf" },
+    "cartello_finale": { "durata": 3, "logo": "logo.png", "testo": "Marca di prova" },
+    "musica": { "file": "musica/base.wav", "volume": 0.25, "sotto_voce": true },
+    "volume": -14
+  },
+  "personaggi": {
+    "mascotte": {
+      "riferimenti": ["personaggi/mascotte-fronte.png", "personaggi/mascotte-profilo.png"],
+      "descrizione": "Mascotte di prova: segnaposto da sostituire con le immagini e la descrizione del personaggio vero",
+      "tutela": "illustrazione"
+    }
+  },
+  "voce": { "provider": "xai", "voce": "eve", "lingua": "it", "velocita": 1.0 },
+  "pronuncia": { "Swerpify": "suèrpifai" }
+}

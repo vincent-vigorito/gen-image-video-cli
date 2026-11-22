@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"gen-image-video-cli/internal/kit"
 )
 
 // Tipi di scena.
@@ -47,9 +49,36 @@ type Storyboard struct {
 	// FoglioContatto false: giv story run e cut non scrivono
 	// foglio-contatto.jpg accanto allo storyboard.
 	FoglioContatto *bool `json:"foglio_contatto,omitempty"`
+	// Kit è il file del kit di marca e personaggi, relativo alla cartella
+	// dello storyboard (può stare fuori); si usa solo se indicato, qui o con --kit.
+	Kit string `json:"kit,omitempty"`
+	// Parlato sono le impostazioni della voce delle scene con testo.
+	Parlato *Parlato `json:"parlato,omitempty"`
 
 	// Dir è la cartella dello storyboard: i percorsi sono relativi a questa.
 	Dir string `json:"-"`
+
+	// dal kit (LoadWithKit): il kit letto, i valori ereditati, e i file del
+	// kit messi nello storyboard (percorso assoluto -> relativo al kit)
+	KitFile     string   `json:"-"` // kit usato, come indicato
+	KitData     *kit.Kit `json:"-"`
+	Ereditati   []string `json:"-"` // campi che vengono dal kit
+	kitPaths    map[string]string
+	descrizioni map[string]string // personaggi del kit: descrizione
+	tutele      map[string]string // personaggi del kit: tutela
+}
+
+// Parlato è il blocco della voce fuori campo generata dai testi delle scene
+// (giv story run): i predefiniti vengono dal kit, lo storyboard li sostituisce
+// campo per campo; le pronunce dello storyboard vincono su quelle del kit.
+type Parlato struct {
+	Provider  string            `json:"provider,omitempty"` // xai (default) o gemini
+	Modello   string            `json:"modello,omitempty"`
+	Voce      string            `json:"voce,omitempty"`
+	Lingua    string            `json:"lingua,omitempty"`
+	Velocita  *float64          `json:"velocita,omitempty"`
+	Stile     string            `json:"stile,omitempty"`
+	Pronuncia map[string]string `json:"pronuncia,omitempty"` // parola scritta -> come dirla
 }
 
 // AvatarDefault è il blocco avatar: il modello delle scene avatar che non lo indicano.
@@ -103,8 +132,11 @@ type Scene struct {
 	// scene clip e immagine
 	File string `json:"file,omitempty"`
 
-	// tutte: voce fuori campo, messa al montaggio
+	// tutte: voce fuori campo, messa al montaggio: un file (voce) o un testo
+	// (testo) che giv story run fa dire (voce/<id>-v<N>.wav); con tutti e due
+	// vale il file e il testo resta per sottotitoli e controllo
 	Voce        string   `json:"voce,omitempty"`
+	Testo       string   `json:"testo,omitempty"`
 	RitardoVoce *float64 `json:"ritardo_voce,omitempty"` // secondi dall'inizio della scena; nil = 0
 
 	// montaggio della scena (giv story cut), facoltativi
@@ -270,8 +302,17 @@ const (
 )
 
 // Load legge e controlla lo storyboard in path: campi sconosciuti, scene,
-// riferimenti e file. Tutti i problemi trovati sono nell'errore, uno per riga.
+// riferimenti e file, col kit del campo kit se c'è. Tutti i problemi trovati
+// sono nell'errore, uno per riga.
 func Load(path string) (*Storyboard, error) {
+	return LoadWithKit(path, "")
+}
+
+// LoadWithKit è Load con il kit kitFile (--kit, relativo alla cartella
+// corrente) al posto di quello del campo kit; vuoto: quello del campo, se c'è.
+// I valori del kit si fondono nello storyboard prima dei controlli (scena,
+// poi storyboard, poi kit: applyKit).
+func LoadWithKit(path, kitFile string) (*Storyboard, error) {
 	data, err := readLimited(path)
 	if err != nil {
 		return nil, err
@@ -281,6 +322,16 @@ func Load(path string) (*Storyboard, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	s.Dir = filepath.Dir(path)
+	if kitFile == "" && s.Kit != "" {
+		if kitFile, err = s.kitField(); err != nil {
+			return nil, err
+		}
+	}
+	if kitFile != "" {
+		if err := s.applyKit(kitFile); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
@@ -363,6 +414,19 @@ func (s *Storyboard) Validate() error {
 	if s.Formato != nil && s.Formato.FPS < 0 {
 		fail("formato.fps deve essere positivo")
 	}
+	if p := s.Parlato; p != nil {
+		// i limiti della voce (provider, voce, lingua, velocità, pronunce) li
+		// controlla giv story check sulla richiesta di ogni scena con testo
+		if v := p.Velocita; v != nil && (!nonNegative(*v) || *v == 0) {
+			fail("parlato.velocita deve essere un numero oltre 0 (da 0.7 a 1.5)")
+		}
+		text("parlato.stile", p.Stile, false, fail)
+		for _, w := range sortedKeys(p.Pronuncia) {
+			if strings.TrimSpace(w) == "" || strings.TrimSpace(p.Pronuncia[w]) == "" {
+				fail("parlato.pronuncia %q: parola o pronuncia vuota", w)
+			}
+		}
+	}
 	for _, name := range sortedKeys(s.Riferimenti) {
 		if len(s.Riferimenti[name]) == 0 {
 			fail("riferimenti %s: insieme vuoto", name)
@@ -401,10 +465,11 @@ func (s *Storyboard) Validate() error {
 			if !nonNegative(*r) {
 				fail("%s: ritardo_voce deve essere un numero di secondi finito e non negativo", where)
 			}
-			if sc.Voce == "" {
-				fail("%s: ritardo_voce senza voce", where)
+			if sc.Voce == "" && sc.Testo == "" {
+				fail("%s: ritardo_voce senza voce né testo", where)
 			}
 		}
+		text(where+": testo", sc.Testo, false, fail)
 		validateSceneCut(sc, where, fail)
 		switch sc.Tipo {
 		case Video:
@@ -591,7 +656,7 @@ func (s *Storyboard) validateMontaggio(m *Montaggio, seen map[string]int, fail f
 // hasVoice dice se almeno una scena ha una voce fuori campo.
 func (s *Storyboard) hasVoice() bool {
 	for i := range s.Scene {
-		if s.Scene[i].Voce != "" && s.Scene[i].Tipo != Avatar {
+		if (s.Scene[i].Voce != "" || s.Scene[i].Testo != "") && s.Scene[i].Tipo != Avatar {
 			return true
 		}
 	}
@@ -760,6 +825,9 @@ func (s *Storyboard) validateAvatar(sc *Scene, where string, fail func(string, .
 	}
 	if sc.Voce == "" {
 		fail("%s: voce mancante (scena avatar: l'audio che guida il labiale)", where)
+		if sc.Testo != "" {
+			fail("%s: testo senza voce: in una scena avatar la voce è un file (fallo con giv voice), il testo vale solo per sottotitoli e controllo", where)
+		}
 	}
 	if sc.Durata != 0 {
 		fail("%s: durata non vale per una scena avatar (dura quanto la voce)", where)
@@ -873,6 +941,9 @@ func (s *Storyboard) Path(p string) string {
 	if p == "" || IsURL(p) {
 		return p
 	}
+	if _, ok := s.kitPaths[p]; ok {
+		return p // file del kit, già nella forma assoluta
+	}
 	return filepath.Join(s.Dir, filepath.FromSlash(p))
 }
 
@@ -898,6 +969,13 @@ func (s *Storyboard) checkPath(p string, url bool) error {
 	}
 	if p == "" {
 		return errors.New("percorso vuoto")
+	}
+	if rel, ok := s.kitPaths[p]; ok {
+		// file ereditato dal kit: chiuso nella cartella del kit (K1)
+		if err := s.KitData.CheckPath(rel); err != nil {
+			return fmt.Errorf("kit: %w", err)
+		}
+		return nil
 	}
 	if err := localPath(p); err != nil {
 		return err
