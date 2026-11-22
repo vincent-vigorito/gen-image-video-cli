@@ -206,5 +206,10 @@ func subtitleMargins(path string, m Margins) error {
 			lines[n] = []byte(out)
 		}
 	}
+	// il file .ass l'ha scritto ffmpeg coi permessi di default: si restringe
+	// prima di riscriverlo (WriteFile non cambia i permessi di un file che c'è)
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
 	return os.WriteFile(path, bytes.Join(lines, []byte("\n")), 0o600)
 }
