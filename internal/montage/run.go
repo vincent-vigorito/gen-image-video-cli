@@ -124,33 +124,43 @@ const maxStdout = 1 << 20
 // stdin, entro il tetto di tempo (il più stretto fra timeout e la scadenza di
 // ctx); restituisce lo stdout, al più maxStdout byte.
 func run(ctx context.Context, bin string, timeout time.Duration, args []string) ([]byte, error) {
+	out, _, err := runTail(ctx, bin, timeout, args, 4096)
+	return out, err
+}
+
+// runTail è run che restituisce anche gli ultimi tail byte dello stderr (le
+// passate di analisi di ffmpeg, come loudnorm, scrivono lì il risultato).
+func runTail(ctx context.Context, bin string, timeout time.Duration, args []string, tail int) ([]byte, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.WaitDelay = 5 * time.Second
 	out := &limitBuffer{max: maxStdout}
-	errBuf := &tailBuffer{max: 4096}
+	errBuf := &tailBuffer{max: tail}
 	cmd.Stdout = out
 	cmd.Stderr = errBuf
 	err := cmd.Run()
 	name := filepath.Base(bin)
 	if ctx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("%s: interrotto, superato il tetto di tempo: %w", name, context.DeadlineExceeded)
+		return nil, nil, fmt.Errorf("%s: interrotto, superato il tetto di tempo: %w", name, context.DeadlineExceeded)
 	}
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("%s: %w", name, ctx.Err())
+		return nil, nil, fmt.Errorf("%s: %w", name, ctx.Err())
 	}
 	if out.exceeded {
-		return nil, fmt.Errorf("%s: uscita oltre %d byte, interrotto", name, maxStdout)
+		return nil, nil, fmt.Errorf("%s: uscita oltre %d byte, interrotto", name, maxStdout)
 	}
 	if err != nil {
 		msg := strings.TrimSpace(string(errBuf.buf))
-		if msg == "" {
-			return nil, fmt.Errorf("%s: %v", name, err)
+		if len(msg) > 4096 {
+			msg = msg[len(msg)-4096:]
 		}
-		return nil, fmt.Errorf("%s: %v: %s", name, err, msg)
+		if msg == "" {
+			return nil, nil, fmt.Errorf("%s: %v", name, err)
+		}
+		return nil, nil, fmt.Errorf("%s: %v: %s", name, err, msg)
 	}
-	return out.buf.Bytes(), nil
+	return out.buf.Bytes(), errBuf.buf, nil
 }
 
 func (t Tool) timeout() time.Duration {
@@ -188,6 +198,11 @@ func (t Tool) Probe(ctx context.Context, path string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
+	return t.probeArgs(ctx, path, args)
+}
+
+// probeArgs è Probe con gli argomenti di ffprobe già costruiti.
+func (t Tool) probeArgs(ctx context.Context, path string, args []string) (*Info, error) {
 	if err := regularFile(path); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}

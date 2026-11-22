@@ -166,6 +166,8 @@ func main() {
 		err = cmdUpscale(os.Args[2:])
 	case "avatar":
 		err = cmdAvatar(os.Args[2:])
+	case "post":
+		err = cmdPost(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -206,6 +208,7 @@ Uso:
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
   giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
+  giv post <operazione> --video <file> [--out <dir>] [--name <nome>] [--dry-run]  rifinitura in locale con ffmpeg, gratuita (operazioni: giv post --help)
   giv version                      stampa la versione
 
 Flag comuni:

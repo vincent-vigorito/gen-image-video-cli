@@ -163,6 +163,7 @@ type logTotals struct {
 	Generations      int          `json:"generations"`
 	FailedJobs       int          `json:"failed_jobs,omitempty"`         // job partiti e poi falliti o scaduti
 	FailedCostEstUSD float64      `json:"failed_cost_est_usd,omitempty"` // loro costo stimato (forse addebitato)
+	LocalOps         int          `json:"local_ops,omitempty"`           // comandi locali (giv post…): costo zero, non sono generazioni
 	By               string       `json:"by,omitempty"`
 	Groups           []*logTotals `json:"groups,omitempty"`
 }
@@ -176,6 +177,10 @@ type logRow struct {
 }
 
 func (t *logTotals) add(r logRow) {
+	if r.Provider == localProvider && r.Model == localModel {
+		t.LocalOps++
+		return
+	}
 	t.CostUSD += r.CostUSD
 	if r.Status != "" {
 		t.FailedJobs++
