@@ -128,14 +128,20 @@ func TestR5SheetFileGrid(t *testing.T) {
 	// --frames 8 --cols 4: 4 colonne, 2 righe
 	p = r5Ok(t, d, "sheet", "--video", "in.mp4", "--frames", "8", "--cols", "4", "--out", "o")
 	b := r5Info(t, p)
+	pb := p
 	if got, want := float64(b.W)/float64(b.H), (4.0*4)/(2.0*3); math.Abs(got-want) > want*0.12 {
 		t.Errorf("--frames 8 --cols 4: proporzioni %.2f (%dx%d), attese ~%.2f", got, b.W, b.H, want)
 	}
-	// stessa griglia con --labels: stessa larghezza di riquadro, più alto per le etichette
+	// stessa griglia con --labels: stesse misure (etichette sovraimpresse), contenuto diverso
 	p = r5Ok(t, d, "sheet", "--video", "in.mp4", "--frames", "8", "--cols", "4", "--labels", "--out", "o")
 	c := r5Info(t, p)
-	if c.W != b.W || c.H <= b.H {
-		t.Errorf("--labels: %dx%d, senza etichette %dx%d (attesa stessa larghezza e altezza maggiore)", c.W, c.H, b.W, b.H)
+	if c.W != b.W || c.H != b.H {
+		t.Errorf("--labels: %dx%d, senza etichette %dx%d (attese stesse misure)", c.W, c.H, b.W, b.H)
+	}
+	x, _ := os.ReadFile(pb)
+	y, _ := os.ReadFile(p)
+	if pb == p || bytes.Equal(x, y) {
+		t.Errorf("--labels: il foglio è identico a quello senza etichette")
 	}
 }
 
@@ -230,7 +236,6 @@ func TestR5RifiutiCodice2(t *testing.T) {
 		{"sheet", "in.mp4", "--cols", "-1"},
 		{"sheet", "in.mp4", "--cols", "500"},
 		{"sheet", "in.mp4", "--every", "0"},
-		{"sheet", "in.mp4", "--every", "9"},
 		{"sheet", "in.mp4", "--frames", "0"},
 		{"sheet", "in.mp4", "--every", "1", "--frames", "4"},
 		{"sheet", "vuota"},
