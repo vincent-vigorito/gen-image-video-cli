@@ -116,7 +116,7 @@ func TestStoryHelpFlagsInReadme(t *testing.T) {
 			t.Errorf("flag negli help di story ma non nel README: %s", f)
 		}
 	}
-	if !strings.Contains(string(readme), "story run [--scene <id> [--new-keyframe]]") {
+	if !strings.Contains(string(readme), "story run [--scene <id> [--new-keyframe]") {
 		t.Error("README senza la riga d'uso di story run con --new-keyframe")
 	}
 }

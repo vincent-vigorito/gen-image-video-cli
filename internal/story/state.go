@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,11 +31,15 @@ const (
 const (
 	ChargeClip     = "clip"
 	ChargeKeyframe = "fotogramma"
+	ChargeVoice    = "voce" // voce fuori campo dal testo della scena
 )
 
 // TakeJob è il kind, in previous, di un job partito lasciato con --new-job:
 // solo id ed errore, senza file (il suo addebito resta in charges).
 const TakeJob = "job"
+
+// TakeVoice è il kind, in previous, di una voce sostituita con --new-voice.
+const TakeVoice = "voce"
 
 // State è lo stato di giv story run, nel file accanto allo storyboard
 // (StatePath): per ogni scena cosa è fatto, quale job è partito e quanto è
@@ -47,7 +52,9 @@ type State struct {
 	path string // file accanto allo storyboard
 }
 
-// SceneState è lo stato di una scena video.
+// SceneState è lo stato di una scena: generazione della clip (scene video e
+// avatar) e voce dal testo (scene con testo, di ogni tipo). Una scena con la
+// sola voce ha status vuoto.
 type SceneState struct {
 	Status   string   `json:"status"`
 	Clip     *Take    `json:"clip,omitempty"`     // ripresa in uso
@@ -56,11 +63,32 @@ type SceneState struct {
 	Error    string   `json:"error,omitempty"`    // ultimo errore
 	Previous []Take   `json:"previous,omitempty"` // riprese, fotogrammi chiave e job sostituiti: i file restano su disco
 	Charges  []Charge `json:"charges,omitempty"`  // generazioni pagate o forse pagate
+
+	// voce dal testo della scena (giv story run): file in voce/, impronta di
+	// testo e impostazioni con cui è stata fatta, stato della richiesta
+	Voice       *Take  `json:"voice,omitempty"`
+	VoiceKey    string `json:"voice_key,omitempty"`
+	VoiceStatus string `json:"voice_status,omitempty"` // fatto, incerto, da_fare; vuoto: mai chiesta
+	VoiceError  string `json:"voice_error,omitempty"`
+}
+
+// VoiceTakes sono le voci generate della scena: quelle sostituite più quella in uso.
+func (sc *SceneState) VoiceTakes() int {
+	n := 0
+	for _, t := range sc.Previous {
+		if t.Kind == TakeVoice {
+			n++
+		}
+	}
+	if sc.Voice != nil {
+		n++
+	}
+	return n
 }
 
 // Take è un file generato, relativo alla cartella dello storyboard.
 type Take struct {
-	Kind  string    `json:"kind,omitempty"` // in previous: "fotogramma" per un fotogramma chiave sostituito, "job" per un job lasciato, vuoto per una clip
+	Kind  string    `json:"kind,omitempty"` // in previous: "fotogramma" per un fotogramma chiave sostituito, "job" per un job lasciato, "voce" per una voce sostituita, vuoto per una clip
 	File  string    `json:"file,omitempty"` // sempre, tranne che per un job lasciato
 	JobID string    `json:"job_id,omitempty"`
 	Error string    `json:"error,omitempty"` // job lasciato: ultimo errore del recupero
@@ -93,7 +121,7 @@ type Job struct {
 // Charge è una generazione avviata: per il tetto conta l'addebito riportato
 // dal provider, altrimenti la stima, altrimenti il costo dichiarato.
 type Charge struct {
-	Kind            string    `json:"kind"` // clip o fotogramma
+	Kind            string    `json:"kind"` // clip, fotogramma o voce
 	JobID           string    `json:"job_id,omitempty"`
 	CostEstUSD      *float64  `json:"cost_est_usd,omitempty"`
 	CostDeclaredUSD *float64  `json:"cost_declared_usd,omitempty"`
@@ -269,13 +297,31 @@ func (st *State) validate() error {
 				fail("%s: partita senza job", where)
 			}
 		case Fallito, Incerto, DaFare:
+		case "":
+			// solo voce: nessuna generazione della clip
+			if sc.Clip != nil || sc.Job != nil || sc.Keyframe != nil {
+				fail("%s: status mancante", where)
+			}
 		default:
 			fail("%s: stato %q sconosciuto (fatto, partito, fallito, incerto, da_fare)", where, sc.Status)
 		}
+		switch sc.VoiceStatus {
+		case Fatto:
+			if sc.Voice == nil {
+				fail("%s: voce fatta senza file", where)
+			}
+		case "", Incerto, DaFare:
+		default:
+			fail("%s: voice_status %q sconosciuto (fatto, incerto, da_fare)", where, sc.VoiceStatus)
+		}
+		if k := sc.VoiceKey; k != "" && !voiceKeyRe.MatchString(k) {
+			fail("%s: voice_key non valida", where)
+		}
 		takeOK(where+" clip", sc.Clip)
 		takeOK(where+" keyframe", sc.Keyframe)
+		takeOK(where+" voice", sc.Voice)
 		for i := range sc.Previous {
-			takeOK(fmt.Sprintf("%s previous n. %d", where, i+1), &sc.Previous[i], ChargeKeyframe, TakeJob)
+			takeOK(fmt.Sprintf("%s previous n. %d", where, i+1), &sc.Previous[i], ChargeKeyframe, TakeJob, TakeVoice)
 		}
 		if j := sc.Job; j != nil {
 			if j.Provider == "" || !ValidJobID(j.ID) {
@@ -284,7 +330,7 @@ func (st *State) validate() error {
 		}
 		for i, c := range sc.Charges {
 			w := fmt.Sprintf("%s charges n. %d", where, i+1)
-			if c.Kind != ChargeClip && c.Kind != ChargeKeyframe {
+			if c.Kind != ChargeClip && c.Kind != ChargeKeyframe && c.Kind != ChargeVoice {
 				fail("%s: kind %q sconosciuto", w, c.Kind)
 			}
 			for _, v := range []*float64{c.CostEstUSD, c.CostDeclaredUSD, &c.CostUSD} {
@@ -297,6 +343,9 @@ func (st *State) validate() error {
 	}
 	return errors.Join(errs...)
 }
+
+// voiceKeyRe è l'impronta della voce: esadecimale, da 8 a 64 cifre.
+var voiceKeyRe = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
 
 // ValidJobID: da 1 a 256 caratteri ASCII stampabili, senza spazi (come giv job fetch).
 func ValidJobID(id string) bool {
@@ -421,6 +470,21 @@ func (st *State) ClipFile(s *Storyboard, id string) (string, error) {
 	p, err := s.CheckFile(sc.Clip.File)
 	if err != nil {
 		return "", fmt.Errorf("scena %s: clip %w", id, err)
+	}
+	return p, nil
+}
+
+// VoiceFile è la voce generata in uso della scena id (per giv story cut),
+// rispetto alla cartella corrente e controllata come i file dello storyboard;
+// ErrNotDone se la scena non ha ancora una voce.
+func (st *State) VoiceFile(s *Storyboard, id string) (string, error) {
+	sc := st.Scenes[id]
+	if sc == nil || sc.Voice == nil {
+		return "", fmt.Errorf("scena %s: voce: %w", id, ErrNotDone)
+	}
+	p, err := s.CheckFile(sc.Voice.File)
+	if err != nil {
+		return "", fmt.Errorf("scena %s: voce %w", id, err)
 	}
 	return p, nil
 }

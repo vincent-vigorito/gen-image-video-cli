@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,6 +41,9 @@ type Kit struct {
 	// Dir è la cartella del kit (quella del file JSON): i file sono relativi a lei.
 	Dir string `json:"-"`
 }
+
+// kitFields sono i campi di primo livello del kit.
+var kitFields = []string{"marca", "personaggi", "voce", "pronuncia"}
 
 // Marca sono i predefiniti del montaggio. Logo, StileTesti, CartelloFinale e
 // Musica hanno gli stessi campi del blocco montaggio dello storyboard, con i
@@ -133,7 +138,8 @@ const (
 	MaxPersonaggi  = 50
 	MaxRiferimenti = 50  // immagini per personaggio (quante ne accettano i modelli: giv kit check avvisa)
 	MaxPronunce    = 200 // voci del dizionario (il tetto di xAI)
-	MaxParolaBytes = 100 // parola e pronuncia di una voce del dizionario
+	MaxParola      = 100 // caratteri della parola di una voce del dizionario (come giv voice)
+	MaxPronuncia   = 128 // caratteri della sua pronuncia
 
 	// DescrizioneLunga è la lunghezza, in caratteri, oltre la quale la
 	// descrizione di un personaggio allunga troppo il prompt: si avvisa.
@@ -188,6 +194,14 @@ func readLimited(path string) ([]byte, error) {
 
 // Parse decodifica un kit: un solo oggetto JSON, nessun campo sconosciuto.
 func Parse(data []byte) (*Kit, error) {
+	// un oggetto JSON senza nessun campo del kit (un altro file indicato per
+	// errore): errore generico, senza nomi di campi presi dal file
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) == nil && len(top) > 0 && !slices.ContainsFunc(slices.Collect(maps.Keys(top)), func(k string) bool {
+		return slices.ContainsFunc(kitFields, func(f string) bool { return strings.EqualFold(k, f) })
+	}) {
+		return nil, errors.New("non è un kit di giv: nessuno dei campi marca, personaggi, voce, pronuncia")
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var k Kit
@@ -270,7 +284,7 @@ func (k *Kit) Validate() error {
 		for i, r := range p.Riferimenti {
 			w := fmt.Sprintf("%s.riferimenti n. %d", where, i+1)
 			if seen[r] {
-				fail("%s: %s ripetuto", w, shown(r))
+				fail("%s: %q ripetuto", w, shown(r))
 				continue
 			}
 			seen[r] = true
@@ -289,8 +303,8 @@ func (k *Kit) Validate() error {
 	}
 	for _, w := range sortedKeys(k.Pronuncia) {
 		where := fmt.Sprintf("pronuncia %q", w)
-		word(where+": parola", w, fail)
-		word(where+": pronuncia", k.Pronuncia[w], fail)
+		word(where+": parola", w, MaxParola, fail)
+		word(where+": pronuncia", k.Pronuncia[w], MaxPronuncia, fail)
 	}
 	return errors.Join(errs...)
 }
@@ -331,7 +345,7 @@ func validateMarca(m *Marca, fail func(string, ...any), file func(string, string
 					file(where+".font", st.Font) // rifiutato da CheckPath, con l'URL ridotto
 					break
 				}
-				fail("%s.font %s: serve un file di font .ttf, .otf o .ttc", where, st.Font)
+				fail("%s.font %q: serve un file di font .ttf, .otf o .ttc", where, st.Font)
 			}
 		}
 		color(where+".colore", st.Colore, fail)
@@ -516,7 +530,7 @@ func imageFile(where, p string, fail func(string, ...any), file func(string, str
 	case ".png", ".jpg", ".jpeg", ".webp":
 		file(where, p)
 	default:
-		fail("%s %s: serve un'immagine .png, .jpg o .webp", where, p)
+		fail("%s %q: serve un'immagine .png, .jpg o .webp", where, p)
 	}
 }
 
@@ -548,13 +562,14 @@ func text(where, t string, required bool, fail func(string, ...any)) {
 }
 
 // word controlla una parola del dizionario delle pronunce: non vuota, al più
-// MaxParolaBytes, UTF-8 valido, senza a capo né caratteri di controllo.
-func word(where, w string, fail func(string, ...any)) {
+// limit caratteri, UTF-8 valido, senza a capo né caratteri di controllo (il
+// resto delle regole del dizionario lo controlla giv voice).
+func word(where, w string, limit int, fail func(string, ...any)) {
 	switch {
 	case strings.TrimSpace(w) == "":
 		fail("%s vuota", where)
-	case len(w) > MaxParolaBytes:
-		fail("%s: al più %d byte", where, MaxParolaBytes)
+	case utf8.RuneCountInString(w) > limit:
+		fail("%s: al più %d caratteri", where, limit)
 	case !utf8.ValidString(w):
 		fail("%s: testo non UTF-8", where)
 	case strings.ContainsFunc(w, func(r rune) bool { return r < 0x20 || r == 0x7f }):
@@ -563,8 +578,10 @@ func word(where, w string, fail func(string, ...any)) {
 }
 
 // isURL dice se p è un indirizzo http(s) invece di un file.
+// Lo schema si riconosce senza distinguere le maiuscole (HTTPS:// è un URL).
 func isURL(p string) bool {
-	return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
+	l := strings.ToLower(p[:min(len(p), len("https://"))])
+	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
 }
 
 // shown è p da mostrare in un messaggio: un URL ridotto a schema e host.
@@ -576,14 +593,14 @@ func shown(p string) string {
 }
 
 // redact lascia di un URL solo schema e host: percorso e query possono contenere token.
+// L'URL si legge con net/url: dell'host solo il nome (niente utente, porta,
+// frammento); un URL che non si legge diventa un testo fisso.
 func redact(p string) string {
-	scheme, rest, _ := strings.Cut(p, "://")
-	host, _, _ := strings.Cut(rest, "/")
-	host, _, _ = strings.Cut(host, "?")
-	if i := strings.LastIndex(host, "@"); i >= 0 {
-		host = host[i+1:]
+	u, err := url.Parse(p)
+	if err != nil || u.Hostname() == "" {
+		return "(URL non valido)"
 	}
-	return scheme + "://" + host + "/…"
+	return strings.ToLower(u.Scheme) + "://" + u.Hostname() + "/…"
 }
 
 // unit: numero finito da 0 a 1.

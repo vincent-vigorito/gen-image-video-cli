@@ -219,7 +219,7 @@ Uso:
                    [--tutela prodotto|illustrazione] [--strict]
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
-                                   run: --scene <id> [--new-keyframe] [--new-job]; cut: [--formato <r>] [--export <canali>]; aiuto: giv story help)
+                                   run: --scene <id> [--new-keyframe] [--new-job] [--new-voice], --voices; cut: [--formato <r>] [--export <canali>]; tutti: [--kit <file>]; aiuto: giv story help)
   giv kit check <kit.json>         controlla il kit di marca e personaggi ed elenca i file con le misure (gratuito)
   giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)

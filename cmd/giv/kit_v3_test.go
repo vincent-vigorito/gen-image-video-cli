@@ -178,3 +178,12 @@ func TestV3NomeConTrattino(t *testing.T) {
 		t.Fatalf("codice %d\n%s\n%s", code, so, se)
 	}
 }
+
+// un JSON che non e' un kit (nessuno dei campi noti): codice 2 con messaggio chiaro.
+func TestV3NonEUnKit(t *testing.T) {
+	d := v3Dir(t, `{"stranio": 1}`)
+	_, se, code := v3Run(t, t.TempDir(), "kit", "check", filepath.Join(d, "kit.json"))
+	if code != 2 || !strings.Contains(se, "non è un kit") {
+		t.Errorf("code=%d\n%s", code, se)
+	}
+}
