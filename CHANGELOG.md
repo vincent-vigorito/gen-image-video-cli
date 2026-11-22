@@ -35,6 +35,13 @@ versioning [SemVer](https://semver.org/lang/it/).
     video), `--duck` che la abbassa sotto la voce, voce fuori campo (`--voice`,
     `--voice-at`), volume finale in due passate (`--loudness`, default -14 LUFS, `off`
     per lasciarlo com'è).
+- **`giv sheet <file|cartella|storyboard.json>`**: foglio di contatto JPEG in locale
+  (`--every <s>` oppure `--frames <n>`, `--cols`, `--labels`); con una cartella una riga
+  per file, con uno storyboard una riga per scena col fotogramma chiave e la clip in uso.
+- **`giv frame --video <file> --at <s>|--last [--width <px>]`**: un fotogramma PNG o la
+  sua miniatura, in locale.
+- **`giv gif --video <file> [--start] [--end] [--width] [--fps]`**: GIF animata in locale
+  con la palette calcolata in due passate (default 480 px, 12 fps, al più 60 s).
 
 ## [0.10.0] - 2026-11-22
 

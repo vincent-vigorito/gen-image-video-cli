@@ -162,6 +162,12 @@ giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<promp
 giv post <operazione> --video <file> [flag dell'operazione] [--out D] [--name S] [--dry-run]
                                               # rifinitura in locale con ffmpeg, gratuita: trim, speed, freeze,
                                               # reframe, overlay, mix (giv post help)
+giv sheet   <file|cartella|storyboard.json> [--every <s> | --frames <n>] [--cols <n>] [--labels]
+                                              # foglio di contatto JPEG (locale con ffmpeg, gratuito)
+giv frame   --video <file> --at <s> | --last [--width <px>]
+                                              # un fotogramma PNG, con --width la miniatura (locale, gratuito)
+giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
+                                              # GIF animata, palette in due passate (locale, gratuita)
 giv version
 ```
 
@@ -183,6 +189,9 @@ prima o dopo.
 | `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
 | `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
 | `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
+| `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
+| `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
+| `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -592,6 +601,43 @@ L'audio del video resta e si somma a voce e musica (senza audio si parte dal sil
 video si copia senza ricodifica se è già H.264. Serve almeno uno fra `--music`, `--voice` e
 un `--loudness` diverso da `off`.
 
+## Foglio di contatto, fotogramma e GIF: `giv sheet`, `giv frame`, `giv gif`
+
+Tre comandi per **guardare** un video senza aprirlo, in locale con `ffmpeg` e `ffprobe`:
+niente rete, nessuna spesa. Valgono le regole comuni di `giv post` (`--out`, `--name`,
+`--dry-run`, mai sovrascrivere, codice 2 prima di ffmpeg, JSON su stdout e riga a costo
+zero in `giv-log.jsonl`).
+
+```bash
+giv sheet spot.mp4 --frames 8 --cols 4 --labels   # foglio di contatto JPEG di un video
+giv sheet clip/ --frames 4 --labels               # una riga per file della cartella
+giv sheet storyboard.json --labels                # una riga per scena: fotogramma chiave e clip
+giv frame --video spot.mp4 --at 1.5               # un fotogramma PNG
+giv frame --video scena-1.mp4 --last              # l'ultimo fotogramma (attacco della scena dopo)
+giv gif   --video spot.mp4 --start 2 --end 5 --width 480 --fps 12
+```
+
+- **`giv sheet <file|cartella|storyboard.json>`** (il file si può dare anche con
+  `--video`) mette in griglia i fotogrammi e salva `<nome>-foglio.jpg`: `--every <s>` un
+  fotogramma ogni s secondi da 0 (più di 0, al più 3600), oppure `--frames <n>` n
+  fotogrammi a intervalli uguali (1-100); senza nessuno dei due, uno per colonna. `--cols`
+  da 1 a 12 (default 4), al più 200 riquadri. `--labels` scrive su ogni riquadro
+  l'istante, con una cartella anche il nome del file, con uno storyboard l'id della scena
+  e la ripresa. Con una **cartella**: una riga per file, in ordine di nome (video `.mp4`
+  `.m4v` `.mov` `.mkv` `.webm` `.avi` `.ts`, immagini `.png` `.jpg` `.jpeg` `.webp`; solo
+  file normali, i link si saltano con un avviso). Con uno **storyboard**: una riga per
+  scena, col fotogramma chiave se c'è e i fotogrammi della clip in uso (`giv story run`) o
+  del file della scena; le scene senza clip né fotogramma chiave si saltano con un avviso.
+  In `params`: `mode` (`file`, `cartella`, `storyboard`), `cols`, `rows`, `cells`, le misure
+  dei riquadri e del foglio, `scenes` con uno storyboard.
+- **`giv frame --video <file>`** salva un fotogramma in PNG (`<nome>-fotogramma.png`):
+  `--at <s>` (dall'inizio, entro la durata) oppure `--last` (l'ultimo), uno solo dei due;
+  `--width <px>` (16-7680, altezza in proporzione) ne fa una miniatura.
+- **`giv gif --video <file>`** fa una GIF animata ripetuta all'infinito (`<nome>-gif.gif`,
+  palette calcolata in due passate) dal tratto fra `--start` (default 0) e `--end`
+  (default la fine), al più 60 s; `--width` da 16 a 1920 (default 480, mai oltre la
+  larghezza del video: in quel caso un avviso), `--fps` da 1 a 30 (default 12).
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -844,7 +890,7 @@ provider, ricette (reference di stile, image-to-video, spot da foto di prodotto,
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
 allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
-con `giv post`),
+con `giv post`, foglio di contatto e fotogrammi),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -871,7 +917,7 @@ internal/caps/            capacità e prezzi dei modelli video (OpenRouter /vide
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
-internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…)
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…, sheet, frame, gif)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto
