@@ -593,6 +593,11 @@ giv voice --voices --provider gemini
   rete, risposta non valida) esce con codice 5 e una riga `failed` nel registro: la voce
   può essere stata addebitata, controlla prima di rilanciare. Voce sconosciuta: codice 3
   (elenco con `giv voice --voices`).
+- **elenco delle voci** (`--voices`, gratuito): con `--provider gemini` sempre le 30 voci
+  studio (`name` `voce studio`, compresa la predefinita `Kore`) e poi le voci dell'API
+  (`GET /v1beta/voices`) pagina per pagina, fino a 10 pagine e 10.000 voci; un elenco
+  tagliato esce comunque con codice 0, con un avviso su stderr e il campo `warnings` nel
+  JSON.
 
 ## Rifinitura in locale: `giv post`
 
@@ -678,7 +683,9 @@ logo in pixel (`logo.box`, `end_card.logo_box`), i margini e `duration_out`.
   (default 0); la parte oltre la fine del video si taglia;
 - `--loudness <LUFS>`: volume finale in LUFS integrati, da -70 a -5, misurato e corretto in
   due passate (`loudnorm`); default **-14**, la convenzione dei social (nessuna fonte
-  ufficiale, quindi impostabile); `off` lascia il volume com'è.
+  ufficiale, quindi impostabile); `off` lascia il volume com'è. Il picco vero del file
+  scritto resta entro -1 dBTP anche dopo la codifica AAC (la normalizzazione chiede
+  -1,5 dBTP per lasciare il margine).
 
 L'audio del video resta e si somma a voce e musica (senza audio si parte dal silenzio); il
 video si copia senza ricodifica se è già H.264. Serve almeno uno fra `--music`, `--voice` e
@@ -891,7 +898,9 @@ errori vanno su stderr. `giv story help` (o `giv story --help`) e `giv story <so
 Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost_total_usd`
 1,5 (il `taglio` di s3 cambia solo il montaggio, non la durata chiesta al modello). I file in
 `examples/spot/img/`, `voce/` e `musica/` sono segnaposto (tinte piatte e silenzio):
-sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
+sostituirli con la foto del prodotto, il logo, la voce e la musica vere. Lo stesso spot col
+kit di `examples/kit/`, la voce dai testi, i sottotitoli dai testi e il controllo dei file
+è in `examples/spot/storyboard-kit.json` (vedi [Kit e voce dai testi](#kit-e-voce-dai-testi)).
 
 | Campo | Cosa contiene |
 |---|---|
@@ -1289,7 +1298,8 @@ montaggio resta quello di prima):
   parlano le voci (serve almeno una scena con `voce`) e `sfuma_fine` sono i secondi di
   dissolvenza in chiusura (da 0 a 60).
 - **`volume`**: volume finale in LUFS integrati, da -70 a -5 (es. -14, la convenzione dei
-  social), misurato e corretto in due passate; senza il campo il volume resta com'è.
+  social), misurato e corretto in due passate, col picco vero entro -1 dBTP; senza il
+  campo il volume resta com'è.
 
 Testi di titoli e cartello: alla lettera (al più 2000 byte, UTF-8), in un file `.ass`
 generato da giv, mai nella stringa dei filtri di ffmpeg. Font, logo e musica devono stare
@@ -1404,7 +1414,8 @@ provider, ricette (reference di stile, image-to-video, spot da foto di prodotto,
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
 allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
-con `giv post`, foglio di contatto e fotogrammi, esportazione per canale),
+con `giv post`, foglio di contatto e fotogrammi, esportazione per canale, voce con
+`giv voice`, kit di marca, controllo tecnico con `giv qc`),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -1433,10 +1444,10 @@ internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv 
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
 internal/kit/             kit di marca e personaggi: lettura, controlli e percorsi chiusi nella cartella del kit
 internal/speech/          voce e trascrizione: richiesta, controlli, prezzi e stima, pronunce, tempi, WAV, confronto col testo
-internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export) e controllo di giv qc
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export), controllo di giv qc e sottotitoli dai testi
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
-examples/spot/            storyboard d'esempio con file segnaposto
+examples/spot/            storyboard d'esempio con file segnaposto (storyboard-kit.json: col kit, la voce e i sottotitoli dai testi)
 examples/kit/             kit di marca e personaggi d'esempio con file segnaposto
 ```
 

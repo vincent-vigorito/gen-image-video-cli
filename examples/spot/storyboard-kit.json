@@ -1,0 +1,30 @@
+{
+  "titolo": "Spot di prova col kit: crema alle erbe, voce dai testi",
+  "kit": "../kit/kit.json",
+  "formato": { "aspect": "16:9", "risoluzione": "720p", "fps": 24 },
+  "default": { "provider": "openrouter", "modello": "alibaba/wan-3.0", "audio": "off" },
+  "tetto_costo_usd": 3,
+  "parlato": { "velocita": 1.05 },
+  "controllo": { "tecnico": true },
+  "scene": [
+    {
+      "id": "s1", "tipo": "video", "durata": 5,
+      "immagine": "img/prodotto.png", "preset": ["dolly-in"], "fuoco": 0.4,
+      "prompt": "il vasetto di crema su un piano di legno chiaro, luce del mattino da una finestra",
+      "testo": "Ogni mattina, un gesto semplice."
+    },
+    {
+      "id": "s2", "tipo": "video", "durata": 5,
+      "usa": ["mascotte"], "preset": ["static"],
+      "prompt": "la mascotte indica il vasetto di crema aperto sul tavolo, foglie di salvia intorno",
+      "testo": "Crema alle erbe: salvia e calendula. In erboristeria.",
+      "ritardo_voce": 0.5
+    }
+  ],
+  "montaggio": {
+    "transizione": "dissolvenza", "uscita": "spot-kit.mp4",
+    "formati": ["16:9", "9:16"], "adatta": "ritaglio",
+    "sottotitoli": "auto",
+    "titoli": [ { "testo": "Crema alle erbe", "scena": "s1", "da": 0.5, "durata": 3, "posizione": "alto" } ]
+  }
+}
