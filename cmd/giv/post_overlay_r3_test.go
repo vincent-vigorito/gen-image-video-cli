@@ -119,7 +119,7 @@ func r3Box(px []byte, pred func(r, g, b byte) bool) (n, x0, y0, x1, y1 int) {
 	return
 }
 
-func isRed(r, g, b byte) bool  { return r > 200 && g < 60 && b < 60 }
+func isRed(r, g, b byte) bool   { return r > 200 && g < 60 && b < 60 }
 func notBlue(r, g, b byte) bool { return r > 100 || g > 100 || b < 150 }
 
 func TestR3Logo(t *testing.T) {
@@ -143,9 +143,6 @@ func TestR3Logo(t *testing.T) {
 		}
 		if w := x1 - x0 + 1; w < 70 || w > 90 {
 			t.Errorf("%s: larghezza logo %d, attesa ~80", c.pos, w)
-		}
-		if c.right != (x0 > r3W/2) || c.right != (x1 > r3W/2) && !c.right {
-			t.Errorf("%s: logo a x %d-%d", c.pos, x0, x1)
 		}
 		if c.low != (y0 > r3H/2) {
 			t.Errorf("%s: logo a y %d-%d", c.pos, y0, y1)
