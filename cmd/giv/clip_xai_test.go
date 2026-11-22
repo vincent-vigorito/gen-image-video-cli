@@ -117,3 +117,21 @@ func TestXAIMaxCostSopraStimaRifiutato(t *testing.T) {
 		t.Errorf("tetto uguale alla stima deve passare: %v", err)
 	}
 }
+
+func TestXAIDurataZeroEUrlConTettoRifiutati(t *testing.T) {
+	hits := xaiEnv(t, "5.0")
+	for name, args := range map[string][]string{
+		"duration 0":    {"--video", "clip.mp4", "--duration", "0", "p"},
+		"url con tetto": {"--video", "https://example.test/a.mp4", "--max-cost", "50", "p"},
+	} {
+		_, err := runOp(t, cmdExtend, args...)
+		if err == nil {
+			t.Errorf("%s: atteso rifiuto", name)
+		} else if code, _ := exitCode(err); code != 2 {
+			t.Errorf("%s: code=%d (%v)", name, code, err)
+		}
+	}
+	if n := atomic.LoadInt32(hits); n != 0 {
+		t.Errorf("%d richieste, attese 0", n)
+	}
+}

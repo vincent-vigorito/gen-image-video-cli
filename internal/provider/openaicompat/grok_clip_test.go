@@ -190,3 +190,21 @@ func TestGrokVideoSenzaCostoReale(t *testing.T) {
 		}
 	}
 }
+
+// un 307 sull'avvio non si segue e non si ripete: una sola richiesta.
+func TestGrokClipRedirectAvvioNonSeguito(t *testing.T) {
+	fastPoll(t)
+	var hits int32
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, srv.URL+"/altro", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	c := New("xai", srv.URL, "k", Options{Grok: true})
+	_, err := c.GenerateClip(context.Background(), provider.ClipRequest{
+		Op: "edit", Model: "grok-imagine-video", Prompt: "p", Video: "https://example.test/a.mp4"})
+	if err == nil || hits != 1 {
+		t.Errorf("err=%v richieste=%d, attesa 1 e un errore", err, hits)
+	}
+}
