@@ -168,6 +168,12 @@ func main() {
 		err = cmdAvatar(os.Args[2:])
 	case "post":
 		err = cmdPost(os.Args[2:])
+	case "sheet":
+		err = cmdSheet(os.Args[2:])
+	case "frame":
+		err = cmdFrame(os.Args[2:])
+	case "gif":
+		err = cmdGIF(os.Args[2:])
 	case "export":
 		err = cmdExport(os.Args[2:])
 	case "version", "--version", "-v":
@@ -211,6 +217,9 @@ Uso:
   giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv post <operazione> --video <file> [--out <dir>] [--name <nome>] [--dry-run]  rifinitura in locale con ffmpeg, gratuita (operazioni: giv post help)
+  giv sheet <file|cartella|storyboard.json> [--every <s>|--frames <n>] [--cols <n>] [--labels]  foglio di contatto JPEG, in locale (gratuito)
+  giv frame --video <file> --at <s>|--last [--width <px>]  un fotogramma PNG (con --width la miniatura), in locale (gratuito)
+  giv gif --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]  GIF animata in locale (default 480 px, 12 fps; gratuita)
   giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito (aiuto: giv export --help)
   giv version                      stampa la versione
 
