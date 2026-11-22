@@ -41,17 +41,22 @@ const maxVoices = 1000
 
 // VoiceBody è il corpo JSON della richiesta di voce di Gemini per req (già
 // passata da speech.Check): anche il piano di --dry-run. Il testo è quello
-// detto, con le pronunce sostituite; lo stile va come annotazione.
+// detto, con le pronunce sostituite; lo stile va come annotazione; i token
+// d'uscita sono limitati a speech.MaxGeminiOutputTokens.
 func VoiceBody(req speech.Request) map[string]any {
 	text := map[string]any{"type": "text", "text": req.Spoken()}
 	if req.Style != "" {
 		text["annotations"] = []any{map[string]any{"type": "speech_metadata", "style": req.Style}}
 	}
 	return map[string]any{
-		"model":             req.Model,
-		"input":             []any{map[string]any{"type": "user_input", "content": []any{text}}},
-		"response_format":   map[string]any{"type": "audio"},
-		"generation_config": map[string]any{"speech_config": []any{map[string]any{"voice": req.Voice}}},
+		"model":           req.Model,
+		"input":           []any{map[string]any{"type": "user_input", "content": []any{text}}},
+		"response_format": map[string]any{"type": "audio"},
+		"generation_config": map[string]any{
+			// limite d'uscita in ogni richiesta, quello della stima (decisione 22)
+			"max_output_tokens": speech.MaxGeminiOutputTokens,
+			"speech_config":     []any{map[string]any{"voice": req.Voice}},
+		},
 	}
 }
 
@@ -173,9 +178,17 @@ func (c *Client) voiceCall(ctx context.Context, retry httpx.RetryFunc, method, r
 
 // hideKey toglie la chiave da un corpo di risposta prima di leggerne i
 // messaggi (che poi si accorciano: una chiave tagliata a metà resterebbe).
+// Un JSON valido si riscrive prima senza gli escape superflui, così anche una
+// chiave scritta con gli escape Unicode (\u0041…) torna in chiaro e si toglie.
 func hideKey(data []byte, key string) []byte {
 	if key == "" {
 		return data
+	}
+	var v any
+	if json.Unmarshal(data, &v) == nil {
+		if plain, err := json.Marshal(v); err == nil {
+			data = plain
+		}
 	}
 	return bytes.ReplaceAll(data, []byte(key), []byte("***"))
 }

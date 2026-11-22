@@ -37,58 +37,61 @@ var Prices = []Price{
 	{Provider: Gemini, Model: "gemini-3.8-flash-lite-tts", From: geminiDouble, USDPerMInputTokens: 1, USDPerMAudioTokens: 12},
 }
 
-// Costo probabile di gemini, che non ha una velocità: un ritmo lento (il
-// parlato normale è sui 15 caratteri al secondo) e mai meno di due secondi.
-// È solo informativo: la durata non si può imporre (lo stile può
-// rallentarla), quindi il tetto vale sul massimo fatturabile.
-const (
-	slowCharsPerSecond = 10
-	minEstimateSeconds = 2
-)
-
 // Estimate è la stima del costo di una richiesta.
 type Estimate struct {
 	USD      float64 // arrotondato a 6 decimali, per piano e manifest
 	Exact    float64 // non arrotondato: è il valore confrontato col tetto
-	Probable float64 // costo probabile, arrotondato (gemini; xai: = USD)
+	Probable bool    // stima probabile, non un massimo garantito (gemini): con un tetto vale CapRefusal
 	Chars    int     // caratteri contati
 	Source   string
 }
 
 // EstimateCost stima il costo di req (già passata da Check) alla data at:
-// esatta per xai (caratteri × prezzo); per gemini il massimo fatturabile di
-// una richiesta, dai limiti del modello (MaxGeminiInputTokens in ingresso,
-// MaxGeminiOutputTokens in uscita, ragionamento compreso, alla tariffa
-// audio), con accanto il costo probabile (token audio di una durata a ritmo
-// lento più un token per byte di testo e stile). nil con il motivo se manca
-// la tariffa: con un tetto di spesa la richiesta è non stimabile e non parte.
+// esatta per xai (caratteri × prezzo); per gemini probabile (Probable), sul
+// limite dei token d'uscita che va nella richiesta (MaxGeminiOutputTokens,
+// ragionamento compreso, alla tariffa audio) più il massimo dei token in
+// ingresso (MaxGeminiInputTokens). nil con il motivo se manca la tariffa:
+// con un tetto di spesa la richiesta è non stimabile e non parte.
 func EstimateCost(req Request, at time.Time) (*Estimate, string) {
 	p, ok := priceAt(req.Provider, req.Model, at)
 	if !ok {
 		return nil, fmt.Sprintf("nessuna tariffa della voce per %s nel listino di giv", providerModel(req))
 	}
-	spoken := req.Spoken()
-	chars := utf8.RuneCountInString(spoken)
-	var exact, probable float64
+	chars := utf8.RuneCountInString(req.Spoken())
+	var exact float64
 	var src string
+	probable := CapRefusal(req.Provider) != ""
 	if p.USDPerMChars > 0 {
 		exact = float64(chars) * p.USDPerMChars / 1e6
-		probable = exact
 		src = fmt.Sprintf("listino %s: %g $ per milione di caratteri × %d caratteri", req.Provider, p.USDPerMChars, chars)
 	} else {
 		exact = tokenCost(p, MaxGeminiInputTokens, MaxGeminiOutputTokens)
-		secs := max(float64(chars)/slowCharsPerSecond, minEstimateSeconds)
-		audio := min(int64(math.Ceil(secs*GeminiTokensPerSecond)), MaxGeminiOutputTokens)
-		input := min(int64(len(spoken)+len(req.Style)), MaxGeminiInputTokens)
-		probable = tokenCost(p, input, audio)
-		src = fmt.Sprintf("massimo per richiesta, listino %s%s: %d token di testo × %g $/M + %d token d'uscita × %g $/M (limiti del modello); probabile %.6f $ (%d token audio: %.0f s a %d caratteri/s)",
-			providerModel(req), priceDate(p), MaxGeminiInputTokens, p.USDPerMInputTokens, MaxGeminiOutputTokens, p.USDPerMAudioTokens,
-			math.Round(probable*1e6)/1e6, audio, secs, slowCharsPerSecond)
+		src = fmt.Sprintf("stima probabile, non un massimo garantito: listino %s%s, %d token di testo × %g $/M + %d token d'uscita (max_output_tokens della richiesta) × %g $/M",
+			providerModel(req), priceDate(p), MaxGeminiInputTokens, p.USDPerMInputTokens, MaxGeminiOutputTokens, p.USDPerMAudioTokens)
 	}
-	if math.IsNaN(exact) || math.IsInf(exact, 0) || exact < 0 || math.IsNaN(probable) || probable < 0 {
+	if math.IsNaN(exact) || math.IsInf(exact, 0) || exact < 0 {
 		return nil, "tariffa della voce non valida"
 	}
-	return &Estimate{USD: math.Round(exact*1e6) / 1e6, Exact: exact, Probable: math.Round(probable*1e6) / 1e6, Chars: chars, Source: src}, ""
+	return &Estimate{USD: math.Round(exact*1e6) / 1e6, Exact: exact, Probable: probable, Chars: chars, Source: src}, ""
+}
+
+// CapRefusal è il motivo per cui una voce del provider non si può chiedere
+// con un tetto di spesa attivo (--max-cost o tetto dello storyboard): "" per
+// xai, la cui stima è esatta. Il costo di una voce gemini non ha oggi un
+// massimo garantito (decisione 22): con un tetto è non stimabile, codice 2
+// prima di qualsiasi richiesta. Provider "" = DefaultProvider; un provider
+// sconosciuto non è mai stimabile.
+func CapRefusal(provider string) string {
+	if provider == "" {
+		provider = DefaultProvider
+	}
+	switch provider {
+	case XAI:
+		return ""
+	case Gemini:
+		return "la voce gemini non ha un costo massimo garantito: con un tetto di spesa usa xai o togli il tetto"
+	}
+	return fmt.Sprintf("voce %s senza una stima garantita: con un tetto di spesa usa xai o togli il tetto", provider)
 }
 
 // UsageCost è il costo di una voce generata dai consumi, alla data at della

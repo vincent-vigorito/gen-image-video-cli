@@ -529,7 +529,7 @@ giv job fetch --provider xai --timeout 30m --name s2 <id>
 giv voice --dry-run "Swerpify ti porta dove vuoi."
 giv voice --pronuncia pronunce.json --speed 1.1 --name s1-voce --max-cost 0.01 "Swerpify ti porta dove vuoi."
 giv voice --text-file testi/s2.txt --voice eve --lang it --out voce
-giv voice --provider gemini --style "calda, ritmo calmo" --max-cost 0.02 "Swerpify ti porta dove vuoi."
+giv voice --provider gemini --style "calda, ritmo calmo" "Swerpify ti porta dove vuoi."
 giv voice --kit kit/argo.json --name s1-voce "Swerpify ti porta dove vuoi."
 giv voice --voices
 giv voice --voices --provider gemini
@@ -569,15 +569,16 @@ giv voice --voices --provider gemini
   il conto): uno spot da 375 caratteri costa circa 0,006 $. xAI non riporta il costo: il
   manifest ha la stima (`cost_est_usd`). Gemini: 0,50 $ per milione di token di testo e
   9 $ (flash-lite 6 $) per milione di token audio, 25 token al secondo; **dal 01/01/2027
-  il doppio** (la tariffa si sceglie dalla data). Gemini non ha una velocità e lo stile può
-  allungare il parlato: la stima (`cost_est_usd`), su cui vale `--max-cost`, è il
-  **massimo per richiesta** dai limiti del modello (8.192 token di testo e 16.384 d'uscita:
-  circa 0,15 $ con flash, 0,10 $ con flash-lite, il doppio dal 2027); in `cost_source`
-  anche il costo probabile (10 caratteri al secondo, almeno 2 secondi);
-  dopo la generazione il manifest ha anche il costo dai token riportati o, se mancano,
+  il doppio** (la tariffa si sceglie dalla data). Ogni richiesta gemini porta il limite di
+  16.384 token d'uscita (`max_output_tokens`) e la stima (`cost_est_usd`) usa quel limite
+  più 8.192 token di testo: circa 0,15 $ con flash, 0,10 $ con flash-lite, il doppio dal
+  2027. Non è un massimo garantito (non è confermato che l'API rispetti il limite): la
+  stima è **probabile** (`cost_source`), con un avviso su stderr, e **con `--max-cost`
+  gemini esce con codice 2** prima di qualsiasi chiamata (usa xai o togli il tetto).
+  Dopo la generazione il manifest ha anche il costo dai token riportati o, se mancano,
   dalla durata misurata (`cost_usage_usd`). `--dry-run` stampa la richiesta e la stima
   senza chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto
-  o non è stimabile (per esempio un modello gemini senza tariffa nel listino di giv).
+  o non è stimabile.
 - **una sola richiesta, mai ripetuta**: un esito incerto (redirect, errore del server,
   rete, risposta non valida) esce con codice 5 e una riga `failed` nel registro: la voce
   può essere stata addebitata, controlla prima di rilanciare. Voce sconosciuta: codice 3

@@ -40,8 +40,9 @@ const (
 	// anche a un ritmo lento il testo deve starci, o la voce esce troncata.
 	MaxGeminiTextChars = 6000
 	// MaxGeminiInputTokens e MaxGeminiOutputTokens: token di gemini per
-	// richiesta in ingresso e in uscita (limiti del modello): danno il
-	// massimo fatturabile, su cui vale il tetto.
+	// richiesta in ingresso e in uscita (limiti del modello; il secondo va in
+	// ogni richiesta come max_output_tokens). Danno la stima, probabile finché
+	// una prova non conferma che l'API rispetta il limite (decisione 22).
 	MaxGeminiInputTokens  = 8192
 	MaxGeminiOutputTokens = 16384
 	// GeminiTokensPerSecond: token audio di gemini per secondo di parlato.
