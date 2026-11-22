@@ -36,8 +36,19 @@ const voiceTimeout = 10 * time.Minute
 // voicesTimeout è il tempo massimo dell'elenco delle voci.
 const voicesTimeout = 60 * time.Second
 
-// maxVoices: voci tenute dall'elenco (una pagina dell'API).
-const maxVoices = 1000
+// MaxVoices: voci tenute dall'elenco; maxVoicePages: pagine lette (da 1000).
+const (
+	MaxVoices     = 10000
+	maxVoicePages = 10
+)
+
+// studioVoices sono le 30 voci studio della documentazione di Gemini (la
+// predefinita Kore compresa): sempre in testa all'elenco, che l'API può dare
+// solo dopo centinaia di voci della libreria.
+var studioVoices = []string{"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
+	"Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome",
+	"Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima",
+	"Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"}
 
 // VoiceBody è il corpo JSON della richiesta di voce di Gemini per req (già
 // passata da speech.Check): anche il piano di --dry-run. Il testo è quello
@@ -87,42 +98,68 @@ func (c *Client) Synthesize(ctx context.Context, req speech.Request) (*speech.Re
 	return res, nil
 }
 
-// Voices elenca le voci di Gemini (GET /v1beta/voices, gratuito): la prima
-// pagina, al più maxVoices; nomi ripuliti, solo quelli usabili con --voice.
+// Voices elenca le voci di Gemini (GET /v1beta/voices, gratuito): le voci
+// studio e poi quelle dell'API, pagina per pagina (next_page_token), al più
+// maxVoicePages pagine e MaxVoices voci; nomi ripuliti, solo quelli usabili
+// con --voice. Un elenco tagliato torna con speech.ErrPartialVoices.
 func (c *Client) Voices(ctx context.Context) ([]speech.Voice, error) {
-	data, err := c.voiceCall(stay(ctx), httpx.Retry, http.MethodGet, c.base()+"/voices?page_size=1000", nil, voicesTimeout)
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		Voices []struct {
-			ID          any `json:"id"`
-			Name        any `json:"name"`
-			DisplayName any `json:"display_name"`
-			Language    any `json:"language_code"`
-		} `json:"voices"`
-	}
-	if json.Unmarshal(data, &resp) != nil {
-		return nil, errors.New("gemini: elenco delle voci non valido")
-	}
 	out := []speech.Voice{}
-	for _, v := range resp.Voices {
-		id, _ := v.ID.(string)
-		if id == "" {
-			id, _ = v.Name.(string)
-		}
-		id = strings.TrimPrefix(id, "voices/")
-		if !speech.ValidVoice(id) {
-			continue
-		}
-		name, _ := v.DisplayName.(string)
-		lang, _ := v.Language.(string)
-		out = append(out, speech.Voice{ID: id, Name: safeText(name, 80), Language: safeText(lang, 35)})
-		if len(out) >= maxVoices {
-			break
-		}
+	seen := map[string]bool{}
+	for _, id := range studioVoices {
+		out = append(out, speech.Voice{ID: id, Name: "voce studio"})
+		seen[strings.ToLower(id)] = true
 	}
-	return out, nil
+	token := ""
+	for page := 0; ; page++ {
+		if page == maxVoicePages {
+			return out, speech.ErrPartialVoices
+		}
+		u := c.base() + "/voices?page_size=1000"
+		if token != "" {
+			u += "&page_token=" + url.QueryEscape(token)
+		}
+		data, err := c.voiceCall(stay(ctx), httpx.Retry, http.MethodGet, u, nil, voicesTimeout)
+		if err != nil {
+			return nil, err
+		}
+		var resp struct {
+			Voices []struct {
+				ID          any `json:"id"`
+				Name        any `json:"name"`
+				DisplayName any `json:"display_name"`
+				Language    any `json:"language_code"`
+			} `json:"voices"`
+			Next any `json:"next_page_token"`
+		}
+		if json.Unmarshal(data, &resp) != nil {
+			return nil, errors.New("gemini: elenco delle voci non valido")
+		}
+		for _, v := range resp.Voices {
+			id, _ := v.ID.(string)
+			if id == "" {
+				id, _ = v.Name.(string)
+			}
+			id = strings.TrimPrefix(id, "voices/")
+			if !speech.ValidVoice(id) || seen[strings.ToLower(id)] {
+				continue
+			}
+			if len(out) >= MaxVoices {
+				return out, speech.ErrPartialVoices
+			}
+			seen[strings.ToLower(id)] = true
+			name, _ := v.DisplayName.(string)
+			lang, _ := v.Language.(string)
+			out = append(out, speech.Voice{ID: id, Name: safeText(name, 80), Language: safeText(lang, 35)})
+		}
+		next, _ := resp.Next.(string)
+		switch {
+		case next == "":
+			return out, nil
+		case next == token || len(next) > 2048 || strings.IndexFunc(next, func(r rune) bool { return r <= ' ' || r == 0x7f }) >= 0:
+			return out, speech.ErrPartialVoices // token ripetuto o non valido: ci si ferma
+		}
+		token = next
+	}
 }
 
 // voiceCall è la richiesta della voce: solo sull'origine dell'API (lì va la
