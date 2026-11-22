@@ -160,6 +160,12 @@ giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1
                                               # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                               # personaggio che parla (fal, job asincrono, a pagamento)
+giv sheet   <file|cartella|storyboard.json> [--every <s> | --frames <n>] [--cols <n>] [--labels]
+                                              # foglio di contatto JPEG (locale con ffmpeg, gratuito)
+giv frame   --video <file> --at <s> | --last [--width <px>]
+                                              # un fotogramma PNG, con --width la miniatura (locale, gratuito)
+giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
+                                              # GIF animata, palette in due passate (locale, gratuita)
 giv version
 ```
 
