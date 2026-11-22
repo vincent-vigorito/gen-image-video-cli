@@ -42,21 +42,25 @@ type storyCutResult struct {
 	AudioCodec string   `json:"audio_codec,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
 	Format     string   `json:"format,omitempty"` // con più formati: il formato del file
+	// Exports sono i file per canale di --export (senza più formati)
+	Exports []exportItem `json:"exports,omitempty"`
 }
 
 // storyCutFormats è l'uscita di giv story cut con montaggio.formati o
-// --formato: un risultato per formato, nell'ordine dello storyboard.
+// --formato: un risultato per formato, nell'ordine dello storyboard, e i
+// file per canale di --export.
 type storyCutFormats struct {
 	Storyboard string           `json:"storyboard"`
 	Scenes     int              `json:"scenes"`
 	Formats    []storyCutResult `json:"formats"`
+	Exports    []exportItem     `json:"exports,omitempty"`
 }
 
 // runStoryCut è giv story cut: monta con ffmpeg le clip già presenti, senza
 // generazione e senza rete; il file d'uscita dello storyboard si riscrive a
 // ogni montaggio.
 func runStoryCut(args []string) error {
-	path, only, err := storyCutArgs(args)
+	path, only, exportSpec, err := storyCutArgs(args)
 	if err != nil {
 		return err
 	}
@@ -79,6 +83,21 @@ func runStoryCut(args []string) error {
 	if err != nil {
 		return usageError("%s: %v", path, err)
 	}
+	// --export: ogni canale vuole uno dei formati montati, controllato prima
+	var profiles []montage.Profile
+	var sources []int // per canale, l'indice del formato montato
+	if exportSpec != "" {
+		if profiles, err = montage.ParseChannels(exportSpec); err != nil {
+			return usageError("--export: %s", localErrMsg(err))
+		}
+		for _, pr := range profiles {
+			i := slices.IndexFunc(formats, func(f string) bool { return cutAspectOf(s, f) == pr.Aspect.String() })
+			if i < 0 {
+				return usageError("%s: --export %s vuole il formato %s, che non si monta: aggiungilo a montaggio.formati (o a --formato)", path, pr.Spec(), pr.Aspect)
+			}
+			sources = append(sources, i)
+		}
+	}
 	// tutti i piani prima di montare: un problema in un formato ferma tutto
 	plans := make([]montage.Plan, len(formats))
 	for i, f := range formats {
@@ -97,12 +116,180 @@ func runStoryCut(args []string) error {
 		if err != nil {
 			return err
 		}
-		if formats[i] == "" {
-			return output.PrintJSON(out)
-		}
 		multi.Formats = append(multi.Formats, *out)
 	}
+	contactSheet(s, path)
+	if len(profiles) > 0 {
+		if multi.Exports, err = cutExport(s, path, profiles, sources, multi.Formats); err != nil {
+			return err
+		}
+	}
+	if formats[0] == "" {
+		out := multi.Formats[0]
+		out.Exports = multi.Exports
+		return output.PrintJSON(out)
+	}
 	return output.PrintJSON(multi)
+}
+
+// storyFiles sono i file locali che lo storyboard nomina e che esistono come
+// file normali (scene, voci, immagini, riferimenti, musica, sottotitoli,
+// logo, font, stato e clip generate): i file che giv story riscrive da solo
+// (foglio di contatto, esportazioni) non li sostituiscono mai.
+func storyFiles(s *story.Storyboard) []string {
+	var names []string
+	add := func(p ...string) { names = append(names, p...) }
+	for _, set := range s.Riferimenti {
+		add(set...)
+	}
+	for i := range s.Scene {
+		sc := &s.Scene[i]
+		add(sc.File, sc.Voce, sc.Immagine, sc.UltimoFotogramma)
+		add(sc.FotogrammiIntermedi...)
+	}
+	if m := s.Montaggio; m != nil {
+		if m.Musica != nil {
+			add(m.Musica.File)
+		}
+		add(m.Sottotitoli)
+		if m.Logo != nil {
+			add(m.Logo.File)
+		}
+		if c := m.CartelloFinale; c != nil {
+			add(c.Logo)
+		}
+		if st := m.StileTesti; st != nil {
+			add(st.Font)
+		}
+		for _, t := range m.Titoli {
+			if t.Stile != nil {
+				add(t.Stile.Font)
+			}
+		}
+	}
+	var out []string
+	for _, n := range names {
+		if n == "" || story.IsURL(n) {
+			continue
+		}
+		p := s.Path(n)
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// cutAspectOf è il rapporto del formato montato f ("" : quello dello storyboard).
+func cutAspectOf(s *story.Storyboard, f string) string {
+	if f != "" {
+		return f
+	}
+	var fm story.Formato
+	if s.Formato != nil {
+		fm = *s.Formato
+	}
+	return firstOf(fm.Aspect, s.Default.Aspect, cutAspect)
+}
+
+// cutExport esporta per ogni canale il file montato nel suo formato (come
+// giv export, profili di R-T7): file <uscita>-<canale>-<WxH>.mp4 accanto al
+// montato, riscritti a ogni giv story cut; volume montaggio.volume o -14
+// LUFS. Una durata fuori dai limiti del canale è un errore d'uso.
+func cutExport(s *story.Storyboard, path string, profiles []montage.Profile, sources []int, done []storyCutResult) ([]exportItem, error) {
+	loud := montage.DefaultLoudness
+	if m := s.Montaggio; m != nil && m.Volume != nil {
+		loud = *m.Volume
+	}
+	caches := map[string]*montage.ExportCache{}
+	var items []exportItem
+	for k, pr := range profiles {
+		src := done[sources[k]]
+		if err := pr.CheckDuration(src.DurationS); err != nil {
+			return items, usageError("%s: --export %s: %s", path, pr.Spec(), localErrMsg(err))
+		}
+		info, err := localMedia("montato", src.Output)
+		if err != nil {
+			return items, err
+		}
+		e := montage.Export{Profile: pr, Fit: montage.FitCrop, SrcFPS: info.Video.FPS, Audio: info.Audio != nil}
+		if e.Audio {
+			e.Loudness = &loud
+		}
+		if caches[src.Output] == nil {
+			caches[src.Output] = &montage.ExportCache{}
+		}
+		stem := strings.TrimSuffix(src.Output, filepath.Ext(src.Output))
+		if src.Format != "" {
+			stem = strings.TrimSuffix(stem, "-"+strings.ReplaceAll(src.Format, ":", "x"))
+		}
+		out := stem + "-" + pr.Tag() + ".mp4"
+		fmt.Fprintf(os.Stderr, "esportazione %s in %s\n", pr.Spec(), out)
+		res, err := localTool.RunOp(context.Background(), montage.Op{Inputs: append(storyFiles(s), src.Output), Output: out, Root: s.Dir,
+			Replace: true, Build: montage.ExportBuild(src.Output, e, caches[src.Output])})
+		if err != nil {
+			if errors.Is(err, montage.ErrInvalid) {
+				return items, usageError("%s: --export %s: %s", path, pr.Spec(), localErrMsg(err))
+			}
+			return items, err
+		}
+		item := exportItem{Channel: pr.Channel, Aspect: pr.Aspect.String(), File: res.Output, Width: pr.Width, Height: pr.Height,
+			Convention: pr.Convention}
+		if e.Audio && !caches[src.Output].Muted {
+			item.LoudnessLUFS = &loud
+		}
+		if i := res.Info; i != nil {
+			item.DurationS = round3(i.Duration)
+			if v := i.Video; v != nil {
+				item.Width, item.Height, item.FPS, item.VideoCodec = v.Width, v.Height, round3(v.FPS), v.Codec
+			}
+			if a := i.Audio; a != nil {
+				item.AudioCodec = a.Codec
+			}
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// contactSheetName è il foglio di contatto che giv story run e cut scrivono
+// da soli accanto allo storyboard.
+const contactSheetName = "foglio-contatto.jpg"
+
+// contactSheet scrive (o riscrive) foglio-contatto.jpg accanto allo
+// storyboard: una riga per scena con id e ripresa (storySheet, come giv sheet
+// sullo storyboard), salvo foglio_contatto false. È un di più: un problema
+// è un avviso su stderr e non cambia l'esito del comando.
+func contactSheet(s *story.Storyboard, path string) {
+	if s.FoglioContatto != nil && !*s.FoglioContatto {
+		return
+	}
+	warn := func(err error) {
+		fmt.Fprintf(os.Stderr, "avviso: %s non scritto: %s\n", contactSheetName, strings.ReplaceAll(localErrMsg(err), "\n", " "))
+	}
+	p, err := storySheet(s, path, sheetOptions{Cols: 4, Labels: true})
+	if err != nil {
+		warn(err)
+		return
+	}
+	for _, w := range p.Warnings {
+		fmt.Fprintf(os.Stderr, "avviso: %s: %s\n", contactSheetName, w)
+	}
+	if err := p.Sheet.Check(); err != nil {
+		warn(err)
+		return
+	}
+	inputs := storyFiles(s)
+	for _, k := range sortedKeys(p.Inputs) {
+		inputs = append(inputs, p.Inputs[k])
+	}
+	res, err := localTool.RunOp(context.Background(), montage.Op{Inputs: inputs, Output: filepath.Join(s.Dir, contactSheetName),
+		Root: s.Dir, Replace: true, Build: p.Sheet.Build})
+	if err != nil {
+		warn(err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "foglio di contatto: %s\n", res.Output)
 }
 
 // cutOne monta un formato (format vuoto: quello dello storyboard), con una
@@ -141,33 +328,36 @@ func cutOne(tool montage.Tool, path string, plan *montage.Plan, format string) (
 	return &out, nil
 }
 
-// storyCutArgs legge gli argomenti di giv story cut: il file dello storyboard
-// e --formato (anche dopo il file).
-func storyCutArgs(args []string) (path, format string, err error) {
+// storyCutArgs legge gli argomenti di giv story cut: il file dello storyboard,
+// --formato e --export (anche dopo il file).
+func storyCutArgs(args []string) (path, format, export string, err error) {
 	fl := flag.NewFlagSet("story cut", flag.ExitOnError)
 	only := fl.String("formato", "", "monta solo questo formato")
+	exp := fl.String("export", "", "canali per giv export")
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["cut"]) }
-	const use = "uso: giv story cut [--formato <r>] <storyboard.json>"
+	const use = "uso: giv story cut [--formato <r>] [--export <canali>] <storyboard.json>"
 	if err := fl.Parse(args); err != nil {
-		return "", "", usageError("%v", err)
+		return "", "", "", usageError("%v", err)
 	}
 	rest := fl.Args()
 	if len(rest) == 0 {
-		return "", "", usageError(use)
+		return "", "", "", usageError(use)
 	}
 	path = rest[0]
 	if err := fl.Parse(rest[1:]); err != nil {
-		return "", "", usageError("%v", err)
+		return "", "", "", usageError("%v", err)
 	}
 	if fl.NArg() > 0 {
-		return "", "", usageError(use)
+		return "", "", "", usageError(use)
 	}
-	set := false
-	fl.Visit(func(f *flag.Flag) { set = set || f.Name == "formato" })
-	if set && strings.TrimSpace(*only) == "" {
-		return "", "", usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
+	set := flagsSet(fl)
+	if set["formato"] && strings.TrimSpace(*only) == "" {
+		return "", "", "", usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
 	}
-	return path, *only, nil
+	if set["export"] && strings.TrimSpace(*exp) == "" {
+		return "", "", "", usageError("--export vuoto (%s)", strings.Join(montage.Channels(), ", "))
+	}
+	return path, *only, *exp, nil
 }
 
 // cutFormats sono i formati da montare: con only quello solo (fra
@@ -277,6 +467,9 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 	if m.Sottotitoli != "" {
 		p.Subtitles = s.Path(m.Sottotitoli)
 	}
+	if err := cutOverlays(s, m, &p); err != nil {
+		return p, usageError("%s: %v", path, err)
+	}
 	out := m.Uscita
 	if out == "" {
 		out = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ".mp4"
@@ -294,6 +487,134 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 	// il montato è il prodotto dello storyboard: rifare cut lo riscrive
 	p.Overwrite = true
 	return p, nil
+}
+
+// cutOverlays porta nel piano, per il suo formato, logo, titoli, cartello
+// finale, stile dei testi e audio del blocco montaggio (già convalidati da
+// story.Validate): senza questi campi il piano resta quello di prima.
+func cutOverlays(s *story.Storyboard, m *story.Montaggio, p *montage.Plan) error {
+	h := p.Height
+	fonts := map[string]bool{}
+	// stile: base di montage, poi stile_testi, poi lo stile del titolo
+	style := func(base montage.TextStyle, sts ...*story.StileTesti) (montage.TextStyle, error) {
+		ts := base
+		for _, st := range sts {
+			if st == nil {
+				continue
+			}
+			if st.Font != "" {
+				file := s.Path(st.Font)
+				fam, err := montage.FontFamily(file)
+				if err != nil {
+					return ts, fmt.Errorf("font %s: %v", st.Font, localErrMsg(err))
+				}
+				ts.Font = fam
+				if !fonts[file] {
+					fonts[file] = true
+					p.Fonts = append(p.Fonts, file)
+				}
+			}
+			if st.Colore != "" {
+				c, err := montage.ParseColor(st.Colore)
+				if err != nil {
+					return ts, err
+				}
+				ts.Color = c
+			}
+			if d := st.Dimensione; d != nil {
+				ts.Size = max(12, int(math.Round(*d*float64(h))))
+				if ts.Border > 0 {
+					ts.Border = math.Max(1, math.Round(float64(ts.Size)/16))
+				}
+			}
+			switch st.Bordo {
+			case "":
+			case "nessuno":
+				ts.Border = 0
+			default:
+				c, err := montage.ParseColor(st.Bordo)
+				if err != nil {
+					return ts, err
+				}
+				ts.Outline = c
+				if ts.Border == 0 {
+					ts.Border = math.Max(1, math.Round(float64(ts.Size)/16))
+				}
+			}
+		}
+		return ts, nil
+	}
+	if l := m.Logo; l != nil {
+		lg := montage.Logo{Path: s.Path(l.File), Pos: montage.TopRight, Width: montage.DefaultLogoWidth, Opacity: 1}
+		if l.Posizione != "" {
+			lg.Pos = montage.Position(l.Posizione)
+		}
+		if l.Larghezza != nil {
+			lg.Width = *l.Larghezza
+		}
+		if l.Opacita != nil {
+			lg.Opacity = *l.Opacita
+		}
+		if l.Da != nil {
+			lg.From = *l.Da
+		}
+		if l.A != nil {
+			lg.To = *l.A
+		}
+		p.Logo = &lg
+	}
+	for i, t := range m.Titoli {
+		ts, err := style(montage.DefaultTextStyle(h), m.StileTesti, t.Stile)
+		if err != nil {
+			return fmt.Errorf("montaggio.titoli n. %d: %v", i+1, err)
+		}
+		d := montage.DefaultTitleSeconds
+		if t.Durata != nil {
+			d = *t.Durata
+		}
+		pos := montage.Bottom
+		if t.Posizione != "" {
+			pos = montage.Position(t.Posizione)
+		}
+		ti := montage.Title{Text: montage.Text{Text: t.Testo, Start: t.Da, End: t.Da + d, Pos: pos, Style: ts, Fade: montage.TextFade(d)}}
+		if t.Scena != "" {
+			for j := range s.Scene {
+				if s.Scene[j].ID == t.Scena {
+					ti.Clip = j + 1
+				}
+			}
+		}
+		p.Titles = append(p.Titles, ti)
+	}
+	if c := m.CartelloFinale; c != nil {
+		ts, err := style(montage.CardTextStyle(h), m.StileTesti)
+		if err != nil {
+			return fmt.Errorf("montaggio.cartello_finale: %v", err)
+		}
+		card := montage.EndCard{Duration: montage.DefaultCardSeconds, Color: montage.Black, Text: c.Testo, Subtext: c.Sottotesto, Style: ts}
+		if c.Durata != nil {
+			card.Duration = *c.Durata
+		}
+		if c.Sfondo != "" {
+			if card.Color, err = montage.ParseColor(c.Sfondo); err != nil {
+				return err
+			}
+		}
+		if c.Logo != "" {
+			card.Logo = &montage.Logo{Path: s.Path(c.Logo), Opacity: 1}
+		}
+		p.EndCard = &card
+	}
+	if mu := m.Musica; mu != nil && p.Music != nil {
+		p.Duck = mu.SottoVoce
+		if mu.SfumaFine != nil {
+			p.MusicFade = *mu.SfumaFine
+		}
+	}
+	if m.Volume != nil {
+		p.Loudness = *m.Volume
+	}
+	return nil
 }
 
 // sceneCut porta nella clip fuoco, taglio e velocità della scena. Una scena
@@ -555,6 +876,26 @@ func titleWarnings(s *story.Storyboard, out *storyCheck) {
 		if pos := t.Posizione; m.Sottotitoli != "" && (pos == "" || strings.HasPrefix(pos, "basso")) {
 			warn(fmt.Sprintf("titolo n. %d: in basso come i sottotitoli, possono sovrapporsi (posizione alto o centro)", i+1))
 		}
+	}
+}
+
+// focusWarnings avvisa delle scene col fuoco quando il montaggio non ritaglia:
+// il fuoco vale solo con montaggio.adatta ritaglio.
+func focusWarnings(s *story.Storyboard, out *storyCheck) {
+	if m := s.Montaggio; m != nil && m.Adatta == "ritaglio" {
+		return
+	}
+	for i := range s.Scene {
+		if s.Scene[i].Fuoco == nil {
+			continue
+		}
+		w := "fuoco ignorato: vale solo con montaggio.adatta ritaglio"
+		for j := range out.Scenes {
+			if out.Scenes[j].ID == s.Scene[i].ID {
+				out.Scenes[j].Warnings = append(out.Scenes[j].Warnings, w)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", s.Scene[i].ID, w)
 	}
 }
 

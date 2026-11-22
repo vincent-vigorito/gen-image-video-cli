@@ -44,6 +44,9 @@ type Storyboard struct {
 	Riferimenti   map[string][]string `json:"riferimenti,omitempty"`     // insiemi di immagini per nome
 	Scene         []Scene             `json:"scene"`
 	Montaggio     *Montaggio          `json:"montaggio,omitempty"`
+	// FoglioContatto false: giv story run e cut non scrivono
+	// foglio-contatto.jpg accanto allo storyboard.
+	FoglioContatto *bool `json:"foglio_contatto,omitempty"`
 
 	// Dir è la cartella dello storyboard: i percorsi sono relativi a questa.
 	Dir string `json:"-"`
