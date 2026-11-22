@@ -147,3 +147,11 @@ func TestR0TestoAllaLettera(t *testing.T) {
 		t.Fatal("uscita senza video")
 	}
 }
+
+// Una \ seguita da un carattere di controllo e da N non diventa un a capo.
+func TestR0EscapeBarraControlloN(t *testing.T) {
+	got := EscapeASS("a\\\x01Nb\\\tnc")
+	if strings.Contains(strings.ReplaceAll(got, "\\"+wordJoiner, ""), "\\N") || strings.Contains(got, "\\n") {
+		t.Fatalf("sequenza interpretabile: %q", got)
+	}
+}
