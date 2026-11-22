@@ -21,6 +21,24 @@ import (
 // CLI-914 (O-T3): provider fal contro un server finto (TLS, mai fal vero).
 
 const falKey = "fal-test-key-0123456789"
+
+// falStore è un host di storage di fal (ammesso dal filtro di upload_url); il
+// trasporto finto lo rimanda al secondo server.
+const falStore = "https://v3.fal.media"
+
+type falRewrite struct {
+	rt  http.RoundTripper
+	cdn string
+}
+
+func (f falRewrite) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Host == "v3.fal.media" {
+		r = r.Clone(r.Context())
+		r.URL.Host = f.cdn
+	}
+	return f.rt.RoundTrip(r)
+}
+
 const falEP = "/fal-ai/kling-video/v3/pro/image-to-video"
 
 type falReq struct {
@@ -36,6 +54,9 @@ type falEnv struct {
 	srv    *httptest.Server
 	cdn    *httptest.Server
 	status int
+	// initStatus != 0: initiate risponde con questo codice; badHost: upload_url su un host non fal
+	initStatus int
+	badHost    bool
 }
 
 func (e *falEnv) rec(dst *[]falReq, r *http.Request) {
@@ -70,11 +91,15 @@ func newFalEnv(t *testing.T) *falEnv {
 	e.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.rec(&e.reqs, r)
 		switch {
+		case r.URL.Path == "/storage/upload/initiate" && e.initStatus != 0:
+			http.Error(w, "boom", e.initStatus)
+		case r.URL.Path == "/storage/upload/initiate" && e.badHost:
+			json.NewEncoder(w).Encode(map[string]string{"upload_url": e.cdn.URL + "/put/1", "file_url": falStore + "/files/1.png"})
 		case r.URL.Path == "/storage/upload/initiate":
 			n := e.count("POST", "/storage/upload/initiate")
 			json.NewEncoder(w).Encode(map[string]string{
-				"upload_url": e.cdn.URL + "/put/" + string(rune('0'+n)),
-				"file_url":   e.cdn.URL + "/files/" + string(rune('0'+n)) + ".png",
+				"upload_url": falStore + "/put/" + string(rune('0'+n)),
+				"file_url":   falStore + "/files/" + string(rune('0'+n)) + ".png",
 			})
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/fal-ai/") || r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/bytedance/"):
 			json.NewEncoder(w).Encode(map[string]string{"request_id": "req-1",
@@ -95,7 +120,7 @@ func newFalEnv(t *testing.T) *falEnv {
 	t.Cleanup(e.srv.Close)
 	t.Cleanup(e.cdn.Close)
 	old := falConfig
-	falConfig = fal.Config{Queue: e.srv.URL, REST: e.srv.URL, Transport: e.srv.Client().Transport, PollInterval: time.Millisecond}
+	falConfig = fal.Config{Queue: e.srv.URL, REST: e.srv.URL, Transport: falRewrite{e.srv.Client().Transport, e.cdn.Listener.Addr().String()}, PollInterval: time.Millisecond}
 	t.Cleanup(func() { falConfig = old })
 	t.Setenv("FAL_KEY", falKey)
 	t.Chdir(t.TempDir())
@@ -223,7 +248,7 @@ func TestFalVideoFileLocaleDueCaricamenti(t *testing.T) {
 			json.Unmarshal(r.Body, &start)
 		}
 	}
-	if u, _ := start["start_image_url"].(string); !strings.HasPrefix(u, e.cdn.URL+"/files/") {
+	if u, _ := start["start_image_url"].(string); !strings.HasPrefix(u, falStore+"/files/") {
 		t.Errorf("start_image_url %v (atteso l'indirizzo ottenuto dal caricamento)", start["start_image_url"])
 	}
 	if strings.Contains(string(falJSON(start)), img) {

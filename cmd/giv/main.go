@@ -158,6 +158,8 @@ func main() {
 		err = cmdStory(os.Args[2:])
 	case "upscale":
 		err = cmdUpscale(os.Args[2:])
+	case "avatar":
+		err = cmdAvatar(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -197,6 +199,7 @@ Uso:
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
   giv upscale --video <file|url> [--factor 1.5-3] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter, a pagamento)
+  giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv version                      stampa la versione
 
 Flag comuni:

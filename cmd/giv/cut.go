@@ -137,7 +137,7 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 			c.Path = s.Path(sc.File)
 		case story.Immagine:
 			c.Path, c.Image = s.Path(sc.File), true
-		case story.Video:
+		case story.Video, story.Avatar:
 			if st == nil {
 				var err error
 				if st, err = story.LoadState(story.StatePath(path)); err != nil {
@@ -153,7 +153,9 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 		default:
 			return p, usageError("%s: scena %s: tipo %q non montabile", path, sc.ID, sc.Tipo)
 		}
-		if sc.Voce != "" {
+		// la voce di una scena avatar è già nella clip (guida il labiale): non
+		// si aggiunge una seconda volta, resta l'audio della clip
+		if sc.Voce != "" && sc.Tipo != story.Avatar {
 			c.Voice, c.VoiceAt = s.Path(sc.Voce), sc.Ritardo()
 		}
 		p.Clips = append(p.Clips, c)
