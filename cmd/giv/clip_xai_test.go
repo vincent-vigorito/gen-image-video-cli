@@ -87,7 +87,7 @@ func TestXAIDryRunStimaCasoPiuCaro(t *testing.T) {
 		Cmd  string   `json:"command"`
 	}
 	json.Unmarshal([]byte(out), &p)
-	if p.Cmd != "extend" || p.Cost == nil || *p.Cost != 0.82 { // (5+6)*0.07 + 5*0.01
+	if p.Cmd != "extend" || p.Cost == nil || *p.Cost != 0.47 { // 6*0.07 + 5*0.01 (O-T11: solo i secondi aggiunti)
 		t.Errorf("extend piano=%s", out)
 	}
 	out, err = runOp(t, cmdEdit, "--dry-run", "--video", "clip.mp4", "p")
@@ -103,7 +103,7 @@ func TestXAIDryRunStimaCasoPiuCaro(t *testing.T) {
 
 func TestXAIMaxCostSopraStimaRifiutato(t *testing.T) {
 	hits := xaiEnv(t, "5.0")
-	_, err := runOp(t, cmdExtend, "--video", "clip.mp4", "--duration", "6", "--max-cost", "0.81", "p")
+	_, err := runOp(t, cmdExtend, "--video", "clip.mp4", "--duration", "6", "--max-cost", "0.46", "p")
 	if err == nil {
 		t.Fatal("atteso rifiuto")
 	}
