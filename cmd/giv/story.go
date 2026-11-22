@@ -564,6 +564,9 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		return o, err
 	}
 	o.Model = m
+	if err := checkFramesShots(o.Provider, m, len(o.Keyframes) > 0, len(o.Shots) > 0); err != nil {
+		return o, err
+	}
 	cl, err := sc.client(o.Provider)
 	if err != nil {
 		return o, err

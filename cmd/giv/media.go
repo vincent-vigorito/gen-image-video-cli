@@ -68,6 +68,9 @@ func checkClipURL(flag, p string, schemes ...string) error {
 	if err != nil || u.Opaque != "" || u.Hostname() == "" {
 		return usageError("%s %s: URL non valido (serve schema e host)", flag, redactURL(p))
 	}
+	if u.User != nil {
+		return usageError("%s %s: URL con credenziali non ammesso", flag, redactURL(p))
+	}
 	if !slices.Contains(schemes, u.Scheme) {
 		return usageError("%s %s: serve un URL %s", flag, redactURL(p), strings.Join(schemes, " o "))
 	}
@@ -123,6 +126,7 @@ func probeClip(req *provider.ClipRequest) ([]string, error) {
 					return nil, usageError("--video %s: nessuna traccia video", req.Video)
 				}
 				req.Source.Duration, req.Source.Width, req.Source.Height = info.Duration, info.Video.Width, info.Video.Height
+				req.Source.FPS = info.Video.FPS
 			}
 		}
 	}

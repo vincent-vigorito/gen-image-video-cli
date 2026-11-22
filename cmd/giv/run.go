@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"gen-image-video-cli/internal/caps"
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/presets"
 	"gen-image-video-cli/internal/provider"
@@ -81,6 +82,9 @@ func prepareVideo(o videoOptions) (*videoJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkFramesShots(o.Provider, m, len(o.Keyframes) > 0, len(o.Shots) > 0); err != nil {
+		return nil, err
+	}
 	// preset: prompt e negative inviati al provider (codice 2 prima di chiave e chiamate);
 	// il manifest tiene il prompt dell'utente
 	pres, err := videoPresets(o.Presets, o.Protect, o.Prompt, o.Negative, m,
@@ -140,6 +144,36 @@ func prepareVideo(o videoOptions) (*videoJob, error) {
 		plan: plan, out: o.Out, name: o.Name}, nil
 }
 
+// checkFramesShots rifiuta --keyframe e --shot su provider e schede che non li
+// hanno, prima di chiave e catalogo (codice 2): li dichiarano solo schede di
+// fal, nella tabella fissa.
+func checkFramesShots(prov, model string, keyframes, shots bool) error {
+	cards := caps.Fal()
+	for _, f := range []struct {
+		flag string
+		used bool
+		ok   func(*caps.Model) bool
+	}{
+		{"--keyframe", keyframes, func(m *caps.Model) bool { return m.MaxKeyframes != nil && *m.MaxKeyframes > 0 }},
+		{"--shot", shots, func(m *caps.Model) bool { return m.Shots != nil && *m.Shots }},
+	} {
+		if !f.used {
+			continue
+		}
+		if m := caps.Find(cards, model); prov == "fal" && m != nil && f.ok(m) {
+			continue
+		}
+		var with []string
+		for i := range cards {
+			if f.ok(&cards[i]) {
+				with = append(with, cards[i].ID)
+			}
+		}
+		return usageError("%s non supportato da %s/%s: vale solo con --provider fal e --model %s", f.flag, prov, model, strings.Join(with, " o "))
+	}
+	return nil
+}
+
 // parseShots legge i --shot "<secondi>:<testo>": secondi interi, testo non
 // vuoto; i limiti del modello li controlla la scheda.
 func parseShots(list []string) ([]provider.Shot, error) {
@@ -175,7 +209,7 @@ func shotsRequest(o videoOptions, pres presets.Result, req *provider.VideoReques
 		}
 		sum += s.Duration
 	}
-	if o.Duration > 0 && o.Duration != sum {
+	if o.Duration != 0 && o.Duration != sum {
 		return usageError("--duration %d diversa dalla somma delle inquadrature (%d s): toglila o correggila", o.Duration, sum)
 	}
 	req.Duration, req.Shots = sum, slices.Clone(o.Shots)
