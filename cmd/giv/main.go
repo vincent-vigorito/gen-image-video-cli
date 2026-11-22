@@ -130,6 +130,8 @@ type manifest struct {
 	CostEstUSD  float64           `json:"cost_est_usd,omitempty"` // stimato da listino, se il provider non lo riporta
 	CostSource  string            `json:"cost_source,omitempty"`
 	Warnings    []string          `json:"warnings,omitempty"`
+
+	usageEstUSD float64 // stima dai consumi riportati, non arrotondata (conto del tetto di story run)
 }
 
 func main() {
@@ -222,6 +224,7 @@ giv video:
   --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
   Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
   xai e gemini: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  Senza --provider né GIV_PROVIDER giv video esce con codice 2: il default gemini vale solo per le immagini.
   gemini (gemini-omni-1.2-flash, a pagamento): audio sempre presente, durata 3-15 s (default 10),
   360p-4k (default 720p), 16:9 o 9:16; la durata e la risoluzione sono sempre inviate.
   --preset <nome>    preset di camera o effetto, ripetibile: al massimo uno di camera e uno
@@ -306,10 +309,20 @@ var envKeys = map[string]string{
 // defaultProvider è il provider usato senza --provider: GIV_PROVIDER (env o file
 // di configurazione, come le chiavi), altrimenti gemini.
 func defaultProvider() string {
-	if p := strings.TrimSpace(config.Get("GIV_PROVIDER")); p != "" {
+	if p := envProvider(); p != "" {
 		return p
 	}
 	return "gemini"
+}
+
+func envProvider() string { return strings.TrimSpace(config.Get("GIV_PROVIDER")) }
+
+// errNoVideoProvider: un video (a pagamento) non parte col solo default gemini,
+// serve un provider scelto (--provider, storyboard o GIV_PROVIDER); senza,
+// codice 2 come nella 0.9.1, quando gemini non aveva video.
+func errNoVideoProvider(how string) error {
+	return usageError("nessun provider scelto per il video: %s openrouter (default %s), xai (default %s), gemini (default %s) o fal (default %s), oppure imposta GIV_PROVIDER",
+		how, defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"], defaultVideoModels["fal"])
 }
 
 func checkProvider(name string) error {
@@ -579,11 +592,18 @@ func cmdVideo(args []string) error {
 	}
 	// --max-cost: tetto solo se il flag c'è (anche 0)
 	var costCap *float64
+	chosen := envProvider() != ""
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "max-cost" {
+		switch f.Name {
+		case "max-cost":
 			costCap = maxCost
+		case "provider":
+			chosen = true
 		}
 	})
+	if !chosen {
+		return errNoVideoProvider("usa --provider")
+	}
 	job, err := prepareVideo(videoOptions{
 		Provider: *prov, Model: *model, Prompt: prompt,
 		Aspect: *aspect, Resolution: *resolution, Negative: *negative,

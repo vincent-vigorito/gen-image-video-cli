@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -113,7 +114,8 @@ func (man *manifest) done(files []output.FileInfo, res *provider.Result) {
 	case res.CostUSD > 0:
 		man.CostUSD, man.CostEstUSD, man.CostSource = res.CostUSD, 0, ""
 	case res.CostEstUSD > 0: // ricalcolata dai consumi riportati, prende il posto di quella da listino
-		man.CostEstUSD, man.CostSource = res.CostEstUSD, res.CostSource
+		man.CostEstUSD, man.CostSource = math.Round(res.CostEstUSD*1e4)/1e4, res.CostSource
+		man.usageEstUSD = res.CostEstUSD
 	}
 	for _, m := range res.Media {
 		if strings.HasPrefix(m.Mime, "video/") {

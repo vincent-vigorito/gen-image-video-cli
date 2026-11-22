@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,31 +42,6 @@ func (c *Client) base() string {
 		return strings.TrimSuffix(c.Base, "/")
 	}
 	return baseURL
-}
-
-// stayKey segna le richieste che non seguono redirect fuori dall'origine
-// dell'API: l'avvio a pagamento e le attese, la cui risposta deve venire dal provider.
-type stayKey struct{}
-
-func stay(ctx context.Context) context.Context { return context.WithValue(ctx, stayKey{}, true) }
-
-// checkRedirect: sull'origine dell'API i salti si seguono con la chiave; fuori
-// origine la chiave si toglie, si seguono solo verso https e mai per avvio e attese.
-func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
-		return errors.New("gemini: troppi redirect")
-	}
-	if c.apiOrigin(req.URL) {
-		return nil
-	}
-	req.Header.Del("x-goog-api-key")
-	if req.Context().Value(stayKey{}) != nil {
-		return http.ErrUseLastResponse // il 3xx diventa un errore HTTP
-	}
-	if req.URL.Scheme != "https" {
-		return errors.New("gemini: redirect fuori da https rifiutato")
-	}
-	return nil
 }
 
 // apiOrigin dice se u ha schema, host e porta dell'API e nessuna credenziale:
@@ -129,15 +103,15 @@ func (c *Client) videoJSON(ctx context.Context, retry httpx.RetryFunc, method, u
 		}
 		resp, err := c.videoHTTP().Do(req)
 		if err != nil {
-			return err
+			return netError(err)
 		}
 		defer resp.Body.Close()
 		data, err := readLimited(resp.Body)
 		if err != nil {
-			return err
+			return netError(err)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return &httpx.Error{Prefix: "gemini", Status: resp.StatusCode, Msg: apiErrorMessage(data),
+			return &httpx.Error{Prefix: "gemini", Status: resp.StatusCode, Msg: videoAPIError(data),
 				RetryAfter: httpx.ParseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
 		if out != nil {
@@ -207,6 +181,7 @@ func videoBody(req provider.VideoRequest) (map[string]any, error) {
 	if len(req.Params) > 0 {
 		fmt.Fprintln(os.Stderr, "avviso: --param non supportato da gemini, ignorato")
 	}
+	englishOnly(req.Model)
 	task, images := "text_to_video", []string(nil)
 	switch {
 	case req.Image != "" && len(req.Refs) > 0, req.LastFrame != "" && req.Image == "":
@@ -258,6 +233,7 @@ func (c *Client) GenerateClip(ctx context.Context, req provider.ClipRequest) (*p
 	case !ValidID(req.From):
 		return nil, fmt.Errorf("gemini: --from %q non è un id di job gemini", req.From)
 	}
+	englishOnly(req.Model)
 	rf := map[string]any{"type": "video", "delivery": "uri"}
 	if req.Op == "extend" {
 		d := req.Duration
@@ -274,6 +250,11 @@ func (c *Client) GenerateClip(ctx context.Context, req provider.ClipRequest) (*p
 	return c.run(ctx, body, req.Timeout, func(job provider.Job) { provider.ClipJobStarted(c.Name(), job, req) })
 }
 
+// englishOnly avvisa che i prompt sono pienamente supportati solo in inglese.
+func englishOnly(model string) {
+	fmt.Fprintf(os.Stderr, "avviso: solo l'inglese è pienamente supportato nei prompt di %s\n", model)
+}
+
 // run invia la richiesta (sincrona e a pagamento: mai ripetuta), segnala il
 // job appena ha l'id e lo porta a termine: risposta già completa o attesa.
 func (c *Client) run(ctx context.Context, body map[string]any, timeout time.Duration, started func(provider.Job)) (*provider.Result, error) {
@@ -288,10 +269,8 @@ func (c *Client) run(ctx context.Context, body map[string]any, timeout time.Dura
 		return nil, httpx.Start(err)
 	}
 	if !ValidID(it.ID) {
-		if it.ID == "" && it.Status == "completed" && it.video() != nil {
-			// video già pagato e consegnato, ma senza id: niente recupero
-			return c.result(tctx, provider.Job{}, &it)
-		}
+		// anche con il video nella risposta: senza id il job non si recupera, e
+		// se il salvataggio fallisse la riserva non deve cadere (esito incerto)
 		return nil, httpx.Start(errors.New("gemini: nessun id valido del job nella risposta"))
 	}
 	job := provider.Job{ID: it.ID, PollingURL: c.pollURL(it.ID)}
@@ -417,9 +396,9 @@ func (it *interaction) video() *content {
 // finito male (ErrJobFailed) o stato non previsto (job recuperabile).
 func (it *interaction) state() (bool, error) {
 	failed := func() error {
-		msg := strings.TrimSpace(string(it.Error))
-		if len(msg) > 300 {
-			msg = msg[:300] + "…"
+		msg := errorText(it.Error)
+		if msg == "" {
+			msg = "nessun dettaglio"
 		}
 		return provider.JobFailed(fmt.Errorf("gemini: job %s: %s", it.Status, msg))
 	}
@@ -438,7 +417,7 @@ func (it *interaction) state() (bool, error) {
 	case "failed", "cancelled":
 		return false, failed()
 	}
-	return false, fmt.Errorf("gemini: stato del job non previsto: %q", it.Status)
+	return false, fmt.Errorf("gemini: stato del job non previsto: %q", safeText(it.Status, 40))
 }
 
 // result estrae il video (base64 o file da scaricare) e la stima dai token riportati.
@@ -467,7 +446,7 @@ func (c *Client) result(ctx context.Context, job provider.Job, it *interaction) 
 	}
 	res := &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}
 	if usd, src, ok := it.Usage.cost(); ok {
-		res.CostEstUSD, res.CostSource = math.Round(usd*1e4)/1e4, src
+		res.CostEstUSD, res.CostSource = usd, src // non arrotondata: è quella che conta per il tetto
 	}
 	return res, nil
 }
@@ -493,7 +472,8 @@ func (u *usage) cost() (float64, string, bool) {
 
 // downloadFile scarica il file di un video generato: indirizzo solo
 // sull'origine dell'API e sotto <base>/files/, attesa dello stato ACTIVE, poi
-// lo scaricamento (la chiave non segue i redirect verso altri host).
+// lo scaricamento con downloadHTTP (fuori dall'API: senza chiave, https,
+// indirizzi pubblici).
 func (c *Client) downloadFile(ctx context.Context, raw string) ([]byte, error) {
 	id, ok := c.fileID(raw)
 	if !ok {
@@ -507,15 +487,19 @@ func (c *Client) downloadFile(ctx context.Context, raw string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("x-goog-api-key", c.APIKey)
-	resp, err := c.videoHTTP().Do(req)
+	resp, err := c.downloadHTTP().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gemini: scaricamento del video: %w", netError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gemini: download HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("gemini: scaricamento del video: HTTP %d", resp.StatusCode)
 	}
-	return readLimited(resp.Body)
+	data, err := readLimited(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: scaricamento del video: %w", netError(err))
+	}
+	return data, nil
 }
 
 // fileID è l'id del file in un indirizzo <base>/files/<id>[:download][?alt=media]
