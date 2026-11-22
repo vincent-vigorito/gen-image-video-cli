@@ -62,6 +62,17 @@ versioning [SemVer](https://semver.org/lang/it/).
   prima di scrivere. Le convenzioni non ufficiali (volume, misure del feed di Instagram,
   formato di TikTok) sono elencate nel manifest in `exports[].convention`.
 
+### Limiti noti
+
+- **Picco del montato**: il volume finale di `giv story cut` e `giv post mix` arriva al
+  valore chiesto (-14 LUFS), ma il picco reale (true peak) può restare a -0,8 dBTP invece
+  di -1; le esportazioni di `giv export` stanno a -1,0/-0,9 dBTP. Da rivedere.
+- **Titoli e logo**: nessuno spostamento automatico; un titolo in alto col logo in alto
+  dà solo un avviso, la posizione la sceglie l'autore.
+- **Sottotitoli `.srt` nel 9:16**: coi formati stanno sopra il 35% in basso (margine
+  sicuro dei Reels), quindi a metà quadro; per un'altra posizione serve un `.ass` col
+  suo stile.
+
 ## [0.10.0] - 2026-11-22
 
 > **Non ancora provati dal vivo**: il provider fal (`giv avatar`, Kling 3 Pro, Kling 4.0 con
