@@ -152,6 +152,8 @@ func main() {
 		err = cmdPresets(os.Args[2:])
 	case "story":
 		err = cmdStory(os.Args[2:])
+	case "avatar":
+		err = cmdAvatar(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -188,6 +190,7 @@ Uso:
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
+  giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv version                      stampa la versione
 
 Flag comuni:
