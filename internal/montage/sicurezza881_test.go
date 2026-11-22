@@ -126,3 +126,26 @@ func TestSicurezzaPublishRootAperta(t *testing.T) {
 		t.Errorf("B toccata: %v", ents)
 	}
 }
+
+// R2a (ee926b5): antenato scrivibile da altri senza sticky: rifiuto anche se la
+// cartella è 0700; TMPDIR come link a cartella valida: ok.
+func TestSicurezzaTempDirAntenatoEdLink(t *testing.T) {
+	base := t.TempDir()
+	open := filepath.Join(base, "aperta")
+	os.Mkdir(open, 0o700)
+	os.Chmod(open, 0o777)
+	inner := filepath.Join(open, "mia")
+	os.Mkdir(inner, 0o700)
+	t.Setenv("TMPDIR", inner)
+	if _, err := TempDir("giv-"); err == nil {
+		t.Error("antenato 0777 senza sticky: atteso rifiuto")
+	}
+	good := filepath.Join(base, "buona")
+	os.Mkdir(good, 0o700)
+	lnk := filepath.Join(base, "lnk")
+	os.Symlink(good, lnk)
+	t.Setenv("TMPDIR", lnk)
+	if _, err := TempDir("giv-"); err != nil {
+		t.Errorf("link a cartella valida: %v", err)
+	}
+}

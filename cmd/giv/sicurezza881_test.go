@@ -124,3 +124,16 @@ func TestStoryCutCartellaInesistente(t *testing.T) {
 		t.Fatalf("code=%d\n%s", code, se)
 	}
 }
+
+// R5 (ee926b5): job con polling_url su host estraneo + --new-job: codice 2,
+// nessuna richiesta, stato invariato.
+func TestStoryRunNewJobHostEstraneo(t *testing.T) {
+	e := newRunEnv(t, sb("", sc("s1", "")))
+	e.writeState(t, `{"version":1,"scenes":{"s1":{"status":"partito","job":{"provider":"openrouter","id":"job-9","polling_url":"https://evil.example.com/videos/job-9","model":"alibaba/wan-3.0","started":"2026-01-01T00:00:00Z"},"charges":[{"kind":"clip","job_id":"job-9","cost_est_usd":0.5,"at":"2026-01-01T00:00:00Z"}]}}}`)
+	before, _ := os.ReadFile(e.statePath())
+	_, se, code := e.run(t, "--scene", "s1", "--new-job")
+	after, _ := os.ReadFile(e.statePath())
+	if code != 2 || e.posts != 0 || e.polls != 0 || !bytes.Equal(before, after) {
+		t.Fatalf("code=%d posts=%d polls=%d identico=%v\n%s", code, e.posts, e.polls, bytes.Equal(before, after), se)
+	}
+}
