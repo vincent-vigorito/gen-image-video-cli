@@ -87,18 +87,24 @@ func TestR957SottotitoliSopraMargineBasso(t *testing.T) {
 // Titolo in alto e logo in alto in un formato verticale: story check e story cut
 // avvisano (nessuno spostamento, nessun errore).
 func TestR957TitoloELogoInAltoAvviso(t *testing.T) {
-	d := r6Dir(t)
-	r6Solid(t, d)
-	m := `"formati":["9:16"],"logo":{"file":"logo.png"},"titoli":[{"testo":"Titolo","da":0,"durata":2.5,"posizione":"alto"}]`
-	p := r6Board(t, d, m, "")
-	for _, args := range [][]string{{"check", p}, {"cut", p}} {
-		out, se, code := r6Cmd(t, args...)
-		if code != 0 {
-			t.Fatalf("%v: codice %d, atteso 0\n%s", args, code, se)
-		}
-		all := strings.ToLower(out + se)
-		if !strings.Contains(all, "logo") || !strings.Contains(all, "titol") {
-			t.Errorf("%v: nessun avviso su titolo e logo in alto:\n%s%s", args, out, se)
+	for _, c := range []struct {
+		format string
+		warn   bool
+	}{{"9:16", true}, {"4:5", true}, {"1:1", true}, {"16:9", false}} {
+		d := r6Dir(t)
+		r6Solid(t, d)
+		m := `"formati":["` + c.format + `"],"logo":{"file":"logo.png"},"titoli":[{"testo":"Titolo","da":0,"durata":2.5,"posizione":"alto"}]`
+		p := r6Board(t, d, m, "")
+		for _, args := range [][]string{{"check", p}, {"cut", p}} {
+			out, se, code := r6Cmd(t, args...)
+			if code != 0 {
+				t.Fatalf("%s %v: codice %d, atteso 0\n%s", c.format, args, code, se)
+			}
+			all := strings.ToLower(out + se)
+			got := strings.Contains(all, "logo") && strings.Contains(all, "titol") && strings.Contains(all, "sovrappor")
+			if got != c.warn {
+				t.Errorf("%s %v: avviso titolo+logo=%v, atteso %v:\n%s%s", c.format, args, got, c.warn, out, se)
+			}
 		}
 	}
 }
