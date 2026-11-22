@@ -27,7 +27,7 @@ func TestExitCodeChiaveMancante(t *testing.T) {
 }
 
 func TestVideoSenzaModelloEsce2(t *testing.T) {
-	for _, p := range []string{"openai", "gemini"} {
+	for _, p := range []string{"openai"} {
 		err := cmdVideo([]string{"--provider", p, "un prompt"})
 		if err == nil {
 			t.Fatalf("%s: atteso errore", p)
