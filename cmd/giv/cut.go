@@ -207,14 +207,25 @@ func storyFiles(s *story.Storyboard) []string {
 }
 
 // cutProtected sono i file che le uscite di giv story cut e il foglio di
-// contatto non sostituiscono mai: lo storyboard, il suo stato, i file che
-// nomina (storyFiles) e quelli generati che lo stato elenca (clip in uso,
-// fotogrammi chiave, riprese sostituite) che esistono come file normali.
-// Uno stato illeggibile non elenca file (ferma già il montaggio delle scene
-// video).
+// contatto non sostituiscono mai: gli ingressi dello storyboard
+// (storyInputs) e il suo controllo.
 func cutProtected(s *story.Storyboard, path string) []string {
+	files := storyInputs(s, path)
+	if st, err := os.Stat(story.ControlPath(path)); err == nil && st.Mode().IsRegular() {
+		files = append(files, story.ControlPath(path))
+	}
+	return files
+}
+
+// storyInputs sono gli ingressi dello storyboard che esistono come file
+// normali: lo storyboard, il suo stato, i file che nomina (storyFiles), il
+// manifesto del kit con tutti i suoi file (anche quelli che montaggio.senza
+// esclude) e i file generati che lo stato elenca (clip in uso, fotogrammi
+// chiave, voci, riprese sostituite). Uno stato illeggibile non elenca file
+// (ferma già il montaggio delle scene video).
+func storyInputs(s *story.Storyboard, path string) []string {
 	files := storyFiles(s)
-	for _, p := range []string{path, story.StatePath(path), story.ControlPath(path)} {
+	for _, p := range []string{path, story.StatePath(path)} {
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
 			files = append(files, p)
 		}

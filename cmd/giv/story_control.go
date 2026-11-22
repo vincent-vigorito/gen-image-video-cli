@@ -78,8 +78,8 @@ func controlStory(s *story.Storyboard, path, command string, checks map[string]*
 		}
 	}
 	file := story.ControlPath(path)
-	if slices.ContainsFunc(storyFiles(s), func(f string) bool { return samePath(f, file) }) {
-		msg := fmt.Sprintf("%s è un file dello storyboard: controllo non scritto", file)
+	if slices.ContainsFunc(storyInputs(s, path), func(f string) bool { return samePath(f, file) }) {
+		msg := fmt.Sprintf("%s è un file dello storyboard, del kit o dello stato: controllo non scritto", file)
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", msg)
 		ctl.Warnings = append(ctl.Warnings, msg)
 		return ctl

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -147,6 +149,62 @@ func (r *storyRunner) checkVoices(ctx context.Context) {
 	}
 }
 
+// generatedVoiceFile è la voce in uso della scena id, l'unico file che il
+// controllo della voce carica verso il provider: solo il nome che scrive
+// saveVoice (voce/<id>-v<N>.wav della scena; un altro file dello storyboard
+// indicato dallo stato è rifiutato), in una cartella voce vera dentro quella
+// dello storyboard e come file normale, senza link né sulla cartella né sul
+// file.
+func (r *storyRunner) generatedVoiceFile(id string) (string, error) {
+	ss := r.st.Scenes[id]
+	if ss == nil || ss.Voice == nil {
+		return "", fmt.Errorf("scena %s: voce: %w", id, story.ErrNotDone)
+	}
+	dir, name, _ := strings.Cut(ss.Voice.File, "/")
+	if dir != storyVoiceDir || !isVoiceTake(id, name) {
+		return "", fmt.Errorf("voce %q: non è una voce generata da giv story run (%s/%s-v<N>.wav)", ss.Voice.File, storyVoiceDir, id)
+	}
+	fi, err := r.root.Lstat(storyVoiceDir)
+	if err != nil {
+		return "", fmt.Errorf("cartella %s: %w", storyVoiceDir, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("%s: non è una cartella (un link non vale)", storyVoiceDir)
+	}
+	vd, err := r.root.OpenRoot(storyVoiceDir)
+	if err != nil {
+		return "", fmt.Errorf("cartella %s: %w", storyVoiceDir, err)
+	}
+	defer vd.Close()
+	fi, err = vd.Lstat(name)
+	if err != nil {
+		return "", fmt.Errorf("voce %s: %w", ss.Voice.File, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("voce %s: non è un file normale (un link non vale)", ss.Voice.File)
+	}
+	p := filepath.Join(r.s.Dir, storyVoiceDir, name)
+	if pi, err := os.Stat(p); err != nil || !os.SameFile(fi, pi) {
+		return "", fmt.Errorf("voce %s: il percorso non porta al file della cartella %s", ss.Voice.File, storyVoiceDir)
+	}
+	return p, nil
+}
+
+// isVoiceTake: name è <id>-v<N>.wav con N intero positivo scritto come lo
+// scrive saveVoice.
+func isVoiceTake(id, name string) bool {
+	num, ok := strings.CutPrefix(name, id+"-v")
+	if !ok {
+		return false
+	}
+	num, ok = strings.CutSuffix(num, ".wav")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(num)
+	return err == nil && n > 0 && strconv.Itoa(n) == num
+}
+
 // checkVoice trascrive la voce in uso della scena: controlli gratuiti e stima
 // sul file (prepareVoiceCheck), tetto sul valore non arrotondato (spesa fatta
 // più questa trascrizione più le generazioni ancora da fare: i video hanno la
@@ -164,7 +222,7 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 		r.voiceChecks[id] = &storyVoiceCheck{skipped: msg}
 	}
 	ss := r.st.Scenes[id]
-	file, err := r.st.VoiceFile(r.s, id)
+	file, err := r.generatedVoiceFile(id)
 	if err != nil {
 		skip("non fatto: %v", err)
 		return
