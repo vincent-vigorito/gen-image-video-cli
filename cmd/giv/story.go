@@ -504,7 +504,7 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		f = *s.Formato
 	}
 	o := videoOptions{
-		Provider: pick(g.Provider, d.Provider, defaultProvider()),
+		Provider: pick(g.Provider, d.Provider, envProvider()),
 		Model:    pick(g.Modello, d.Modello),
 		Prompt:   scene.Prompt, Negative: scene.Negative, Presets: scene.Preset,
 		Aspect:     pick(g.Aspect, d.Aspect, f.Aspect),
@@ -556,6 +556,9 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		o.Refs = refs
 	}
 
+	if o.Provider == "" {
+		return o, errNoVideoProvider("indica provider nel blocco default dello storyboard o nella scena:")
+	}
 	if err := checkProvider(o.Provider); err != nil {
 		return o, err
 	}

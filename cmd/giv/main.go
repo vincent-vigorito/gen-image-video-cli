@@ -102,8 +102,9 @@ var defaultImageModels = map[string]string{
 	"openrouter": "google/gemini-3.1-flash-image",
 }
 
-// gemini e openai non hanno un'API video (vedi resolveVideoModel).
+// openai non ha un'API video (vedi resolveVideoModel).
 var defaultVideoModels = map[string]string{
+	"gemini":     caps.GeminiVideoModel,
 	"xai":        "grok-imagine-video-1.5",
 	"openrouter": "google/gemini-omni-1.2-flash",
 	"fal":        "kling-v3-pro",
@@ -128,7 +129,12 @@ type manifest struct {
 	CostUSD     float64           `json:"cost_usd,omitempty"`     // riportato dal provider
 	CostEstUSD  float64           `json:"cost_est_usd,omitempty"` // stimato da listino, se il provider non lo riporta
 	CostSource  string            `json:"cost_source,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
+	// stima dai consumi riportati (gemini), informativa accanto a quella da listino
+	CostUsageUSD    float64  `json:"cost_usage_usd,omitempty"`
+	CostUsageSource string   `json:"cost_usage_source,omitempty"`
+	Warnings        []string `json:"warnings,omitempty"`
+
+	usageEstUSD float64 // CostUsageUSD non arrotondata (conto del tetto di story run)
 }
 
 func main() {
@@ -220,21 +226,25 @@ giv video:
   --resolution <r>   720p, 1080p
   --negative "<t>"   negative prompt
   --image <file>     frame iniziale (image-to-video)
-  --last-frame <file|url>  ultimo fotogramma (xai 1.5, openrouter dove il modello lo prevede)
-  --ref <file|url>   immagine di riferimento, ripetibile (xai reference_images, openrouter input_references)
+  --last-frame <file|url>  ultimo fotogramma (xai 1.5, gemini, openrouter dove il modello lo prevede)
+  --ref <file|url>   immagine di riferimento, ripetibile (xai reference_images, openrouter input_references,
+                     gemini fino a 6)
   --keyframe <file|url>  fotogramma intermedio, ripetibile in ordine (fal kling-4.0, al massimo 8)
   --shot "<s>:<testo>"   inquadratura di s secondi, ripetibile (fal kling-4.0 e kling-v3-pro):
                      senza prompt né --preset, il video dura la somma
   --duration <s>     durata in secondi (valori ammessi dal modello)
   --audio on|off     audio nativo (default del modello)
-  --seed <n>         seed (openrouter dove il modello lo rispetta; xai ignorato con avviso)
+  --seed <n>         seed (openrouter dove il modello lo rispetta; xai e gemini ignorato con avviso)
   --param k=v        parametro passante del modello, ripetibile (openrouter; valore JSON o stringa)
   --timeout <durata> tetto di attesa del job (default 15m)
   --dry-run          nessuna generazione: stampa parametri, avvisi e costo stimato (JSON)
   --max-cost <usd>   rifiuta (codice 2) se il costo stimato supera il tetto o non è stimabile
   --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
   Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
-  xai: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  xai e gemini: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  Senza --provider né GIV_PROVIDER giv video esce con codice 2: il default gemini vale solo per le immagini.
+  gemini (gemini-omni-1.2-flash, a pagamento): audio sempre presente, durata 3-15 s (default 10),
+  360p-4k (default 720p), 16:9 o 9:16; la durata e la risoluzione sono sempre inviate.
   --preset <nome>    preset di camera o effetto, ripetibile: al massimo uno di camera e uno
                      di effetto (elenco con giv presets); la frase si aggiunge al prompt
   --tutela <t>       clausola aggiunta coi preset: prodotto (default con --image),
@@ -262,8 +272,8 @@ func defaultsHelp() string {
 	for _, p := range providers {
 		video := defaultVideoModels[p]
 		switch {
-		case p == "openai", p == "gemini":
-			video = "non supportato: usa openrouter o xai"
+		case p == "openai":
+			video = "non supportato: usa gemini, openrouter o xai"
 		case video == "":
 			video = "nessun default: --model obbligatorio"
 		}
@@ -326,10 +336,20 @@ var envKeys = map[string]string{
 // defaultProvider è il provider usato senza --provider: GIV_PROVIDER (env o file
 // di configurazione, come le chiavi), altrimenti gemini.
 func defaultProvider() string {
-	if p := strings.TrimSpace(config.Get("GIV_PROVIDER")); p != "" {
+	if p := envProvider(); p != "" {
 		return p
 	}
 	return "gemini"
+}
+
+func envProvider() string { return strings.TrimSpace(config.Get("GIV_PROVIDER")) }
+
+// errNoVideoProvider: un video (a pagamento) non parte col solo default gemini,
+// serve un provider scelto (--provider, storyboard o GIV_PROVIDER); senza,
+// codice 2 come nella 0.9.1, quando gemini non aveva video.
+func errNoVideoProvider(how string) error {
+	return usageError("nessun provider scelto per il video: %s openrouter (default %s), xai (default %s), gemini (default %s) o fal (default %s), oppure imposta GIV_PROVIDER",
+		how, defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"], defaultVideoModels["fal"])
 }
 
 func checkProvider(name string) error {
@@ -339,9 +359,10 @@ func checkProvider(name string) error {
 	return nil
 }
 
-// baseURLs sono gli endpoint dei provider OpenAI-compatibili (i test li
-// puntano a un server finto).
+// baseURLs sono gli endpoint dei provider OpenAI-compatibili e dei video
+// gemini (i test li puntano a un server finto).
 var baseURLs = map[string]string{
+	"gemini":     "https://generativelanguage.googleapis.com/v1beta",
 	"openai":     "https://api.openai.com/v1",
 	"xai":        "https://api.x.ai/v1",
 	"openrouter": "https://openrouter.ai/api/v1",
@@ -363,7 +384,9 @@ func newProvider(name string) (provider.Provider, error) {
 	}
 	switch name {
 	case "gemini":
-		return gemini.New(key), nil
+		c := gemini.New(key)
+		c.Base = baseURLs["gemini"]
+		return c, nil
 	case "fal":
 		return fal.New(key, falConfig)
 	case "openai":
@@ -388,16 +411,13 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 	return "", usageError("nessun modello di default per %s: specifica --model", providerName)
 }
 
-// resolveVideoModel è resolveModel per i video, con i casi senza video spiegati:
-// openai non ha un'API video, gemini nemmeno (Veo spento sulla Gemini API), anche con --model.
+// resolveVideoModel è resolveModel per i video, col caso senza video spiegato:
+// openai non ha un'API video, anche con --model.
 func resolveVideoModel(flagValue, providerName string) (string, error) {
 	switch {
 	case providerName == "openai":
-		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s) o --provider xai (default %s)",
-			defaultVideoModels["openrouter"], defaultVideoModels["xai"])
-	case providerName == "gemini":
-		return "", usageError("gemini non ha un'API video (Veo spento sulla Gemini API dal 22/10/2026): "+
-			"usa --provider openrouter --model %s, o google/veo-3.1 per Veo", defaultVideoModels["openrouter"])
+		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s), --provider xai (default %s) o --provider gemini (default %s)",
+			defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"])
 	case providerName == "fal" && flagValue != "" && !fal.HasCard(flagValue):
 		// niente endpoint liberi: senza scheda il prezzo non sarebbe noto
 		return "", usageError("fal: scheda %q sconosciuta (schede: %s)", flagValue, strings.Join(fal.Cards(), ", "))
@@ -426,7 +446,7 @@ func cmdModels(args []string) error {
 			return err
 		}
 		if _, ok := defaultVideoModels[*prov]; !ok {
-			return usageError("--caps: nessun modello video con capacità note su %s (usa xai o openrouter)", *prov)
+			return usageError("--caps: nessun modello video con capacità note su %s (usa gemini, xai o openrouter)", *prov)
 		}
 	}
 	c, err := newProvider(*prov)
@@ -607,11 +627,18 @@ func cmdVideo(args []string) error {
 	}
 	// --max-cost: tetto solo se il flag c'è (anche 0)
 	var costCap *float64
+	chosen := envProvider() != ""
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "max-cost" {
+		switch f.Name {
+		case "max-cost":
 			costCap = maxCost
+		case "provider":
+			chosen = true
 		}
 	})
+	if !chosen {
+		return errNoVideoProvider("usa --provider")
+	}
 	job, err := prepareVideo(videoOptions{
 		Provider: *prov, Model: *model, Prompt: prompt,
 		Aspect: *aspect, Resolution: *resolution, Negative: *negative,
