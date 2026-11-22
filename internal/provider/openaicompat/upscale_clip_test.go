@@ -36,7 +36,7 @@ func newUpFake(t *testing.T) *upFake {
 	t.Helper()
 	fastPoll(t)
 	f := &upFake{auth: map[string]string{}, jobState: "completed"}
-	f.cdn = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cdn = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.auth["cdn"+r.URL.Path] = r.Header.Get("Authorization")
 		f.mu.Unlock()
@@ -69,6 +69,9 @@ func newUpFake(t *testing.T) *upFake {
 	}))
 	t.Cleanup(f.srv.Close)
 	t.Cleanup(f.cdn.Close)
+	old := clipTransport
+	clipTransport = f.cdn.Client().Transport
+	t.Cleanup(func() { clipTransport = old })
 	return f
 }
 
