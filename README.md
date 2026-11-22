@@ -49,7 +49,8 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
   preset), `presets[]`, `inputs` (file per ruolo: `image`, `last_frame`, `refs[]`, con
   impronta sha256 breve; gli URL ridotti a schema e host), `params`, `job_id`,
   `duration_s` (durata reale del video), `cost_est_usd` e `cost_source` (stima da listino
-  quando il provider non riporta il costo, es. xai), `warnings[]`.
+  quando il provider non riporta il costo, es. xai; nei comandi sulle clip restano accanto
+  a `cost_usd`), `warnings[]`.
 - **naming deterministico** — `<out>/<slug>-<timestamp>[-n].<ext>`; `--name` per slug
   stabili, `--out` per la directory. Un file che c'è già non si sovrascrive mai (né si
   segue un link al suo posto): il nuovo prende il suffisso `-2`, `-3`…
@@ -103,7 +104,7 @@ Un agente deve poter invocare il CLI e fidarsi del risultato senza euristiche:
   corrente, e anche ogni **job video partito e poi fallito o scaduto** (`status`
   `failed`/`timeout`, `job_id`), perché può essere stato addebitato. `giv log` la storia;
   `giv log --sum-cost` il totale riportato (`cost_usd`) e quello stimato
-  (`cost_est_usd`), più i job falliti (`failed_jobs`, `failed_cost_est_usd`); con
+  (`cost_est_usd`, delle sole righe senza costo riportato), più i job falliti (`failed_jobs`, `failed_cost_est_usd`); con
   `--by provider|model` anche i totali per gruppo.
 - **input da URL** — `--input`, `--image`, `--last-frame`, `--ref` e `--keyframe` accettano
   anche URL http(s), scaricati da soli.
@@ -172,7 +173,7 @@ prima o dopo.
 | `image` | `-n <num>` (su OpenRouter una richiesta per immagine, costi sommati) · `--aspect <1:1\|16:9\|9:16\|4:3\|3:4>` · `--seed <n>` · `--input <file\|url>` (ripetibile: reference di stile / editing) |
 | `video` | tabella sotto |
 | `extend`, `edit` | provider `xai` (default): `--video <mp4\|url>` obbligatorio; provider `gemini`: `--from <job_id>` obbligatorio (un video fatto con `giv video --provider gemini`, niente `--video`) · `--duration` (solo `extend`: secondi aggiunti, xai 2-10 e default 6, gemini 3-10 e default 10) · `--dry-run` · `--max-cost <usd>` · `--strict` · `--timeout` |
-| `upscale` | `--video <file\|url>` obbligatorio · `--factor` (default 2; openrouter 1,5-3, fal 1-4) · `--mode precise\|creative` (default `precise`) e prompt facoltativo, solo openrouter · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `openrouter` (default) o `fal` |
+| `upscale` | `--video <url\|file>` obbligatorio (con openrouter solo URL `https` pubblico: un file locale esce con codice 2; con fal anche file locale) · `--factor` (default 2; openrouter 1,5-3, fal 1-4) · `--mode precise\|creative` (default `precise`) e prompt facoltativo, solo openrouter · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `openrouter` (default) o `fal` |
 | `avatar` | `--image <file\|url>` e `--audio <wav\|mp3>` obbligatori · `--model standard\|pro` (default `standard`) · prompt facoltativo · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `fal` |
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
@@ -359,7 +360,8 @@ un'immagine che c'è già, con lo stesso giro di `giv video`:
   `--max-cost` esce con codice 2;
 - **uscita**: `--dry-run` stampa piano, avvisi e stima senza chiamate; il manifest ha
   `command` (`extend`, `edit`, `upscale`, `avatar`) e `inputs` (percorso e impronta dei
-  file, solo schema e host degli URL); il job resta in `giv-jobs.jsonl` e si recupera con
+  file, solo schema e host degli URL); `cost_est_usd` e `cost_source` restano accanto al
+  `cost_usd` riportato dal provider; il job resta in `giv-jobs.jsonl` e si recupera con
   `giv job fetch` come un video.
 
 ### Allungare e modificare (xAI)
@@ -379,13 +381,13 @@ giv extend --video clip.mp4 --dry-run --max-cost 1.00 "…"       # stima, nessu
   `--seed`, `--negative`, `--ref`. Sorgente oltre 720p: avviso (l'uscita resta a 720p),
   errore con `--strict`. Durata e altezza si leggono con ffprobe: senza ffprobe, o da URL,
   i limiti non si controllano (avviso).
-- **costo**: la stima prende il caso più caro finché non è verificato: `extend` =
-  (sorgente + aggiunta) × 0,07 $/s + sorgente × 0,01 $/s, `edit` = sorgente × 0,08 $/s.
-  Senza la durata misurata del sorgente (URL o ffprobe assente) la stima non c'è e
-  `--max-cost` rifiuta con codice 2. A fine job il manifest riporta il costo reale di xAI
-  (`cost_usd`). Nella prova del 22/11/2026 l'estensione di una clip di 6 s di 3 s è costata
-  0,27 $ (stima 0,69): xAI fattura solo i secondi aggiunti più l'ingresso (3 × 0,07 + 6 ×
-  0,01); la modifica della stessa clip 0,48 $, come la stima.
+- **costo**: `extend` = secondi aggiunti × 0,07 $/s + sorgente (a secondi interi per
+  eccesso) × 0,01 $/s, `edit` = sorgente × 0,08 $/s; l'uscita si conta a 720p, la tariffa
+  più alta. È la fatturazione vista nella prova del 22/11/2026: 3 s aggiunti a una clip di
+  6 s, 0,27 $ (3 × 0,07 + 6 × 0,01); la modifica della stessa clip 0,48 $. Senza la durata
+  misurata del sorgente (URL o ffprobe assente) la stima non c'è e `--max-cost` rifiuta
+  con codice 2. A fine job il manifest riporta il costo reale di xAI (`cost_usd`), con la
+  stima accanto.
 - manifest con `command` `extend`/`edit`, `inputs.video` (percorso e impronta, o solo
   schema e host per un URL); il job resta in `giv-jobs.jsonl` e si recupera con
   `giv job fetch --provider xai <id>`.
@@ -414,25 +416,25 @@ giv edit --provider gemini --from <job_id> "aggiungi la nebbia"
 ### Ingrandire (`giv upscale`)
 
 ```bash
-giv upscale --video clip.mp4 --dry-run --max-cost 2.00     # stima, nessuna chiamata
-giv upscale --video clip.mp4 --factor 2 --mode precise
+giv upscale --video https://example.com/clip.mp4 --factor 2 --mode precise
 giv upscale --video https://example.com/clip.mp4 --mode creative "più nitido, stessa luce"
 giv upscale --provider fal --video clip.mp4 --factor 2 --dry-run   # Topaz su fal, file locale
+giv upscale --provider fal --video clip.mp4 --max-cost 0.50        # stima sulle misure di ffprobe
 ```
 
 - **modello**: `black-forest-labs/flux-video-upscale` su openrouter (l'unico di
   ingrandimento nel catalogo al 22/11/2026), provider predefinito.
 - **parametri**: `--factor` da 1,5 a 3 (default 2), `--mode` `precise` (default) o
   `creative`, prompt facoltativo; fattore e modalità vanno sempre nel corpo.
-- **sorgente**: un URL `https` va al provider così com'è; un file mp4 locale (al massimo
-  50 MiB) va nel corpo della richiesta come data URI, che OpenRouter non documenta
-  (avviso su stderr). Nella prova del 22/11/2026 OpenRouter l'ha rifiutato (HTTP 400, solo
-  URL `https`, nessun addebito): per un file locale usare un URL `https` pubblico o
-  `--provider fal`.
-- **costo**: listino a megapixel-secondo, 0,035 $ in `precise` e 0,05 $ in `creative`,
-  stimato in modo prudente su lati del sorgente × fattore² × durata (la formula del
-  provider non è documentata). A fine job il manifest riporta il costo di OpenRouter
-  (`cost_usd`); recupero con `giv job fetch --provider openrouter <id>`.
+- **sorgente**: solo un URL `https` pubblico, passato al provider così com'è. Un file
+  locale esce con codice 2, prima di ogni chiamata, e il messaggio propone `--provider
+  fal`: nella prova del 22/11/2026 OpenRouter ha rifiutato il file mandato come data URI
+  (HTTP 400, solo URL `https`, nessun addebito). Da URL giv non misura il sorgente: niente
+  stima, quindi `--max-cost` esce con codice 2.
+- **costo**: listino a megapixel-secondo, 0,035 $ in `precise` e 0,05 $ in `creative`
+  (la formula del provider non è documentata); la stima prudente, lati del sorgente ×
+  fattore² × durata, vuole le misure, che da URL mancano. Il costo vero è il `cost_usd` di
+  OpenRouter nel manifest a fine job; recupero con `giv job fetch --provider openrouter <id>`.
 - **fal** (`--provider fal`, chiave `FAL_KEY`): Topaz (`topaz-upscale`, modello Proteus),
   solo `--video` e `--factor` da 1 a 4 (default 2); `--mode` e il prompt sono rifiutati. Il
   file locale (mp4, al massimo 50 MiB) va sullo storage di fal come per `giv avatar`, un

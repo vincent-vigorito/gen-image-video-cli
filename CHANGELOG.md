@@ -12,10 +12,11 @@ versioning [SemVer](https://semver.org/lang/it/).
   (`--duration`, default 6) o la modificano col prompt. `--video` è un file mp4 locale
   (al massimo 50 MiB, caricato su xAI con scadenza di un'ora) o un URL `https` che finisce
   in `.mp4`. Limiti del sorgente (2-15 s per extend, fino a 8,7 s per edit) controllati
-  con ffprobe; stima sul caso più caro finché non è verificato; il manifest riporta il
-  costo reale di xAI (`cost_usd`). Nella prova del 22/11/2026 l'estensione di 3 s di una
-  clip di 6 s è costata 0,27 $ (stima 0,69 $: xAI fattura solo i secondi aggiunti più
-  l'ingresso), la modifica 0,48 $ come la stima.
+  con ffprobe; il manifest riporta il costo reale di xAI (`cost_usd`) con la stima
+  accanto. La stima segue la fatturazione vista nella prova del 22/11/2026: per extend
+  secondi aggiunti × 0,07 $/s più il sorgente (a secondi interi) × 0,01 $/s, 0,27 $ per
+  3 s aggiunti a una clip di 6 s; per edit sorgente × 0,08 $/s, 0,48 $ sulla stessa
+  clip.
 - **Video con Gemini diretto** (`gemini-omni-1.2-flash`, API interactions): `giv video
   --provider gemini` torna a generare, a pagamento, solo con una scelta esplicita del
   provider (`--provider gemini`, provider dello storyboard o `GIV_PROVIDER`). Audio sempre
@@ -33,10 +34,11 @@ versioning [SemVer](https://semver.org/lang/it/).
   testo sta tutto lì (niente prompt né `--preset`) e il video dura la somma. `--keyframe` e
   `--shot` con altri modelli escono con codice 2.
 - **`giv upscale`** (OpenRouter, `black-forest-labs/flux-video-upscale`): `--factor` 1,5-3
-  (default 2), `--mode precise|creative` (default `precise`), prompt facoltativo; un file
-  locale va come data URI, che nella prova del 22/11/2026 OpenRouter ha rifiutato (HTTP
-  400, solo URL `https`, nessun addebito): da file locale serve `--provider fal`. Stima a
-  megapixel-secondo sulle misure del sorgente.
+  (default 2), `--mode precise|creative` (default `precise`), prompt facoltativo. Solo da
+  URL `https` pubblico: un file locale esce con codice 2 e il messaggio propone
+  `--provider fal` (nella prova del 22/11/2026 OpenRouter ha rifiutato il file mandato come
+  data URI, HTTP 400, senza addebito). Da URL il sorgente non si misura: niente stima e,
+  con `--max-cost`, codice 2; il costo è il `cost_usd` di OpenRouter.
 - **`giv upscale --provider fal`** (Topaz, `topaz-upscale`): `--factor` 1-4 (default 2), file
   mp4 locale caricato sullo storage di fal o URL `https`; stima per secondo del sorgente e
   fascia d'uscita (0,01, 0,02 o 0,08 $/s, il doppio sopra i 30 fps) sulle misure di
@@ -87,6 +89,8 @@ versioning [SemVer](https://semver.org/lang/it/).
   posto: il nuovo prende il suffisso `-2`, `-3`…
 - Il motivo di un job fallito riporta solo codice e messaggio del provider, ripuliti, non
   più il campo `error` così com'è.
+- `giv log --sum-cost`: `cost_est_usd` somma solo le righe senza costo riportato (nei
+  comandi sulle clip la stima sta accanto a `cost_usd` e non si conta due volte).
 
 ### Sicurezza
 
