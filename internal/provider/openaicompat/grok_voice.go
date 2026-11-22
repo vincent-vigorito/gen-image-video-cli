@@ -286,11 +286,13 @@ func grokTimings(raw json.RawMessage) ([]speech.CharTime, error) {
 			}
 			starts = append(starts, v)
 		case '[':
-			var p []float64
-			if json.Unmarshal(el, &p) != nil || len(p) != 2 {
+			// al più tre elementi tenuti (gli altri si leggono e si scartano):
+			// un terzo vuol dire coppia non valida
+			var p [3]*float64
+			if json.Unmarshal(el, &p) != nil || p[0] == nil || p[1] == nil || p[2] != nil {
 				return errors.New("coppia di tempi non valida")
 			}
-			starts, ends = append(starts, p[0]), append(ends, p[1])
+			starts, ends = append(starts, *p[0]), append(ends, *p[1])
 		case '{':
 			var o struct {
 				Start *float64 `json:"start"`
