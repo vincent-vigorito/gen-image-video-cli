@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
@@ -23,7 +23,7 @@ const (
 	cutFPS         = 30
 	cutFadeSeconds = 0.5  // durata di ogni dissolvenza
 	cutMusicVolume = 0.25 // musica sotto la voce
-	cutVoiceSlack  = 0.05 // secondi di voce oltre la scena tollerati senza avviso
+	cutVoiceSlack  = 0.05 // secondi di sovrapposizione della voce tollerati senza avviso
 )
 
 // storyCutResult è l'uscita di giv story cut.
@@ -142,7 +142,7 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 			return p, usageError("%s: scena %s: tipo %q non montabile", path, sc.ID, sc.Tipo)
 		}
 		if sc.Voce != "" {
-			c.Voice = s.Path(sc.Voce)
+			c.Voice, c.VoiceAt = s.Path(sc.Voce), sc.Ritardo()
 		}
 		p.Clips = append(p.Clips, c)
 	}
@@ -268,45 +268,92 @@ func insideDir(root, dir string) error {
 	return nil
 }
 
-// voiceWarning confronta la durata della voce con quella della scena (0 =
-// ignota, nessun confronto); restituisce l'avviso o "". Le letture con
-// ffprobe di tutto lo story check stanno entro montage.ProbeTimeout, dalla
-// prima.
-func (chk *storyChecker) voiceWarning(sc *story.Scene, sceneSeconds float64) string {
-	if sc.Voce == "" {
-		return ""
-	}
+// voiceOverlaps controlla la voce di ogni scena sulla linea del tempo del
+// montaggio (durate delle scene, dissolvenze, ritardo_voce): deve finire prima
+// che parta la voce della scena successiva che ne ha una, l'ultima prima della
+// fine del montaggio. Ogni avviso va nella scena e su stderr; una voce che
+// supera la sua scena senza toccarne un'altra non ne ha. out sono tutte le
+// scene dello storyboard, nello stesso ordine. Le letture con ffprobe stanno
+// tutte entro montage.ProbeTimeout.
+func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 	s := chk.s
-	tool := montage.Tool{}
-	if err := tool.Check(); err != nil {
-		return "durata della voce non controllata: ffprobe non trovato"
+	warn := func(i int, w string) {
+		out.Scenes[i].Warnings = append(out.Scenes[i].Warnings, w)
+		fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", s.Scene[i].ID, w)
 	}
-	if chk.probeUntil.IsZero() {
-		chk.probeUntil = time.Now().Add(montage.ProbeTimeout)
-	}
-	ctx, cancel := context.WithDeadline(context.Background(), chk.probeUntil)
-	defer cancel()
-	late := "durata della voce non controllata: letture oltre il tempo massimo di " + montage.ProbeTimeout.String()
-	if ctx.Err() != nil {
-		return late
-	}
-	voice, err := tool.Probe(ctx, s.Path(sc.Voce))
-	if ctx.Err() != nil {
-		return late
-	}
-	if err != nil || voice.Audio == nil {
-		return fmt.Sprintf("voce %s illeggibile come audio: giv story cut la rifiuterà", sc.Voce)
-	}
-	if sceneSeconds == 0 && sc.Tipo == story.Clip {
-		if info, err := tool.Probe(ctx, s.Path(sc.File)); err == nil {
-			sceneSeconds = info.Duration
+	var voiced []int
+	for i := range s.Scene {
+		if s.Scene[i].Voce != "" {
+			voiced = append(voiced, i)
 		}
 	}
-	if sceneSeconds > 0 && voice.Duration > sceneSeconds+cutVoiceSlack {
-		return fmt.Sprintf("la voce dura %s s, più della scena (%s s): continua sulla scena dopo o viene tagliata a fine montaggio",
-			strconv.FormatFloat(round3(voice.Duration), 'f', -1, 64), strconv.FormatFloat(round3(sceneSeconds), 'f', -1, 64))
+	if len(voiced) == 0 {
+		return
 	}
-	return ""
+	tool := montage.Tool{}
+	if err := tool.Check(); err != nil {
+		for _, i := range voiced {
+			warn(i, "durata della voce non controllata: ffprobe non trovato")
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), montage.ProbeTimeout)
+	defer cancel()
+	n := len(s.Scene)
+	voiceLen := make([]float64, n)
+	for _, i := range voiced {
+		voiceLen[i] = math.NaN()
+		var info *montage.Info
+		var err error
+		if ctx.Err() == nil {
+			info, err = tool.Probe(ctx, s.Path(s.Scene[i].Voce))
+		}
+		switch {
+		case ctx.Err() != nil:
+			warn(i, "durata della voce non controllata: letture oltre il tempo massimo di "+montage.ProbeTimeout.String())
+		case err != nil || info.Audio == nil:
+			warn(i, fmt.Sprintf("voce %s illeggibile come audio: giv story cut la rifiuterà", s.Scene[i].Voce))
+		default:
+			voiceLen[i] = info.Duration
+		}
+	}
+	// inizio di ogni scena nel montaggio, starts[n] è la fine; NaN da una
+	// scena di durata ignota in poi (nessun confronto)
+	fade := 0.0
+	if m := s.Montaggio; m != nil && m.Transizione == "dissolvenza" {
+		fade = cutFadeSeconds
+	}
+	starts := make([]float64, n+1)
+	for i := range s.Scene {
+		l := out.Scenes[i].length
+		if l == 0 && s.Scene[i].Tipo == story.Clip && ctx.Err() == nil {
+			if info, err := tool.Probe(ctx, s.Path(s.Scene[i].File)); err == nil {
+				l = info.Duration
+			}
+		}
+		if l <= 0 {
+			l = math.NaN()
+		}
+		starts[i+1] = starts[i] + l
+		if i+1 < n {
+			starts[i+1] -= fade
+		}
+	}
+	secs := func(v float64) string { return strconv.FormatFloat(round3(v), 'f', -1, 64) }
+	for k, i := range voiced {
+		end := starts[i] + s.Scene[i].Ritardo() + voiceLen[i]
+		if k+1 < len(voiced) {
+			j := voiced[k+1]
+			next := starts[j] + s.Scene[j].Ritardo()
+			if d := end - next; d > cutVoiceSlack {
+				warn(i, fmt.Sprintf("la voce si sovrappone di %s s a quella della scena %s: finisce a %s s del montaggio, quella di %s parte a %s s",
+					secs(d), s.Scene[j].ID, secs(end), s.Scene[j].ID, secs(next)))
+			}
+		} else if d := end - starts[n]; d > cutVoiceSlack {
+			warn(i, fmt.Sprintf("la voce supera di %s s la fine del montaggio e viene tagliata: finisce a %s s, il montaggio dura %s s",
+				secs(d), secs(end), secs(starts[n])))
+		}
+	}
 }
 
 // sceneMissing descrive una scena video senza clip da montare: l'errore di

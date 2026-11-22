@@ -86,7 +86,8 @@ type Scene struct {
 	File string `json:"file,omitempty"`
 
 	// tutte: voce fuori campo, messa al montaggio
-	Voce string `json:"voce,omitempty"`
+	Voce        string   `json:"voce,omitempty"`
+	RitardoVoce *float64 `json:"ritardo_voce,omitempty"` // secondi dall'inizio della scena; nil = 0
 }
 
 // FotogrammaChiave è l'immagine generata prima della scena e usata come primo
@@ -237,6 +238,14 @@ func (s *Storyboard) Validate() error {
 		if sc.Voce != "" {
 			file(where+": voce", sc.Voce, false)
 		}
+		if r := sc.RitardoVoce; r != nil {
+			if !nonNegative(*r) {
+				fail("%s: ritardo_voce deve essere un numero di secondi finito e non negativo", where)
+			}
+			if sc.Voce == "" {
+				fail("%s: ritardo_voce senza voce", where)
+			}
+		}
 		switch sc.Tipo {
 		case Video:
 			s.validateVideo(sc, where, seen, fail, file)
@@ -376,6 +385,15 @@ func (sc *Scene) videoFields() []string {
 	add(g.Tutela != "", "tutela")
 	add(len(g.Param) > 0, "param")
 	return out
+}
+
+// Ritardo è l'inizio della voce in secondi dall'inizio della scena (0 se
+// ritardo_voce manca).
+func (sc *Scene) Ritardo() float64 {
+	if sc.RitardoVoce == nil {
+		return 0
+	}
+	return *sc.RitardoVoce
 }
 
 func (s *Storyboard) index(id string) int {
