@@ -37,6 +37,9 @@ type Op struct {
 	// motivo per cui non si può stimare (why non vuoto).
 	Price  func(req provider.ClipRequest) (usd float64, detail, why string) `json:"-"`
 	Source string                                                           `json:"source"`
+
+	Refused  map[string]string `json:"-"`                     // flag non ammessi col motivo del rifiuto
+	TotalMax float64           `json:"total_max_s,omitempty"` // extend: sorgente + secondi aggiunti
 }
 
 // FindOp cerca l'operazione op col modello model; con model vuoto il primo
@@ -87,6 +90,9 @@ func CheckOpFlags(prov string, o *Op, ops []Op, req provider.ClipRequest, set []
 		if slices.Contains(o.Flags, f) {
 			continue
 		}
+		if why := o.Refused[f]; why != "" {
+			return reject("--%s non ammesso da %s: %s", f, who, why)
+		}
 		if f == "prompt" {
 			return reject("%s non accetta un prompt", who)
 		}
@@ -114,18 +120,21 @@ func CheckOpFlags(prov string, o *Op, ops []Op, req provider.ClipRequest, set []
 }
 
 // CheckOpSource controlla le misure del sorgente lette con ffprobe
-// (req.Source) e restituisce gli avvisi: durata fuori dai limiti = rifiuto,
-// durata non nota = avviso; un sorgente più alto dell'uscita è un avviso (con
-// strict un rifiuto).
+// (req.Source; con --from quelle del video di partenza) e restituisce gli
+// avvisi: durata fuori dai limiti = rifiuto, durata non nota = avviso; un
+// sorgente più alto dell'uscita è un avviso (con strict un rifiuto).
 func CheckOpSource(prov string, o *Op, req provider.ClipRequest, strict bool) ([]string, error) {
 	var warns []string
 	src, who := req.Source, o.who(prov)
-	if req.Video != "" && (o.SourceMin > 0 || o.SourceMax > 0) {
+	if (req.Video != "" || req.From != "") && (o.SourceMin > 0 || o.SourceMax > 0 || o.TotalMax > 0) {
 		switch {
 		case src.Duration <= 0:
 			warns = append(warns, fmt.Sprintf("durata del sorgente non nota: limiti di %s non controllati", who))
 		case o.SourceMin > 0 && src.Duration < o.SourceMin, o.SourceMax > 0 && src.Duration > o.SourceMax:
 			return nil, reject("sorgente di %.2f s: %s accetta %s", src.Duration, who, rangeText(o.SourceMin, o.SourceMax))
+		case o.TotalMax > 0 && src.Duration+float64(o.Duration(req)) > o.TotalMax:
+			return nil, reject("sorgente di %.2f s più %d s aggiunti: %s arriva al massimo a %g s in tutto",
+				src.Duration, o.Duration(req), who, o.TotalMax)
 		}
 	}
 	if o.MaxHeight > 0 && src.Height > o.MaxHeight {

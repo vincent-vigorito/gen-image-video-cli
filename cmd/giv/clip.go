@@ -30,6 +30,10 @@ type clipSpec struct {
 // (internal/caps), lette senza chiave né chiamate: ogni provider aggiunge la sua.
 var clipOpTables = map[string]func() []caps.Op{}
 
+// clipFromSource controlla --from per provider (senza chiave né chiamate) e
+// mette in req.Source le misure note del video di partenza; restituisce gli avvisi.
+var clipFromSource = map[string]func(req *provider.ClipRequest) ([]string, error){}
+
 // clipFlags sono i flag dei comandi sulle clip oltre a quelli comuni: quali
 // valgono lo decide la tabella dell'operazione (caps.Op.Flags).
 var clipFlags = []string{"video", "from", "image", "audio", "duration", "factor", "mode"}
@@ -236,6 +240,13 @@ func prepareClip(spec clipSpec, o clipOptions) (*clipJob, error) {
 	warns, err := probeClip(&req)
 	if err != nil {
 		return nil, err
+	}
+	if from := clipFromSource[o.Provider]; from != nil && req.From != "" {
+		w, err := from(&req)
+		if err != nil {
+			return nil, err
+		}
+		warns = append(warns, w...)
 	}
 	srcWarns, err := caps.CheckOpSource(o.Provider, op, req, o.Strict)
 	if err != nil {

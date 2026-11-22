@@ -31,6 +31,11 @@ type Model struct {
 	Passthrough     []string           `json:"passthrough,omitempty"`
 	Pricing         map[string]float64 `json:"pricing,omitempty"` // sku -> valore, unità nel nome
 	Source          string             `json:"source"`
+
+	// Prepare, se c'è, fa i controlli propri del modello (rifiuto = codice 2) e
+	// completa req coi valori che giv invia sempre (la stima vale per quelli);
+	// restituisce gli avvisi.
+	Prepare func(req *provider.VideoRequest) ([]string, error) `json:"-"`
 }
 
 // Find cerca il modello per id; nil se non c'è.
@@ -169,6 +174,13 @@ func Check(prov string, m *Model, catalog []Model, req *provider.VideoRequest, s
 			return "nessun modello di " + prov
 		}
 		return "modelli di " + prov + " che lo supportano: " + strings.Join(ids, ", ")
+	}
+	if m.Prepare != nil {
+		w, err := m.Prepare(req)
+		if err != nil {
+			return nil, err
+		}
+		warns = append(warns, w...)
 	}
 
 	// strutturali: cambiano cosa viene generato

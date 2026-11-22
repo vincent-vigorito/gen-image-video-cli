@@ -109,8 +109,11 @@ func videoManifest(prov, prompt string, pres presets.Result, plan *videoPlan, in
 // costo riportato dal provider prende il posto della stima.
 func (man *manifest) done(files []output.FileInfo, res *provider.Result) {
 	man.Files, man.JobID = files, res.JobID
-	if res.CostUSD > 0 {
+	switch {
+	case res.CostUSD > 0:
 		man.CostUSD, man.CostEstUSD, man.CostSource = res.CostUSD, 0, ""
+	case res.CostEstUSD > 0: // ricalcolata dai consumi riportati, prende il posto di quella da listino
+		man.CostEstUSD, man.CostSource = res.CostEstUSD, res.CostSource
 	}
 	for _, m := range res.Media {
 		if strings.HasPrefix(m.Mime, "video/") {

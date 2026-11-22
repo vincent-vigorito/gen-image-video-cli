@@ -49,6 +49,11 @@ type Result struct {
 	Media   []Media
 	CostUSD float64 // 0 = costo non riportato dal provider
 	JobID   string  // id del job asincrono; "" se il provider non ne ha
+
+	// stima ricalcolata a fine job dai consumi riportati (es. token × listino),
+	// quando il provider non dà l'importo: 0 = nessuna
+	CostEstUSD float64
+	CostSource string
 }
 
 type Provider interface {
