@@ -31,6 +31,11 @@ type Model struct {
 	Passthrough     []string           `json:"passthrough,omitempty"`
 	Pricing         map[string]float64 `json:"pricing,omitempty"` // sku -> valore, unità nel nome
 	Source          string             `json:"source"`
+
+	// schede con regole o prezzi propri (fal): nil = solo i controlli e la
+	// stima generici
+	check    func(req *provider.VideoRequest) error
+	estimate func(m *Model, req provider.VideoRequest) (*Estimate, string)
 }
 
 // Find cerca il modello per id; nil se non c'è.
@@ -241,6 +246,11 @@ func Check(prov string, m *Model, catalog []Model, req *provider.VideoRequest, s
 				allowed = strings.Join(m.Passthrough, ", ")
 			}
 			return nil, reject("--param %s non ammesso da %s (ammessi: %s)", k, m.ID, allowed)
+		}
+	}
+	if m.check != nil {
+		if err := m.check(req); err != nil {
+			return nil, err
 		}
 	}
 
