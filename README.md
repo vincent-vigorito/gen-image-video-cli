@@ -593,6 +593,11 @@ giv voice --voices --provider gemini
   rete, risposta non valida) esce con codice 5 e una riga `failed` nel registro: la voce
   può essere stata addebitata, controlla prima di rilanciare. Voce sconosciuta: codice 3
   (elenco con `giv voice --voices`).
+- **elenco delle voci** (`--voices`, gratuito): con `--provider gemini` sempre le 30 voci
+  studio (`name` `voce studio`, compresa la predefinita `Kore`) e poi le voci dell'API
+  (`GET /v1beta/voices`) pagina per pagina, fino a 10 pagine e 10.000 voci; un elenco
+  tagliato esce comunque con codice 0, con un avviso su stderr e il campo `warnings` nel
+  JSON.
 
 ## Rifinitura in locale: `giv post`
 
