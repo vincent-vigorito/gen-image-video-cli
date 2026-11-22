@@ -642,6 +642,13 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 		}
 		p.Subtitles = shifted
 	}
+	outTotal := total
+	if p.extended() {
+		w := &Work{Dir: work, ctx: ctx, tool: t, ffmpeg: ffmpeg}
+		if outTotal, err = t.prepareExtended(w, &p, starts, total, res); err != nil {
+			return nil, err
+		}
+	}
 
 	final := p.Output
 	staged := p
@@ -660,8 +667,109 @@ func (t Tool) Montage(ctx context.Context, p Plan) (*Result, error) {
 	if err := publish(ctx, staged.Output, p.Root, p.RootDir, final, p.Overwrite); err != nil {
 		return nil, err
 	}
-	res.Output, res.Duration, res.Info = final, total, info
+	res.Output, res.Duration, res.Info = final, outTotal, info
 	return res, nil
+}
+
+// prepareExtended prepara in p le sovrimpressioni e l'audio della 0.11.0:
+// misure del logo e delle immagini del cartello, tempi dei titoli sul
+// montato, file .ass dei testi coi font nella cartella di lavoro, misura del
+// volume finale (prima passata). Restituisce la durata del montato col
+// cartello. Logo e cartello si copiano: il piano del chiamante non cambia.
+func (t Tool) prepareExtended(w *Work, p *Plan, starts []float64, total float64, res *Result) (float64, error) {
+	image := func(what, path string) (*Info, error) {
+		info, err := t.Probe(w.ctx, path)
+		if err != nil {
+			return nil, probeErr(what, err)
+		}
+		if err := CheckImage(path, info); err != nil {
+			return nil, err
+		}
+		return info, nil
+	}
+	if p.Logo != nil {
+		l := *p.Logo
+		info, err := image("logo", l.Path)
+		if err != nil {
+			return 0, err
+		}
+		l.SrcW, l.SrcH = info.Video.Width, info.Video.Height
+		if l.From >= total || l.To > total+timeSlack {
+			return 0, invalid("logo: finestra da %s a %s s fuori dalle scene (%s s)", num(l.From), num(l.To), num(total))
+		}
+		l.To = min(l.To, total)
+		p.Logo = &l
+	}
+	outTotal := total
+	if p.EndCard != nil {
+		c := *p.EndCard
+		if c.Image != "" {
+			if _, err := image("cartello finale: immagine", c.Image); err != nil {
+				return 0, err
+			}
+		}
+		if c.Logo != nil {
+			lg := *c.Logo
+			info, err := image("cartello finale: logo", lg.Path)
+			if err != nil {
+				return 0, err
+			}
+			lg.SrcW, lg.SrcH = info.Video.Width, info.Video.Height
+			c.Logo = &lg
+		}
+		if err := c.check(); err != nil {
+			return 0, err
+		}
+		p.EndCard = &c
+		outTotal += c.Duration
+	}
+	var texts []Text
+	for i, ti := range p.Titles {
+		x := ti.Text
+		if ti.Clip > 0 {
+			x.Start += starts[ti.Clip-1]
+			x.End += starts[ti.Clip-1]
+		}
+		if x.Start >= outTotal {
+			return 0, invalid("titolo %d: comincia a %s s, il montato dura %s s", i+1, num(x.Start), num(outTotal))
+		}
+		if x.End > outTotal+timeSlack {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("titolo %d: finisce a %s s, oltre la fine del montato (%s s): tagliato", i+1, num(x.End), num(outTotal)))
+		}
+		x.End = min(x.End, outTotal)
+		texts = append(texts, x)
+	}
+	if p.EndCard != nil {
+		texts = append(texts, EndCardTexts(*p.EndCard, total, p.Height)...)
+	}
+	if len(texts) > 0 {
+		m := SafeMargins(p.Width, p.Height)
+		if p.Margins != nil {
+			m = *p.Margins
+		}
+		data, err := ASS(p.Width, p.Height, m, texts)
+		if err != nil {
+			return 0, err
+		}
+		if p.texts, err = w.WriteFile("testi.ass", data); err != nil {
+			return 0, err
+		}
+		if len(p.Fonts) > 0 {
+			if p.fontsDir, err = w.Fonts(p.Fonts...); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if p.Loudness != 0 {
+		args, err := loudnessArgs(*p)
+		if err != nil {
+			return 0, err
+		}
+		if p.measured, err = w.MeasureLoudness(args); err != nil {
+			return 0, fmt.Errorf("misura del volume: %w", err)
+		}
+	}
+	return outTotal, nil
 }
 
 // srtToASSArgs converte un .srt in .ass leggendolo col solo lettore SubRip.

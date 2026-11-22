@@ -68,6 +68,95 @@ type Plan struct {
 	// Overwrite false: se Output esiste già il montaggio si rifiuta prima di
 	// partire. true: il file esistente viene sostituito solo a montaggio riuscito.
 	Overwrite bool
+
+	// Sovrimpressioni e audio (giv story cut, 0.11.0), tutti facoltativi:
+	// senza, gli argomenti sono quelli di prima. Si posano dopo il formato,
+	// dentro i margini sicuri.
+	Logo    *Logo    // sulle scene (To 0: fino alla fine delle scene); SrcW e SrcH li misura Montage
+	Titles  []Title  // titoli, coi tempi della loro clip
+	EndCard *EndCard // cartello finale accodato a taglio netto, muto sotto la musica
+	Fonts   []string // file dei font dei testi (.ttf, .otf, .ttc)
+	Margins *Margins // margini sicuri; nil: SafeMargins del formato
+	// Duck abbassa la musica sotto le voci; MusicFade sono i secondi di
+	// dissolvenza finale della musica (come Mix).
+	Duck      bool
+	MusicFade float64
+	Loudness  float64 // volume finale in LUFS (CheckLoudness); 0: com'è
+
+	// preparati da Montage: file .ass dei testi, cartella dei font, misura
+	// della prima passata del volume
+	texts, fontsDir string
+	measured        *Loudness
+}
+
+// Title è un titolo del montaggio: Start ed End sono secondi dall'inizio
+// della clip numero Clip (da 1), o del montato con Clip 0.
+type Title struct {
+	Text
+	Clip int
+}
+
+// extended dice se il piano usa sovrimpressioni o audio della 0.11.0.
+func (p Plan) extended() bool {
+	return p.Logo != nil || len(p.Titles) > 0 || p.EndCard != nil || p.Duck || p.MusicFade != 0 || p.Loudness != 0
+}
+
+// checkExtended controlla i valori delle sovrimpressioni e dell'audio che non
+// dipendono dai file (le misure del logo e i tempi li controlla Montage).
+func (p Plan) checkExtended() error {
+	if p.Logo != nil {
+		if err := checkPath(p.Logo.Path); err != nil {
+			return invalid("logo: %v", err)
+		}
+	}
+	if c := p.EndCard; c != nil {
+		if c.Image != "" {
+			if err := checkPath(c.Image); err != nil {
+				return invalid("cartello finale: immagine: %v", err)
+			}
+		}
+		if c.Logo != nil {
+			if err := checkPath(c.Logo.Path); err != nil {
+				return invalid("cartello finale: logo: %v", err)
+			}
+		}
+		if !finite(c.Duration) || c.Duration <= 0 || c.Duration > maxCardSeconds {
+			return invalid("cartello finale: durata %v s: da 0 (escluso) a %d s", c.Duration, maxCardSeconds)
+		}
+	}
+	for i, t := range p.Titles {
+		if t.Clip < 0 || t.Clip > len(p.Clips) {
+			return invalid("titolo %d: clip %d inesistente", i+1, t.Clip)
+		}
+		if !finite(t.Start) || !finite(t.End) || t.Start < 0 || t.End <= t.Start {
+			return invalid("titolo %d: tempi da %v a %v s non validi", i+1, t.Start, t.End)
+		}
+		if err := checkText(fmt.Sprintf("titolo %d", i+1), t.Text.Text); err != nil {
+			return err
+		}
+	}
+	for _, f := range p.Fonts {
+		if err := checkPath(f); err != nil {
+			return invalid("font: %v", err)
+		}
+	}
+	if p.Margins != nil {
+		if err := p.Margins.Check(); err != nil {
+			return invalid("margini: %v", err)
+		}
+	}
+	if p.Duck && p.Music == nil {
+		return invalid("musica sotto la voce senza musica")
+	}
+	if !finite(p.MusicFade) || p.MusicFade < 0 || (p.MusicFade > 0 && p.Music == nil) {
+		return invalid("dissolvenza della musica %v s: da 0 in su, e solo con la musica", p.MusicFade)
+	}
+	if p.Loudness != 0 {
+		if err := CheckLoudness(p.Loudness); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Clip è una scena del montato.
@@ -247,6 +336,11 @@ func (p Plan) checkStatic(durations bool) error {
 			return invalid("sottotitoli %s: estensioni ammesse .ass, .ssa, .srt", p.Subtitles)
 		}
 	}
+	if p.extended() {
+		if err := p.checkExtended(); err != nil {
+			return err
+		}
+	}
 	if err := checkPath(p.Output); err != nil {
 		return invalid("uscita: %v", err)
 	}
@@ -288,7 +382,18 @@ func (p Plan) inputs() []string {
 	if p.Subtitles != "" {
 		in = append(in, p.Subtitles)
 	}
-	return in
+	if p.Logo != nil {
+		in = append(in, p.Logo.Path)
+	}
+	if c := p.EndCard; c != nil {
+		if c.Image != "" {
+			in = append(in, c.Image)
+		}
+		if c.Logo != nil {
+			in = append(in, c.Logo.Path)
+		}
+	}
+	return append(in, p.Fonts...)
 }
 
 // checkPath rifiuta percorsi vuoti e con caratteri di controllo (a capo, NUL…).
@@ -405,8 +510,23 @@ const audioFmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stere
 // Args costruisce gli argomenti di ffmpeg (senza il nome del programma) per il
 // piano, senza eseguire nulla: tutte le clip con la durata, sottotitoli solo
 // .ass o .ssa. Con Overwrite false passa -n, così ffmpeg stesso non scrive su
-// un file esistente.
+// un file esistente. Con titoli, cartello o volume finale servono i file e
+// la misura che prepara Montage (texts, fontsDir, measured).
 func Args(p Plan) ([]string, error) {
+	return buildArgs(p, false)
+}
+
+// loudnessArgs sono gli argomenti della passata di misura del volume finale:
+// solo l'audio del piano, misurato da loudnorm, senza scrivere file.
+func loudnessArgs(p Plan) ([]string, error) {
+	if p.Loudness == 0 {
+		return nil, invalid("misura del volume senza volume finale")
+	}
+	return buildArgs(p, true)
+}
+
+// buildArgs è Args; con analyze solo l'audio, verso loudnorm e nessun file.
+func buildArgs(p Plan, analyze bool) ([]string, error) {
 	starts, total, err := Timeline(p)
 	if err != nil {
 		return nil, err
@@ -416,8 +536,22 @@ func Args(p Plan) ([]string, error) {
 			return nil, invalid("sottotitoli %s: Args vuole un .ass o .ssa (un .srt lo converte Montage)", p.Subtitles)
 		}
 	}
+	scenesEnd := total // fine delle scene; il cartello viene dopo
+	if p.EndCard != nil {
+		total += p.EndCard.Duration
+	}
+	if len(p.Titles) > 0 || (p.EndCard != nil && (p.EndCard.Text != "" || p.EndCard.Subtext != "")) {
+		if p.texts == "" {
+			return nil, invalid("titoli e testi del cartello senza il file .ass (li prepara Montage)")
+		}
+	}
+	if p.Loudness != 0 && !analyze && p.measured == nil {
+		return nil, invalid("volume finale senza la misura (la prepara Montage)")
+	}
 	args := []string{"-hide_banner", "-nostdin", "-nostats", "-loglevel", "error"}
-	if p.Overwrite {
+	if analyze {
+		args = analysisArgs()
+	} else if p.Overwrite {
 		args = append(args, "-y")
 	} else {
 		args = append(args, "-n")
@@ -469,6 +603,33 @@ func Args(p Plan) ([]string, error) {
 			return nil, fmt.Errorf("musica: %w", err)
 		}
 		musicIn = next
+		next++
+	}
+	// immagini delle sovrimpressioni: logo, sfondo e logo del cartello
+	image := func(path string) (string, error) {
+		if err := addInput(path, inputOpts(imageFormats)...); err != nil {
+			return "", err
+		}
+		next++
+		return strconv.Itoa(next-1) + ":v", nil
+	}
+	var logoIn, cardImg, cardLogo string
+	if p.Logo != nil {
+		if logoIn, err = image(p.Logo.Path); err != nil {
+			return nil, fmt.Errorf("logo: %w", err)
+		}
+	}
+	if c := p.EndCard; c != nil {
+		if c.Image != "" {
+			if cardImg, err = image(c.Image); err != nil {
+				return nil, fmt.Errorf("cartello finale: %w", err)
+			}
+		}
+		if c.Logo != nil {
+			if cardLogo, err = image(c.Logo.Path); err != nil {
+				return nil, fmt.Errorf("cartello finale: logo: %w", err)
+			}
+		}
 	}
 
 	w, h, fps := p.Width, p.Height, p.FPS
@@ -478,7 +639,14 @@ func Args(p Plan) ([]string, error) {
 	} else {
 		fit = fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2:out_color_matrix=bt709:out_range=tv,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black", w, h, w, h)
 	}
+	// catene del grafo, nell'ordine; con analyze restano solo quelle audio
 	var g []string
+	vid := func(s ...string) {
+		if !analyze {
+			g = append(g, s...)
+		}
+	}
+	aud := func(s ...string) { g = append(g, s...) }
 	for i, c := range p.Clips {
 		d := num(c.Duration)
 		// velocità prima del formato: tempi del video divisi per Speed
@@ -495,27 +663,27 @@ func Args(p Plan) ([]string, error) {
 			// due rami (Reframe.Graph): fondo sfocato e video intero
 			in := fmt.Sprintf("%d:v:0", i)
 			if pre != "" {
-				g = append(g, fmt.Sprintf("[%d:v:0]%s[s%d]", i, strings.TrimSuffix(pre, ","), i))
+				vid(fmt.Sprintf("[%d:v:0]%s[s%d]", i, strings.TrimSuffix(pre, ","), i))
 				in = fmt.Sprintf("s%d", i)
 			}
 			rg, err := Reframe{Width: w, Height: h, Fit: FitBlur}.Graph(in, fmt.Sprintf("r%d", i))
 			if err != nil {
 				return nil, fmt.Errorf("clip %d: %w", i+1, err)
 			}
-			g = append(g, rg, fmt.Sprintf("[r%d]%s", i, tail))
+			vid(rg, fmt.Sprintf("[r%d]%s", i, tail))
 		case p.Fit == FitCrop && c.Focus != nil && *c.Focus != FocusCenter:
-			g = append(g, fmt.Sprintf("[%d:v:0]%s%s,setsar=1,%s", i, pre, cropChain(w, h, *c.Focus), tail))
+			vid(fmt.Sprintf("[%d:v:0]%s%s,setsar=1,%s", i, pre, cropChain(w, h, *c.Focus), tail))
 		default:
-			g = append(g, fmt.Sprintf("[%d:v:0]%s%s,setsar=1,%s", i, pre, fit, tail))
+			vid(fmt.Sprintf("[%d:v:0]%s%s,setsar=1,%s", i, pre, fit, tail))
 		}
 		if c.KeepAudio {
 			var tempo string
 			if sp := c.speed(); sp != 1 {
 				tempo = "asetpts=PTS-STARTPTS," + atempo(sp) + ","
 			}
-			g = append(g, fmt.Sprintf("[%d:a:0]%s,%sapad,atrim=duration=%s,asetpts=PTS-STARTPTS[a%d]", i, audioFmt, tempo, d, i))
+			aud(fmt.Sprintf("[%d:a:0]%s,%sapad,atrim=duration=%s,asetpts=PTS-STARTPTS[a%d]", i, audioFmt, tempo, d, i))
 		} else {
-			g = append(g, fmt.Sprintf("anullsrc=r=%d:cl=stereo,atrim=duration=%s[a%d]", sampleRate, d, i))
+			aud(fmt.Sprintf("anullsrc=r=%d:cl=stereo,atrim=duration=%s[a%d]", sampleRate, d, i))
 		}
 	}
 	vcur, acur := "v0", "a0"
@@ -523,42 +691,104 @@ func Args(p Plan) ([]string, error) {
 		t := p.Clips[i].Transition
 		vj, aj := fmt.Sprintf("vj%d", i), fmt.Sprintf("aj%d", i)
 		if t.IsFade() {
-			g = append(g, fmt.Sprintf("[%s][v%d]xfade=transition=%s:duration=%s:offset=%s[%s]", vcur, i, t.Kind, num(t.Duration), num(starts[i]), vj))
-			g = append(g, fmt.Sprintf("[%s][a%d]acrossfade=d=%s[%s]", acur, i, num(t.Duration), aj))
+			vid(fmt.Sprintf("[%s][v%d]xfade=transition=%s:duration=%s:offset=%s[%s]", vcur, i, t.Kind, num(t.Duration), num(starts[i]), vj))
+			aud(fmt.Sprintf("[%s][a%d]acrossfade=d=%s[%s]", acur, i, num(t.Duration), aj))
 		} else {
-			g = append(g, fmt.Sprintf("[%s][v%d]concat=n=2:v=1:a=0,fps=%d[%s]", vcur, i, fps, vj))
-			g = append(g, fmt.Sprintf("[%s][a%d]concat=n=2:v=0:a=1[%s]", acur, i, aj))
+			vid(fmt.Sprintf("[%s][v%d]concat=n=2:v=1:a=0,fps=%d[%s]", vcur, i, fps, vj))
+			aud(fmt.Sprintf("[%s][a%d]concat=n=2:v=0:a=1[%s]", acur, i, aj))
 		}
 		vcur, acur = vj, aj
 	}
-	mix := []string{"[" + acur + "]"}
-	for i := range p.Clips {
-		if voiceIn[i] < 0 {
-			continue
-		}
-		at := int64(math.Round((starts[i] + p.Clips[i].VoiceAt) * sampleRate))
-		g = append(g, fmt.Sprintf("[%d:a:0]%s,adelay=delays=%dS:all=1[voce%d]", voiceIn[i], audioFmt, at, i))
-		mix = append(mix, fmt.Sprintf("[voce%d]", i))
+	margins := SafeMargins(w, h)
+	if p.Margins != nil {
+		margins = *p.Margins
 	}
-	if musicIn >= 0 {
-		vol := p.Music.Volume
-		if vol == 0 {
-			vol = 1
+	if c := p.EndCard; c != nil {
+		// il cartello dopo l'ultima scena, a taglio netto, muto sotto la musica
+		f, err := EndCardFilter(*c, cardImg, cardLogo, "vcard", w, h, float64(fps), margins)
+		if err != nil {
+			return nil, err
 		}
-		g = append(g, fmt.Sprintf("[%d:a:0]%s,volume=%s,atrim=duration=%s[musica]", musicIn, audioFmt, num(vol), num(total)))
-		mix = append(mix, "[musica]")
+		vid(f, fmt.Sprintf("[%s][vcard]concat=n=2:v=1:a=0,fps=%d[vjcard]", vcur, fps))
+		aud(fmt.Sprintf("anullsrc=r=%d:cl=stereo,atrim=duration=%s[acard]", sampleRate, num(c.Duration)),
+			fmt.Sprintf("[%s][acard]concat=n=2:v=0:a=1[ajcard]", acur))
+		vcur, acur = "vjcard", "ajcard"
 	}
-	if len(mix) > 1 {
-		g = append(g, fmt.Sprintf("%samix=inputs=%d:duration=first:dropout_transition=0:normalize=0[aout]", strings.Join(mix, ""), len(mix)))
+	if p.Duck || p.MusicFade > 0 {
+		// missaggio di giv post mix: voci, musica abbassata sotto le voci,
+		// dissolvenza finale della musica
+		m := Mix{Music: p.Music, Duck: p.Duck, MusicFade: p.MusicFade}
+		var vin []int
+		for i, c := range p.Clips {
+			if voiceIn[i] >= 0 {
+				m.Voices = append(m.Voices, Voice{Path: c.Voice, At: starts[i] + c.VoiceAt})
+				vin = append(vin, voiceIn[i])
+			}
+		}
+		mg, err := m.Filters("["+acur+"]", total, vin, musicIn, "aout")
+		if err != nil {
+			return nil, invalid("%v", err)
+		}
+		aud(mg...)
 		acur = "aout"
+	} else {
+		mix := []string{"[" + acur + "]"}
+		for i := range p.Clips {
+			if voiceIn[i] < 0 {
+				continue
+			}
+			at := int64(math.Round((starts[i] + p.Clips[i].VoiceAt) * sampleRate))
+			aud(fmt.Sprintf("[%d:a:0]%s,adelay=delays=%dS:all=1[voce%d]", voiceIn[i], audioFmt, at, i))
+			mix = append(mix, fmt.Sprintf("[voce%d]", i))
+		}
+		if musicIn >= 0 {
+			vol := p.Music.Volume
+			if vol == 0 {
+				vol = 1
+			}
+			aud(fmt.Sprintf("[%d:a:0]%s,volume=%s,atrim=duration=%s[musica]", musicIn, audioFmt, num(vol), num(total)))
+			mix = append(mix, "[musica]")
+		}
+		if len(mix) > 1 {
+			aud(fmt.Sprintf("%samix=inputs=%d:duration=first:dropout_transition=0:normalize=0[aout]", strings.Join(mix, ""), len(mix)))
+			acur = "aout"
+		}
+	}
+	if p.Loudness != 0 {
+		aud(fmt.Sprintf("[%s]%s[anorm]", acur, LoudnormFilter(p.Loudness, p.measured)))
+		acur = "anorm"
+	}
+	if analyze {
+		args = append(args, "-filter_complex", strings.Join(g, ";"), "-map", "["+acur+"]")
+		return append(args, nullOut()...), nil
+	}
+	if p.Logo != nil {
+		l := *p.Logo
+		if l.To == 0 && p.EndCard != nil {
+			l.To = scenesEnd // il cartello ha il suo logo
+		}
+		f, err := LogoFilter(vcur, logoIn, "vlogo", l, w, h, margins)
+		if err != nil {
+			return nil, err
+		}
+		vid(f)
+		vcur = "vlogo"
 	}
 	if p.Subtitles != "" {
 		abs, err := filepath.Abs(p.Subtitles)
 		if err != nil {
 			return nil, invalid("sottotitoli: %v", err)
 		}
-		g = append(g, fmt.Sprintf("[%s]ass=filename=%s[vout]", vcur, filterValue(abs)))
+		vid(fmt.Sprintf("[%s]ass=filename=%s[vout]", vcur, filterValue(abs)))
 		vcur = "vout"
+	}
+	if p.texts != "" {
+		f, err := ASSFilter(p.texts, p.fontsDir)
+		if err != nil {
+			return nil, err
+		}
+		vid(fmt.Sprintf("[%s]%s[vtesti]", vcur, f))
+		vcur = "vtesti"
 	}
 	out, err := fileArg(p.Output)
 	if err != nil {

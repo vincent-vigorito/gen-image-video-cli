@@ -101,7 +101,7 @@ Flag (anche dopo il file):
                      con la stessa riserva e lo stesso tetto delle altre
   -h, --help         questo aiuto
 `,
-	"cut": `uso: giv story cut [--formato <r>] <storyboard.json>
+	"cut": `uso: giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
 
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
 clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce,
@@ -114,9 +114,13 @@ Riscrive anche foglio-contatto.jpg accanto allo storyboard (foglio_contatto: fal
 non farlo).
 
 Flag (anche dopo il file):
-  --formato <r>   monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra montaggio.formati,
-                  se ci sono): file <nome>-<WxH>.mp4
-  -h, --help      questo aiuto
+  --formato <r>       monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra
+                      montaggio.formati, se ci sono): file <nome>-<WxH>.mp4
+  --export <canali>   dopo il montaggio, un file per canale come giv export
+                      (instagram, tiktok, youtube, linkedin, anche <canale>:<formato>)
+                      dal file montato nel suo formato: <nome>-<canale>-<WxH>.mp4,
+                      volume montaggio.volume o -14 LUFS
+  -h, --help          questo aiuto
 `,
 }
 
@@ -270,6 +274,7 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 	}
 	chk.voiceOverlaps(out)
 	titleWarnings(s, out)
+	focusWarnings(s, out)
 	out.RemovedScenes, out.removedExact = removedSpend(s, st)
 	out.RemovedSpentUSD = round4(out.removedExact)
 	if len(out.RemovedScenes) > 0 {
