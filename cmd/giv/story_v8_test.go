@@ -320,3 +320,122 @@ func TestV8GeminiSenzaTettoParteConAvviso(t *testing.T) {
 		t.Errorf("stato: %v", ss)
 	}
 }
+
+func v8VoceBoard(strict bool, controllo string) string {
+	st := ""
+	if strict {
+		st = `"strict":true,`
+	}
+	return `{` + st + `"default":{"provider":"openrouter","modello":"alibaba/wan-3.0","audio":"off","risoluzione":"720p","aspect":"16:9"}` + v7Parlato + `,"controllo":` + controllo + `,
+"formato":{"aspect":"16:9","risoluzione":"144p","fps":25},
+"scene":[{"id":"s1","tipo":"immagine","file":"a.png","durata":3,"testo":"` + v7Text + `"}]}`
+}
+
+// controllo.voce: la voce generata e' trascritta una volta (riserva e stato
+// "incerto" scritti prima della richiesta), il confronto e' nel controllo; un
+// secondo giro e cut non rifanno la richiesta; controllo.voce senza tecnico
+// da' solo le righe delle voci.
+func TestV8ControlloVoce(t *testing.T) {
+	e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+	out, se, code := e.story(t, "run")
+	if code != 0 {
+		t.Fatalf("run code=%d\n%s", code, se)
+	}
+	if e.tts != 1 || e.stt != 1 || e.videos != 0 {
+		t.Fatalf("richieste: tts=%d stt=%d video=%d", e.tts, e.stt, e.videos)
+	}
+	if !strings.Contains(e.stateAtSTT[0], `"incerto"`) || !strings.Contains(e.stateAtSTT[0], "trascrizione") {
+		t.Errorf("riserva non scritta prima della trascrizione: %s", e.stateAtSTT[0])
+	}
+	var r struct {
+		Controllo *struct {
+			Scenes []any
+			Voices []struct {
+				ID, Result string
+				Comparison any
+				Transcript any
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &r); err != nil || r.Controllo == nil || len(r.Controllo.Voices) != 1 {
+		t.Fatalf("controllo nell'uscita: %v\n%s", err, out)
+	}
+	if v := r.Controllo.Voices[0]; v.ID != "s1" || v.Comparison == nil || v.Transcript == nil || v.Result == "defect" {
+		t.Errorf("riga voce: %+v", v)
+	}
+	if len(r.Controllo.Scenes) != 0 {
+		t.Errorf("senza tecnico non ci sono righe di scena: %d", len(r.Controllo.Scenes))
+	}
+	ss := e.state(t)["s1"].(map[string]any)
+	vc, _ := ss["voice_check"].(map[string]any)
+	if vc["status"] != "fatto" {
+		t.Errorf("voice_check: %v", ss["voice_check"])
+	}
+	if ch, _ := ss["charges"].([]any); len(ch) != 2 {
+		t.Errorf("addebiti (voce + trascrizione): %v", ss["charges"])
+	}
+	// secondo giro e cut: nessuna richiesta in piu'
+	if _, se, code := e.story(t, "run"); code != 0 || e.stt != 1 || e.tts != 1 {
+		t.Errorf("secondo giro code=%d tts=%d stt=%d\n%s", code, e.tts, e.stt, se)
+	}
+}
+
+// esito incerto della trascrizione: resta contata e non si rilancia mai da sola.
+func TestV8TrascrizioneIncertaNonRilanciata(t *testing.T) {
+	e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+	e.sttMode = "drop"
+	e.story(t, "run")
+	if e.stt != 1 {
+		t.Fatalf("stt=%d", e.stt)
+	}
+	ss := e.state(t)["s1"].(map[string]any)
+	vc, _ := ss["voice_check"].(map[string]any)
+	if vc["status"] != "incerto" {
+		t.Fatalf("voice_check: %v", ss["voice_check"])
+	}
+	if ch, _ := ss["charges"].([]any); len(ch) != 2 {
+		t.Errorf("la riserva della trascrizione deve restare contata: %v", ss["charges"])
+	}
+	e.sttMode = ""
+	for i := 0; i < 2; i++ {
+		e.story(t, "run")
+	}
+	if e.stt != 1 || e.tts != 1 {
+		t.Errorf("rilancio da solo: tts=%d stt=%d", e.tts, e.stt)
+	}
+}
+
+// una voce con parole diverse e' un difetto che si avvisa: non si rigenera,
+// il run finisce; con strict esce 1 dopo aver finito.
+func TestV8VoceDiversaAvvisaNonRigenera(t *testing.T) {
+	e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+	e.sttMode = "altro"
+	_, se, code := e.story(t, "run")
+	if code != 0 || e.tts != 1 {
+		t.Fatalf("code=%d tts=%d\n%s", code, e.tts, se)
+	}
+	if !strings.Contains(se, "controllo: s1") {
+		t.Errorf("nessun avviso sulla voce:\n%s", se)
+	}
+	if _, se, code := e.story(t, "run"); code != 0 || e.tts != 1 || e.stt != 1 {
+		t.Errorf("secondo giro: code=%d tts=%d stt=%d\n%s", code, e.tts, e.stt, se)
+	}
+
+	e2 := newV7Env(t, v8VoceBoard(true, `{"voce":true}`))
+	e2.sttMode = "altro"
+	if _, se, code := e2.story(t, "run"); code != 1 || e2.tts != 1 {
+		t.Errorf("strict: code=%d tts=%d\n%s", code, e2.tts, se)
+	}
+}
+
+// story check mostra il costo della trascrizione senza fare richieste.
+func TestV8CheckCostoTrascrizione(t *testing.T) {
+	e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+	out, se, code := e.story(t, "check")
+	if code != 0 {
+		t.Fatalf("code=%d\n%s", code, se)
+	}
+	if !strings.Contains(out, "voice_check_cost_est_usd") || e.stt != 0 || e.tts != 0 {
+		t.Errorf("stt=%d tts=%d\n%s", e.stt, e.tts, out)
+	}
+}

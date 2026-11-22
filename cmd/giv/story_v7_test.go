@@ -29,6 +29,9 @@ type v7Env struct {
 	dir, board, kitDir string
 	srv                *httptest.Server
 	tts, videos, gem   int32
+	stt                int32
+	sttMode            string // "", "drop", "altro" (testo diverso)
+	stateAtSTT         []string
 	mode               string // "", "drop" (connessione chiusa), "400"
 	mu                 sync.Mutex
 	ttsBodies          []string
@@ -98,6 +101,24 @@ func newV7Env(t *testing.T, board string) *v7Env {
 			default:
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"audio":%q,"duration":1}`, base64.StdEncoding.EncodeToString(v7WAV(1)))
+			}
+		case r.Method == http.MethodPost && r.URL.Path == "/stt":
+			io.Copy(io.Discard, r.Body)
+			atomic.AddInt32(&e.stt, 1)
+			st, _ := os.ReadFile(filepath.Join(e.dir, "spot.stato.json"))
+			e.mu.Lock()
+			e.stateAtSTT = append(e.stateAtSTT, string(st))
+			e.mu.Unlock()
+			switch e.sttMode {
+			case "drop":
+				conn, _, _ := w.(http.Hijacker).Hijack()
+				conn.Close()
+			case "altro":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"text":"tutt altro che il testo scritto, parole completamente diverse e inventate","language":"it","duration":1}`)
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"text":%q,"language":"it","duration":1}`, v7Text)
 			}
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/interactions"):
 			io.Copy(io.Discard, r.Body)
