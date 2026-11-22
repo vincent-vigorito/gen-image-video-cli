@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai e OpenRouter (inclusi ByteDance Seedream/Seedance). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma e immagini di riferimento), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -12,9 +12,10 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
 - Chiavi e `GIV_PROVIDER` si risolvono in ordine: env di processo → `./credentials.env` →
   `./.env` → `~/.config/giv/credentials.env` (vince il primo che le definisce). L'ultimo
   file rende `giv` usabile da qualsiasi directory, senza spostarsi nel repo.
-- Chiavi: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`
-  (bastano quelle dei provider che si usano). `GIV_PROVIDER` cambia il provider usato
-  senza `--provider` (default `gemini`).
+- Chiavi: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
+  `FAL_KEY` (bastano quelle dei provider che si usano). `GIV_PROVIDER` cambia il provider usato
+  senza `--provider` (default `gemini`, solo per le immagini: `giv video` e `giv story` senza
+  `--provider`, provider nello storyboard o `GIV_PROVIDER` escono con codice 2).
 - Multi-progetto: `projects/<nome>/` con un proprio `credentials.env`, poi
   `cd projects/<nome> && ../../bin/giv …` (la cartella è gitignorata: può tenere
   anche reference e output del cliente).
@@ -27,10 +28,11 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
   quando non servono: `command`, `prompt_final` (inviato coi preset), `presets[]`,
   `inputs` (`image`/`last_frame`/`refs[]` con `sha256` breve), `params`, `job_id`,
   `duration_s`, `cost_est_usd` + `cost_source` (stima da listino dove il costo non è
-  riportato, es. xai), `warnings[]` (controlli ignorati).
+  riportato, es. xai; nei comandi sulle clip resta accanto a `cost_usd`), `cost_usage_usd` + `cost_usage_source` (gemini: costo dai token
+  riportati, accanto alla stima), `warnings[]` (controlli ignorati).
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
-  openai e video gemini, anche con `--model`) · 3 modello non trovato (404: `giv models --provider P`) ·
+  openai, anche con `--model`, e video senza un provider scelto) · 3 modello non trovato (404: `giv models --provider P`) ·
   4 chiave rifiutata o credito esaurito (401/402/403: cambiare provider o ricaricare) ·
   5 errore dell'API o di rete · 7 troppe richieste (429: aspettare) · 10 chiave API mancante.
   Decidere dal codice: 3 → altro modello, 4 → altro provider, 7 → attendere e riprovare,
@@ -50,11 +52,20 @@ giv models  [--provider P] [--all] [--kind image|video|other] [--caps] [--json]
                                                 # elenca modelli (verifica anche l'auth); --caps con --kind video
 giv image   [flag] "<prompt>"                   # genera immagini
 giv video   [flag] "<prompt>"                   # genera video (job asincrono, 1-5 min)
+giv extend  --video <mp4|url> [--duration 2-10] "<come continua>"   # allunga una clip (xai, a pagamento)
+giv extend  --provider gemini --from <job_id> [--duration 3-10] "<come continua>"
+                                                # allunga un video fatto con gemini (a pagamento)
+giv edit    --video <mp4|url> "<cosa cambiare>"                      # modifica una clip (xai, a pagamento)
+giv edit    --provider gemini --from <job_id> "<cosa cambiare>"     # modifica un video gemini (a pagamento)
+giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]
+                                                # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https)
+giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
+                                                # personaggio che parla (fal, a pagamento)
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
-giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
-                                                # genera le scene video, a pagamento; riprende da dove si era fermato
+giv story run [--scene <id> [--new-keyframe | --new-job]] <storyboard.json>
+                                                # genera le scene video e avatar, a pagamento; riprende da dove si era fermato
 giv story cut <storyboard.json>                 # monta con ffmpeg le scene pronte in un solo video, gratis
 giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
@@ -64,13 +75,15 @@ giv presets show <nome> [<nome>] [--model M] [--prompt "<t>"] [--negative "<t>"]
 giv version
 ```
 
-`--input`, `--image`, `--last-frame` e `--ref` accettano **anche URL http(s)**: vengono
+`--input`, `--image`, `--last-frame`, `--ref` e `--keyframe` accettano **anche URL http(s)**: vengono
 scaricati da soli (niente curl preventivo). `giv log --sum-cost` dà il totale speso registrato nella directory —
 usalo per riferire i costi a fine lavoro. Su openrouter `models --json` include il
 `pricing` per modello: consultalo per scegliere il motore economico.
 
-Flag comuni: `--provider` (gemini|openai|xai|openrouter, default `GIV_PROVIDER` se
-impostato, altrimenti gemini), `--model` (default per provider: tabella sotto, anche in
+Flag comuni: `--provider` (gemini|openai|xai|openrouter|fal, default `GIV_PROVIDER` se
+impostato, altrimenti gemini, ma per `giv video` serve un provider scelto; extend, edit,
+upscale e avatar hanno il loro: xai, openrouter, fal; con `--provider` anche gemini per
+extend ed edit e fal per upscale), `--model` (default per provider: tabella sotto, anche in
 `giv --help`), `--out`, `--name`. Il prompt va passato come **singolo argomento
 quotato**; i flag possono stare prima o dopo.
 
@@ -81,17 +94,25 @@ gemini e openrouter, altrove ignorato con avviso), `--input <file>` ripetibile
 `video`: `--aspect <16:9|9:16>`, `--resolution <720p|1080p>`, `--duration <s>`,
 `--negative`, `--image <file|url>` (primo fotogramma), `--last-frame <file|url>` (ultimo
 fotogramma), `--ref <file|url>` ripetibile (riferimenti di personaggio o prodotto),
-`--audio on|off`, `--seed <n>`, `--param k=v` ripetibile (parametro passante, solo se il
+`--keyframe <file|url>` ripetibile (fotogrammi intermedi in ordine, fal `kling-4.0`, max 8),
+`--shot "<s>:<testo>"` ripetibile (inquadrature, fal `kling-4.0` e `kling-v3-pro`: niente
+prompt né `--preset`, la durata è la somma), `--audio on|off`, `--seed <n>`, `--param k=v` ripetibile (parametro passante, solo se il
 modello lo elenca), `--timeout <durata>` (default `15m`), `--preset <nome>` ripetibile (uno
 di camera + uno di effetto), `--tutela prodotto|illustrazione|no`, `--dry-run`,
 `--max-cost <usd>`, `--strict`.
+`extend`/`edit`/`upscale`/`avatar`: `--video` (o `--from <job_id>` per extend ed edit
+gemini, `--image` e `--audio` per avatar), `--duration` (extend), `--factor` e `--mode`
+(upscale; `--mode` e prompt solo openrouter), `--model` (avatar `standard|pro`),
+`--dry-run`, `--max-cost`, `--strict`, `--timeout`, `--out`, `--name`; ogni altro flag di
+`giv video` è rifiutato con codice 2.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
 errori di rete (fino a 5 volte, rispettando `Retry-After`). La richiesta che **avvia** il
 video invece non viene mai ripetuta dopo un 5xx o un timeout: il job potrebbe essere già
-partito e un secondo invio costerebbe due video. Se esce con codice 5, **non rilanciare
-`giv video`**:
+partito e un secondo invio costerebbe due video. Lo stesso vale per extend, edit,
+upscale, avatar e per `giv image` su openrouter (non ripetuta dopo un 5xx: l'immagine può
+essere stata pagata). Se esce con codice 5, **non rilanciare `giv video`**:
 
 - con l'id del job nel messaggio (il job è partito): `giv job fetch --provider P <id>`
   dalla **stessa directory** (lo stato del job è in `giv-jobs.jsonl` lì). Riprende
@@ -100,23 +121,33 @@ partito e un secondo invio costerebbe due video. Se esce con codice 5, **non ril
 - senza id (il messaggio dice che il job potrebbe essere partito): controllare sul
   provider prima di rilanciare.
 
-`job fetch` rifiuta con codice 2, senza richieste: gemini e openai (nessun job video), un
+I job di `giv extend`/`edit` (xai o gemini), `upscale` (openrouter o fal) e `avatar` (fal)
+si recuperano allo stesso modo. `job fetch` rifiuta con codice 2, senza richieste: openai
+(nessun job video), un
 id che non è in `giv-jobs.jsonl`, un file di stato che non è un file regolare, un
 indirizzo di attesa fuori dall'API del provider. `--timeout` copre anche lo scaricamento.
 
 ## Prima di spendere (video)
 
 - `giv video` controlla la richiesta sul modello **prima** di download e generazione:
-  openrouter legge `/videos/models` (gratuito), xai usa una tabella interna (20/11/2026).
+  openrouter legge `/videos/models` (gratuito), xai e gemini usano una tabella interna
+  (20/11 e 22/11/2026), fal le schede di giv (22/11/2026).
 - **Strutturale** non supportato (`--image`, `--last-frame`, `--ref` o troppi riferimenti,
+  `--keyframe` o `--shot` fuori da fal `kling-4.0`/`kling-v3-pro`,
   `--duration`/`--resolution`/`--aspect` fuori dai valori ammessi, `--audio on` su un
   modello muto, `--param` fuori lista) → **codice 2**, nessuna chiamata; il messaggio
   elenca i modelli dello stesso provider che lo supportano: sceglierne uno di quelli.
+- Via openrouter i modelli `x-ai/…` non accettano `--image` e `--ref` insieme → codice 2
+  prima della chiamata: usarne uno solo, oppure `--provider xai` (li accetta).
 - **Rifinitura** non supportata (`--seed`, `--negative`, modello fuori catalogo) →
   avviso su stderr, la generazione parte senza quel controllo. Con `--strict` → codice 2.
 - Prima di una clip costosa: `--dry-run` (stima, prompt finale, avvisi; serve la chiave),
   poi la stessa riga senza `--dry-run` e con `--max-cost <usd>` come tetto (oltre, o
-  stima impossibile → codice 2).
+  stima impossibile → codice 2). Con `--max-cost` indicare `--audio` e `--resolution`: se
+  il listino non copre una configurazione possibile la stima non basta e il codice 2 dice
+  quale flag manca (es. `google/gemini-omni-1.2-flash` vuole `--audio on`). Nei comandi
+  sulle clip senza misura del sorgente (URL, ffprobe assente; per gemini un `--from` che
+  non è in `giv-log.jsonl` della directory) la stima non c'è: con `--max-cost` codice 2.
 - `giv models --provider openrouter --kind video --caps` (o `--json`): fotogrammi,
   durate, risoluzioni, audio, parametri passanti e $/s di ogni modello video.
 
@@ -124,17 +155,22 @@ indirizzo di attesa fuori dall'API del provider. `--timeout` copre anche lo scar
 
 | provider | immagini | video | `--input` | `--aspect` | modelli chiave |
 |---|---|---|---|---|---|
-| `gemini` | ✅ | ❌ | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; nessuna API video (Veo spento), usare openrouter |
+| `gemini` | ✅ | ✅ | ✅ | ✅ | immagini `gemini-3.1-flash-image` (default, Nano Banana 2), `gemini-3-pro-image` (top), `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; video `gemini-omni-1.2-flash` diretto (solo con provider scelto, 3-15 s default 10, 360p-4k default 720p, 16:9 o 9:16, audio sempre, `--last-frame` dopo `--image` e max 10 s, fino a 6 `--ref` senza `--image`), extend ed edit dei suoi video con `--from` |
 | `openai` | ✅ | ❌ | ✅ (via edits) | ✅ (mappato su size) | `gpt-image-2.6-flare` (default), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare`/`-sunburst`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1-mini`; nessuna API video |
 | `xai` | ✅ | ✅ | ❌ img / ✅ video | ❌ img / ✅ video | `grok-imagine-image-2.0` (default), `grok-imagine-image`; video `grok-imagine-video-1.5` (default, 1-15 s, 480p default, primo e ultimo fotogramma, fino a 14 `--ref`), `grok-imagine-video-1.5-lite` (uguale, più economico), `grok-imagine-video` (solo primo fotogramma, 7 `--ref`); con `--ref` max 720p; `--seed` ignorato; con `--image` ignora `--aspect` |
 | `openrouter` | ✅ | ✅ | ✅ | ✅ | immagini `google/gemini-3.1-flash-image` (default), `google/gemini-3-pro-image`, `openai/gpt-image-2.6-flare`, `bytedance-seed/seedream-5-0-lite\|pro`, Flux 2, Recraft v4…; video `google/gemini-omni-1.2-flash` (default), `bytedance/seedance-2.0-mini`, `bytedance/seedance-2.5`, `google/veo-3.1` / `-fast` / `-lite`, `alibaba/wan-3.0` (2-30 s, primo e ultimo fotogramma), Wan 2.x…; capacità per modello con `giv models --kind video --caps` |
+| `fal` | ❌ | ✅ | ❌ | ❌ Kling / ✅ Seedance | video `kling-v3-pro` (default, Kling 3 Pro image-to-video: `--image` obbligatorio, 3-15 s, primo e ultimo fotogramma, 2-4 `--ref`, `--shot`, niente `--resolution`/`--aspect`), `kling-4.0` (`--image` obbligatorio, 3-30 s, 720p/1080p default/4k, fino a 8 `--keyframe`, `--shot`, niente `--aspect`/`--audio`/`--ref`), `seedance-2.0-ref` (1-9 `--ref` e prompt obbligatori, 4-15 s, 480p/720p/1080p); avatar `standard`/`pro` con `giv avatar`; ingrandimento `topaz-upscale` con `giv upscale --provider fal`; schede fissate in giv, non un catalogo |
 
-- **Video gemini**: non supportato (Veo 3.1 spento sulla Gemini API dal 22/10/2026, percorso
-  rimosso): `giv video --provider gemini` esce subito con codice 2, anche con `--model`,
-  senza chiamate di rete, e indica `--provider openrouter --model google/gemini-omni-1.2-flash`.
-  Veo resta su openrouter: `google/veo-3.1`, `-fast`, `-lite` (durate 4|6|8).
+- **Video gemini**: `gemini-omni-1.2-flash` diretto, a pagamento, parte solo con una scelta
+  esplicita (`--provider gemini`, provider dello storyboard o `GIV_PROVIDER`); senza, codice
+  2 come prima, così un comando vecchio non comincia a spendere. `--audio off` è rifiutato
+  (l'audio c'è sempre: guidarlo nel prompt, es. "No dialogue"). Job recuperabile con
+  `giv job fetch --provider gemini <id>`. Veo resta su openrouter: `google/veo-3.1`,
+  `-fast`, `-lite` (durate 4|6|8); sulla Gemini API è spento dal 22/10/2026.
 - **Video openai**: non supportato (Sora spento da OpenAI il 24/09/2026, rimosso nella 0.7.0): `giv video --provider openai`
   esce subito con codice 2, senza chiamate di rete. Usare `--provider openrouter` o `xai`.
+- **fal**: chiave `FAL_KEY`; `giv models --provider fal --kind video --caps` elenca le
+  schede di giv; immagini e voci locali vanno sullo storage di fal (scadenza un'ora).
 - Per confronti multi-provider: stesso prompt, `--name` diverso per provider.
 
 ## Ricette
@@ -198,6 +234,88 @@ su omni vale la frase generica (avviso). I negative dei preset wan su `alibaba/w
 accetta il negative). Preset propri in `./giv-presets.json` o `~/.config/giv/presets.json`,
 stesso formato di `internal/presets/presets.json`.
 
+**Allungare o modificare una clip** (xai, `grok-imagine-video`):
+
+```bash
+./bin/giv extend --video out/s1.mp4 --duration 6 --dry-run --max-cost 1.20 \
+  "la camera si allontana e mostra il negozio"
+./bin/giv edit --video out/s1.mp4 --max-cost 0.80 "aggiungi la pioggia, stessa inquadratura"
+```
+
+Sorgente mp4 locale (max 50 MiB, caricato su xAI) o URL `https` che finisce in `.mp4`.
+extend: sorgente 2-15 s, aggiunge 2-10 s (default 6); edit: sorgente fino a 8,7 s. Stima
+come la fatturazione vista nella prova del 22/11/2026: extend = secondi aggiunti × 0,07 +
+sorgente (secondi interi per eccesso) × 0,01 $/s (3 s su una clip di 6 s: 0,27 $), edit =
+sorgente × 0,08 $/s (0,48 $ su 6 s); il costo vero è `cost_usd` a fine job, con la stima
+accanto. Senza ffprobe la durata non si misura: niente stima, e con `--max-cost` codice 2.
+
+**Allungare o modificare un video Gemini** (`--from`, dall'UE solo video generati da Gemini):
+
+```bash
+./bin/giv video --provider gemini --duration 8 --max-cost 1.50 "un faro sulla scogliera al tramonto"
+./bin/giv extend --provider gemini --from <job_id> --duration 6 --dry-run "la camera sale sopra il faro"
+./bin/giv edit --provider gemini --from <job_id> --max-cost 2.00 "aggiungi la nebbia"
+```
+
+`--from` è il `job_id` del manifest di un video gemini (anche di un extend o edit), `--video`
+è rifiutato. extend aggiunge 3-10 s (default 10) fino a 30 s in tutto; edit fino a 15 s.
+Durata e risoluzione di partenza vengono da `giv-log.jsonl`: lanciare dalla stessa
+directory del `giv video`, altrimenti niente stima (con `--max-cost` codice 2).
+
+**Ingrandire una clip** (openrouter, `black-forest-labs/flux-video-upscale`):
+
+```bash
+./bin/giv upscale --video https://example.com/clip.mp4 --factor 2 --dry-run
+./bin/giv upscale --video https://example.com/clip.mp4 --factor 2 --mode precise
+```
+
+`--factor` 1,5-3 (default 2), `--mode precise` (default) o `creative`, prompt facoltativo.
+Solo un URL `https` pubblico: un file locale esce con codice 2 e il messaggio propone
+`--provider fal` (nella prova del 22/11/2026 OpenRouter ha rifiutato il file come data URI,
+HTTP 400, senza addebito). Da URL giv non misura il sorgente: niente stima, quindi niente
+`--max-cost` (codice 2); listino 0,035 $ (precise) o 0,05 $ (creative) al megapixel-secondo,
+il costo vero è `cost_usd` a fine job. Per un file locale usare fal (sotto).
+
+**Ingrandire un file locale** (fal, Topaz `topaz-upscale`; serve `FAL_KEY`):
+
+```bash
+./bin/giv upscale --provider fal --video out/s1.mp4 --factor 2 --dry-run
+./bin/giv upscale --provider fal --video out/s1.mp4 --factor 2 --max-cost 0.50
+```
+
+Solo `--video` (mp4 locale fino a 50 MiB, caricato sullo storage di fal, o URL `https`) e
+`--factor` 1-4 (default 2); `--mode` e prompt rifiutati. Stima per secondo del sorgente e
+fascia d'uscita (lati × fattore): 0,01 $/s fino a 720p, 0,02 fino a 1080p, 0,08 oltre, il
+doppio sopra i 30 fps; servono durata, lati e fps da ffprobe (da URL niente stima).
+
+**Kling 4.0 con fotogrammi intermedi e inquadrature** (fal; serve `FAL_KEY`):
+
+```bash
+./bin/giv video --provider fal --model kling-4.0 --image img/inizio.png \
+  --keyframe img/meta.png --last-frame img/fine.png --duration 8 --dry-run "…"
+./bin/giv video --provider fal --model kling-4.0 --image img/prodotto.png \
+  --shot "3:primo piano del flacone sul marmo" --shot "4:la camera arretra e mostra il bagno" \
+  --max-cost 2.00
+```
+
+`--image` obbligatorio; 3-30 s, 720p/1080p (default)/4k, niente `--aspect`, `--audio`,
+`--ref`. `--keyframe` fino a 8, in ordine. Con `--shot` niente prompt né `--preset`: il
+testo sta nelle inquadrature (1-30 s, fino a 512 caratteri ciascuna) e il video dura la
+somma. `--shot` vale anche con `kling-v3-pro` (1-15 s, fino a 2500 caratteri).
+
+**Personaggio che parla** (fal, Kling AI Avatar v2; serve `FAL_KEY`):
+
+```bash
+./bin/giv avatar --image anja.png --audio voce/saluto.wav --dry-run "sorride e parla in camera"
+./bin/giv avatar --image anja.png --audio voce/saluto.wav --model standard --max-cost 1.00 \
+  "sorride e parla in camera"
+```
+
+La clip dura quanto l'audio (wav o mp3 locale, max 25 MiB) e ne porta la voce: preparare
+prima la voce (vedi la voce fuori campo sotto). `standard` 0,0562 $/s, `pro` 0,115 $/s sui
+secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta stimato
+(`cost_est_usd`): fal non lo riporta.
+
 **Spot a più scene** (storyboard; esempio completo in `examples/spot/storyboard.json`):
 
 1. Una cartella per lo spot: `storyboard.json`, `img/` (foto del prodotto, logo, immagini
@@ -210,9 +328,18 @@ stesso formato di `internal/presets/presets.json`.
    - `video` con `prompt`, `durata`, un preset di camera, e un solo primo fotogramma fra
      `immagine` (la foto del prodotto), `continua_da` (l'ultimo fotogramma della scena
      prima: la continuità più forte fra due clip) e `fotogramma_chiave` (immagine
-     generata prima, coi riferimenti di `usa` come ingressi);
+     generata prima, coi riferimenti di `usa` come ingressi); con fal `kling-4.0` anche
+     `fotogrammi_intermedi` (come `--keyframe`) e con `kling-4.0` o `kling-v3-pro`
+     `inquadrature` (`[{"prompt": "…", "durata": 3}, …]`, come `--shot`: niente `prompt`
+     né `preset`, la scena dura la somma);
+   - il provider va scelto: nel blocco `default`, nella scena o con `GIV_PROVIDER`;
+     senza, codice 2;
    - `clip` per un video già pronto, `immagine` con `durata` per cartelli e chiusura;
-   - `voce` sulle scene con la voce fuori campo. Il tipo `avatar` non c'è in giv 0.9.0.
+   - `voce` sulle scene con la voce fuori campo; `ritardo_voce` (secondi) la fa partire
+     dopo l'inizio della scena;
+   - `avatar` per un personaggio che parla in scena (fal): `immagine` e `voce`
+     obbligatorie, `prompt`, `modello` `standard` o `pro` (default nel blocco
+     `"avatar": {"modello": …}`); dura quanto la voce, niente `durata` né `ritardo_voce`.
    - `tutela` nel blocco `default` o nella scena: senza indicazione, una scena con preset
      e primo fotogramma prende la clausola `prodotto` (etichetta e proporzioni del
      prodotto). Per una **mascotte** o un'illustrazione mettere `"tutela":
@@ -238,6 +365,10 @@ stesso formato di `internal/presets/presets.json`.
    riusa). Il tetto conta tutta la spesa registrata nello stato, anche quella di scene
    tolte dallo storyboard (a parte in `removed_scenes`): cancellare lo stato azzera il
    conto e fa rigenerare tutto, non farlo per «liberare» il tetto.
+   **Job partito che non si scarica più** (scaduto sul provider, risultato perso): `giv
+   story run --scene s2 --new-job storyboard.json` lo abbandona (il suo addebito resta nel
+   tetto, il job fra le riprese precedenti) e ne avvia uno nuovo. Prima provare il
+   recupero normale: rilanciare lo stesso comando senza flag.
    **Scena col fotogramma chiave sbagliato** (personaggio diverso, prodotto deformato): la
    clip nasce da lì, quindi rifare solo la clip non basta. Correggere se serve il
    `prompt` o gli ingressi (`usa`) del `fotogramma_chiave`, `giv story check`, poi
@@ -262,11 +393,16 @@ file già pronti):
    stessa voce per tutte le scene, così il timbro non cambia fra una scena e l'altra
    (circa 12 s di calcolo per secondo di audio). Un WAV per scena: `voce/s1.wav`,
    `voce/s2.wav`…
-3. Ogni file non più lungo della sua scena:
-   `ffprobe -v error -show_entries format=duration -of csv=p=0 voce/s1.wav`
-   (`giv story check` lo segnala nei `warnings` della scena).
-4. Nello storyboard `"voce": "voce/s1.wav"` sulla scena. I tempi delle frasi per i
-   sottotitoli (`montaggio.sottotitoli`) si ricavano dalla trascrizione automatica del WAV.
+3. Ogni voce deve finire prima che parta quella della scena successiva:
+   `ffprobe -v error -show_entries format=duration -of csv=p=0 voce/s1.wav`.
+   `giv story check` lo controlla sulla linea del tempo del montaggio (durate,
+   dissolvenze, `ritardo_voce`) e nei `warnings` della scena dice di quanti secondi si
+   sovrappone e a quale scena; una voce che sfora la sua scena senza toccarne un'altra va
+   bene.
+4. Nello storyboard `"voce": "voce/s1.wav"` sulla scena, e `"ritardo_voce": 1.5` per
+   farla partire dopo. I tempi delle frasi per i sottotitoli (`montaggio.sottotitoli`) si
+   ricavano dalla trascrizione automatica del WAV, a partire dall'inizio della scena:
+   `giv story cut` sposta da solo le righe del `ritardo_voce`.
 
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
 per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)
@@ -276,7 +412,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 
 - Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); dove il
   provider non lo riporta (xai) c'è la stima `cost_est_usd`. Il totale registrato è
-  `giv log --sum-cost` (`cost_usd` riportato, `cost_est_usd` stimato, `failed_jobs` e
+  `giv log --sum-cost` (`cost_usd` riportato, `cost_est_usd` stimato delle sole righe
+  senza costo riportato, `failed_jobs` e
   `failed_cost_est_usd` per i job partiti e poi falliti o scaduti, che possono essere
   stati addebitati); `--by provider|model` divide i totali. Usarli per il budget.
 - Prima della chiamata: `giv video … --dry-run` dà `cost_est_usd` (listino × durata) e
@@ -291,6 +428,21 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
   1080p 0,10), `google/veo-3.1-lite` 0,05 (0,03), `google/veo-3.1-fast` 0,10 (0,08),
   `google/veo-3.1` 0,40 (0,20), `alibaba/wan-3.0` 0,10 (480p 0,05, 1080p 0,20; stesso
   prezzo con o senza audio). Veo e Sora diretti non esistono più (Gemini e OpenAI).
+- Su fal (schede di giv al 22/11/2026, da confermare): `kling-v3-pro` 0,168 $/s con audio
+  e 0,14 senza; `seedance-2.0-ref` 0,014 $ ogni 1000 token (token = larghezza × altezza ×
+  secondi × 24 / 1024); avatar `standard` 0,0562 $/s e `pro` 0,115 $/s. Fal non riporta
+  il costo: nel manifest c'è la stima.
+- Su fal anche `kling-4.0` 0,157 $/s a 720p, 0,235 a 1080p, 0,549 in 4k (senza audio) e
+  l'upscale `topaz-upscale` a 0,01/0,02/0,08 $ al secondo per fascia d'uscita (×2 sopra
+  i 30 fps).
+- Gemini diretto (`gemini-omni-1.2-flash`) si paga a token: la stima è un massimo, coi
+  secondi d'uscita (0,0695 $/s a 720p, 0,1043 a 1080p, 0,2085 in 4k, 0,0232 a 360p) più
+  ingresso al limite con immagini e il massimo del testo di ragionamento (circa 0,59 $). A
+  fine job `cost_usage_usd` dà il costo dai token riportati.
+- Comandi sulle clip: extend xai stimato su secondi aggiunti più ingresso ed edit xai sul
+  sorgente, con il costo vero di xAI in `cost_usd` a fine job e la stima accanto; extend
+  ed edit gemini come `giv video` gemini; upscale openrouter senza stima (da URL), con
+  `cost_usd` di openrouter; upscale fal a secondi per fascia, solo stima.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 
@@ -307,5 +459,13 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
   ritirati `veo-3.0-*` e `imagen-4.0-*`; al 13/11/2026 non sono più elencati `gpt-image-1`
   su openai né modelli video su gemini): in caso di 404 sul modello (codice 3), rifare
   `giv models --provider <p>`.
+- **File di uscita mai sovrascritti**: se il nome c'è già il nuovo file prende `-2`, `-3`…
+  Leggere sempre il percorso dal manifest.
+- **Scaricamenti**: i risultati fuori dall'API del provider si scaricano solo da `https`
+  verso indirizzi pubblici, con connessione diretta (senza proxy): se fallisce, il codice
+  5 riporta l'id del job e `giv job fetch` lo riprende senza un nuovo avvio.
+- **Montaggio e scene avatar** vogliono una cartella temporanea protetta: con `TMPDIR`
+  scrivibile da altri senza sticky bit si fermano; impostare `TMPDIR` su una cartella
+  propria.
 - La clausola "NO text, NO letters" nel prompt va **sempre** tenuta per le illustrazioni:
   tutti i modelli tendono a scrivere etichette.
