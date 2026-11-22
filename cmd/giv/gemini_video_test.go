@@ -50,6 +50,12 @@ func newFakeGem(t *testing.T, mode string) *fakeGem {
 		base := "http://" + r.Host
 		usage0 := `"usage":{"total_input_tokens":100,"total_output_tokens":57920,"total_thought_tokens":0,"output_tokens_by_modality":[{"modality":"video","tokens":57920}]}`
 		usage := usage0
+		switch mode {
+		case "usagebig":
+			usage = `"usage":{"total_input_tokens":100,"total_output_tokens":200000,"total_thought_tokens":0,"output_tokens_by_modality":[{"modality":"video","tokens":200000}]}`
+		case "usagemismatch":
+			usage = `"usage":{"total_input_tokens":100,"total_output_tokens":57920,"total_thought_tokens":0,"output_tokens_by_modality":[{"modality":"video","tokens":50000}]}`
+		}
 		if mode == "usagepoor" {
 			usage = `"usage":{"total_input_tokens":100}`
 		}
@@ -64,12 +70,15 @@ func newFakeGem(t *testing.T, mode string) *fakeGem {
 					base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage)
 				return
 			}
-			if mode == "inline" || mode == "usagepoor" {
+			if strings.HasPrefix(mode, "usage") || mode == "inline" {
 				fmt.Fprintf(w, `{"id":"int-1","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","data":%q}]}],%s}`,
 					base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage)
 				return
 			}
 			fmt.Fprint(w, `{"id":"int-1","status":"in_progress"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/interactions/int-1" && mode == "getinline":
+			fmt.Fprintf(w, `{"id":"int-1","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","data":%q}]}],%s}`,
+				base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage0)
 		case r.Method == http.MethodGet && r.URL.Path == "/interactions/int-1":
 			fmt.Fprintf(w, `{"id":"int-1","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","uri":%q}]}],%s}`,
 				base+"/files/f1:download?alt=media", usage)
@@ -139,6 +148,7 @@ func TestVideoGeminiAvvioAttesaRisultato(t *testing.T) {
 	var man struct {
 		Files []struct{ Path string } `json:"files"`
 		Cost  *float64                `json:"cost_est_usd"`
+		Usage *float64                `json:"cost_usage_usd"`
 		Prov  string                  `json:"provider"`
 	}
 	if err := json.Unmarshal([]byte(out), &man); err != nil || len(man.Files) != 1 || man.Cost == nil || *man.Cost <= 0 || man.Prov != "gemini" {
@@ -147,9 +157,13 @@ func TestVideoGeminiAvvioAttesaRisultato(t *testing.T) {
 	if data, _ := os.ReadFile(man.Files[0].Path); string(data) != "MP4FILE" {
 		t.Errorf("file scaricato %q", data)
 	}
+	// cost_est_usd resta il listino (1.2864); i consumi vanno in cost_usage_usd:
 	// 57920 token video x 12/M + 100 ingresso x 1,5/M
-	if want := 57920*12.0/1e6 + 100*1.5/1e6; *man.Cost < want-0.001 || *man.Cost > want+0.001 {
-		t.Errorf("costo %v, atteso ~%v", *man.Cost, want)
+	if *man.Cost < 1.286 || *man.Cost > 1.287 {
+		t.Errorf("cost_est_usd %v, atteso il listino 1.2864", *man.Cost)
+	}
+	if want := 57920*12.0/1e6 + 100*1.5/1e6; man.Usage == nil || *man.Usage < want-0.001 || *man.Usage > want+0.001 {
+		t.Errorf("cost_usage_usd %v, atteso ~%v", man.Usage, want)
 	}
 	var sawPoll, sawFile bool
 	for _, r := range g.reqs {
@@ -322,6 +336,9 @@ func TestVideoGeminiUsageIncompletoSenzaCosto(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &man); err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := man["cost_usage_usd"]; ok {
+		t.Errorf("cost_usage_usd presente con usage incompleto")
+	}
 	// resta la stima del piano (1.2864), non un costo ricalcolato dai token
 	if v, _ := man["cost_est_usd"].(float64); v < 1.286 || v > 1.287 {
 		t.Errorf("cost_est_usd %v, attesa la stima del piano 1.2864", man["cost_est_usd"])
@@ -331,5 +348,35 @@ func TestVideoGeminiUsageIncompletoSenzaCosto(t *testing.T) {
 	}
 	if m, _ := filepath.Glob("o/*"); len(m) != 1 {
 		t.Errorf("file: %v", m)
+	}
+}
+
+func usageOf(t *testing.T, mode string) (cost float64, usage *float64) {
+	t.Helper()
+	newFakeGem(t, mode)
+	out, code, err := runVideo(t, "--provider", "gemini", "--out", "o", "x")
+	if code != 0 {
+		t.Fatalf("%s: code=%d %v", mode, code, err)
+	}
+	var m struct {
+		Cost  float64  `json:"cost_est_usd"`
+		Usage *float64 `json:"cost_usage_usd"`
+	}
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m.Cost, m.Usage
+}
+
+// Consumi >= listino: cost_usage_usd = consumi; consumi incoerenti (somma per
+// modalita' != totale) o incompleti: niente cost_usage_usd, resta il listino.
+func TestVideoGeminiCostoDaConsumi(t *testing.T) {
+	c, u := usageOf(t, "usagebig")
+	if c < 1.286 || c > 1.287 || u == nil || *u < 2.4 {
+		t.Errorf("usagebig: cost=%v usage=%v", c, u)
+	}
+	c, u = usageOf(t, "usagemismatch")
+	if c < 1.286 || c > 1.287 || u != nil {
+		t.Errorf("usagemismatch: cost=%v usage=%v", c, u)
 	}
 }
