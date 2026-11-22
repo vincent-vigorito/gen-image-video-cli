@@ -30,8 +30,9 @@ type Op struct {
 	FactorMin       float64  `json:"factor_min,omitempty"` // --factor
 	FactorMax       float64  `json:"factor_max,omitempty"`
 	DefaultFactor   float64  `json:"default_factor,omitempty"`
-	Modes           []string `json:"modes,omitempty"`         // --mode, il primo è il default
-	VideoURLExt     string   `json:"video_url_ext,omitempty"` // un --video da URL deve finire così (xAI: .mp4)
+	Modes           []string `json:"modes,omitempty"`          // --mode, il primo è il default
+	VideoURLExt     string   `json:"video_url_ext,omitempty"`  // un --video da URL deve finire così (xAI: .mp4)
+	VideoURLOnly    bool     `json:"video_url_only,omitempty"` // --video solo da URL https: un file locale si rifiuta (codice 2)
 
 	Pricing map[string]float64 `json:"pricing,omitempty"` // listino mostrato; il calcolo è in Price
 	// Price stima il costo di req (durate di default già applicate da chi la
