@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/story"
 )
 
@@ -112,5 +113,53 @@ func TestR8EsempioSpotCheck(t *testing.T) {
 	out, se, code, starts := storyRun(t, "../../examples/spot/storyboard.json", n)
 	if code != 0 || starts != 0 {
 		t.Fatalf("code=%d avvii=%d\n%s\n%s", code, starts, se, out)
+	}
+}
+
+// cartello 9:16 con testo e sottotesto: due righe impilate, senza sovrapposizioni,
+// dentro i margini; negli altri formati e con un solo testo resta centro+basso.
+func TestR8CartelloVerticaleTestoESottotesto(t *testing.T) {
+	m := montage.SafeMargins(720, 1280)
+	c := montage.EndCard{Duration: 3, Text: "Swerpify", Subtext: "il gestionale che tiene tutto insieme"}
+	ts := montage.EndCardTexts(c, 4, 1280, m)
+	if len(ts) != 2 {
+		t.Fatalf("9:16: %d testi, attesi 2", len(ts))
+	}
+	text, sub := ts[0], ts[1]
+	if text.Pos != montage.Bottom || sub.Pos != montage.Top {
+		t.Errorf("posizioni: %+v %+v", text, sub)
+	}
+	line := 1280 - text.MarginV // bordo basso del testo
+	if line != 675 {
+		t.Errorf("line = %d, atteso 675", line)
+	}
+	if sub.MarginV <= line {
+		t.Errorf("sottotesto (MarginV %d) non sotto la riga del testo (%d)", sub.MarginV, line)
+	}
+	_, bot, _, _ := m.Pixels(720, 1280)
+	if subBottom := sub.MarginV + sub.Style.Size; subBottom > 1280-bot {
+		t.Errorf("sottotesto oltre il margine basso: %d > %d", subBottom, 1280-bot)
+	}
+	// logo sopra il testo
+	c.Logo = &montage.Logo{Path: "/x/l.png", SrcW: 100, SrcH: 100, Width: 0.2, Opacity: 1}
+	if lb, err := c.LogoBox(720, 1280, m); err != nil {
+		t.Errorf("LogoBox: %v", err)
+	} else {
+		if lb.Y+lb.H > line-text.Style.Size {
+			t.Errorf("logo (bottom %d) sovrapposto al testo (top %d)", lb.Y+lb.H, line-text.Style.Size)
+		}
+	}
+	// invariati: 16:9, solo testo, solo sottotesto
+	m169 := montage.SafeMargins(1280, 720)
+	for _, cc := range []montage.EndCard{c, {Duration: 3, Text: "solo"}, {Duration: 3, Subtext: "solo"}} {
+		hh, mm := 720, m169
+		if cc.Text == "solo" || cc.Subtext == "solo" {
+			hh, mm = 1280, m
+		}
+		for _, x := range montage.EndCardTexts(cc, 0, hh, mm) {
+			if x.MarginV != 0 {
+				t.Errorf("MarginV %d atteso 0 (%+v)", x.MarginV, x)
+			}
+		}
 	}
 }
