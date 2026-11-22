@@ -230,6 +230,7 @@ Uso:
   giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito
   giv voice "<testo>"|--text-file <f> [--provider xai|gemini] [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--style "<t>"] [--kit <kit.json>] [--pronuncia <file.json>] [--voices]  voce fuori campo WAV, coi tempi su xai (a pagamento; aiuto: giv voice help)
   giv qc <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>] [--expect-audio on|off] [--for <canali>] [--strict]  controllo tecnico (durata, misure, neri, fermi, muti, volume, canali), in locale, gratuito
+  giv qc --voice <audio> --script "<testo>"|--script-file <f> [--pronuncia <file.json>] [--kit <kit.json>] [--lang it] [--max-cost <usd>] [--dry-run] [--strict]  controllo della voce: trascrizione confrontata col testo (xai, a pagamento)
   giv version                      stampa la versione
 
 Flag comuni:
