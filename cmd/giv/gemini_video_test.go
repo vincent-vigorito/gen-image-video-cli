@@ -51,6 +51,15 @@ func newFakeGem(t *testing.T, mode string) *fakeGem {
 		usage := `"usage":{"total_input_tokens":100,"total_output_tokens":57920,"total_thought_tokens":0,"output_tokens_by_modality":[{"modality":"video","tokens":57920}]}`
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/interactions":
+			if mode == "post307" {
+				http.Redirect(w, r, base+"/interactions-altro", http.StatusTemporaryRedirect)
+				return
+			}
+			if mode == "noid" {
+				fmt.Fprintf(w, `{"status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","data":%q}]}],%s}`,
+					base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage)
+				return
+			}
 			if mode == "inline" {
 				fmt.Fprintf(w, `{"id":"int-1","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","data":%q}]}],%s}`,
 					base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage)
@@ -216,8 +225,8 @@ func TestVideoGeminiDryRunEMaxCost(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("dry-run code=%d %v", code, err)
 	}
-	if c := costOf(t, out); c < 0.69 || c > 0.70 {
-		t.Errorf("stima %v, attesa 0.695", c)
+	if c := costOf(t, out); c < 1.286 || c > 1.287 {
+		t.Errorf("stima %v, attesa 1.2864 (video + ingresso e uscita testo)", c)
 	}
 	_, code, err = runVideo(t, "--provider", "gemini", "--max-cost", "0.1", "--duration", "10", "x")
 	if code != 2 {
@@ -248,5 +257,51 @@ func TestVideoGeminiChiaveSoloAlProvider(t *testing.T) {
 	}
 	if entries, _ := filepath.Glob("o/*"); len(entries) != 0 {
 		t.Errorf("file scritto dopo redirect rifiutato: %v", entries)
+	}
+}
+
+// D16: senza provider scelto (flag o GIV_PROVIDER) il video non parte, nemmeno in dry-run.
+func TestVideoGeminiSoloConSceltaEsplicita(t *testing.T) {
+	g := newFakeGem(t, "inline")
+	t.Setenv("GIV_PROVIDER", "")
+	for _, args := range [][]string{{"x"}, {"--dry-run", "x"}} {
+		_, code, err := runVideo(t, args...)
+		if code != 2 || err == nil || !strings.Contains(err.Error(), "nessun provider") {
+			t.Errorf("%v: code=%d %v", args, code, err)
+		}
+	}
+	if len(g.reqs) != 0 {
+		t.Errorf("richieste: %v", g.reqs)
+	}
+	t.Setenv("GIV_PROVIDER", "gemini")
+	if _, code, err := runVideo(t, "--dry-run", "x"); code != 0 {
+		t.Errorf("GIV_PROVIDER=gemini: code=%d %v", code, err)
+	}
+}
+
+// Il POST di avvio non segue un 307: un solo POST, esito incerto (errore), nessun file.
+func TestVideoGeminiPostNonSegueRedirect(t *testing.T) {
+	g := newFakeGem(t, "post307")
+	_, code, err := runVideo(t, "--provider", "gemini", "--out", "o", "x")
+	if code == 0 || err == nil {
+		t.Fatalf("atteso errore, code=%d", code)
+	}
+	if g.posts() != 1 {
+		t.Errorf("POST=%d, atteso 1: %v", g.posts(), g.reqs)
+	}
+	if m, _ := filepath.Glob("o/*"); len(m) != 0 {
+		t.Errorf("file scritti: %v", m)
+	}
+}
+
+// Risposta completed senza id: nessun risultato consegnato.
+func TestVideoGeminiCompletedSenzaIdRifiutato(t *testing.T) {
+	g := newFakeGem(t, "noid")
+	_, code, err := runVideo(t, "--provider", "gemini", "--out", "o", "x")
+	if code == 0 || err == nil || g.posts() != 1 {
+		t.Fatalf("code=%d err=%v posts=%d", code, err, g.posts())
+	}
+	if m, _ := filepath.Glob("o/*"); len(m) != 0 {
+		t.Errorf("file scritti: %v", m)
 	}
 }
