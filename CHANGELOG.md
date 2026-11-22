@@ -4,7 +4,13 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.10.0] - in preparazione
+## [0.10.0] - 2026-11-22
+
+> **Non ancora provati dal vivo**: il provider fal (`giv avatar`, Kling 3 Pro, Kling 4.0 con
+> `--keyframe` e `--shot`, Seedance 2.0 da riferimenti, `giv upscale --provider fal`) e il
+> video con Gemini diretto (`giv video`, `giv extend` e `giv edit` con `--provider gemini`)
+> sono implementati e provati solo contro server finti. Provati dal vivo il 22/11/2026:
+> `giv extend` e `giv edit` con xAI.
 
 ### Aggiunto
 
