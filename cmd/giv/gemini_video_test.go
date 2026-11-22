@@ -48,7 +48,11 @@ func newFakeGem(t *testing.T, mode string) *fakeGem {
 		}
 		g.mu.Unlock()
 		base := "http://" + r.Host
-		usage := `"usage":{"total_input_tokens":100,"total_output_tokens":57920,"total_thought_tokens":0,"output_tokens_by_modality":[{"modality":"video","tokens":57920}]}`
+		usage0 := `"usage":{"total_input_tokens":100,"total_output_tokens":57920,"total_thought_tokens":0,"output_tokens_by_modality":[{"modality":"video","tokens":57920}]}`
+		usage := usage0
+		if mode == "usagepoor" {
+			usage = `"usage":{"total_input_tokens":100}`
+		}
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/interactions":
 			if mode == "post307" {
@@ -60,7 +64,7 @@ func newFakeGem(t *testing.T, mode string) *fakeGem {
 					base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage)
 				return
 			}
-			if mode == "inline" {
+			if mode == "inline" || mode == "usagepoor" {
 				fmt.Fprintf(w, `{"id":"int-1","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","data":%q}]}],%s}`,
 					base64.StdEncoding.EncodeToString([]byte("MP4INLINE")), usage)
 				return
@@ -303,5 +307,29 @@ func TestVideoGeminiCompletedSenzaIdRifiutato(t *testing.T) {
 	}
 	if m, _ := filepath.Glob("o/*"); len(m) != 0 {
 		t.Errorf("file scritti: %v", m)
+	}
+}
+
+// Video completato con usage incompleto (solo token d'ingresso): niente costo
+// stimato nel manifest, il file si consegna comunque.
+func TestVideoGeminiUsageIncompletoSenzaCosto(t *testing.T) {
+	g := newFakeGem(t, "usagepoor")
+	out, code, err := runVideo(t, "--provider", "gemini", "--out", "o", "x")
+	if code != 0 || g.posts() != 1 {
+		t.Fatalf("code=%d %v posts=%d", code, err, g.posts())
+	}
+	var man map[string]any
+	if err := json.Unmarshal([]byte(out), &man); err != nil {
+		t.Fatal(err)
+	}
+	// resta la stima del piano (1.2864), non un costo ricalcolato dai token
+	if v, _ := man["cost_est_usd"].(float64); v < 1.286 || v > 1.287 {
+		t.Errorf("cost_est_usd %v, attesa la stima del piano 1.2864", man["cost_est_usd"])
+	}
+	if src, _ := man["cost_source"].(string); strings.Contains(src, "token riportati") {
+		t.Errorf("cost_source da token con usage incompleto: %q", src)
+	}
+	if m, _ := filepath.Glob("o/*"); len(m) != 1 {
+		t.Errorf("file: %v", m)
 	}
 }
