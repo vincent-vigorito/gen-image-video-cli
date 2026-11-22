@@ -120,10 +120,19 @@ func runStoryCut(args []string) error {
 	}
 	multi := &storyCutFormats{Storyboard: path, Scenes: len(plans[0].Clips), Formats: []storyCutResult{}}
 	for i := range plans {
+		var clash []string
+		if plans[i].Height > plans[i].Width {
+			for _, n := range logoTitleClash(s.Montaggio) {
+				w := logoTitleWarning(n, cutAspectOf(s, formats[i]))
+				fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
+				clash = append(clash, w)
+			}
+		}
 		out, err := cutOne(tool, path, &plans[i], formats[i])
 		if err != nil {
 			return err
 		}
+		out.Warnings = append(out.Warnings, clash...)
 		multi.Formats = append(multi.Formats, *out)
 	}
 	contactSheet(s, path)
@@ -549,6 +558,9 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 	}
 	if m.Sottotitoli != "" {
 		p.Subtitles = s.Path(m.Sottotitoli)
+		// con montaggio.formati o --formato un .srt sta nei margini sicuri del
+		// formato (nel 9:16 sopra il 35% in basso); senza, come prima
+		p.SafeSubtitles = aspect != ""
 	}
 	if err := cutOverlays(s, m, &p); err != nil {
 		return p, usageError("%s: %v", path, err)
@@ -985,7 +997,42 @@ func titleWarnings(s *story.Storyboard, path string, out *storyCheck) error {
 			warn(fmt.Sprintf("titolo n. %d: in basso come i sottotitoli, possono sovrapporsi (posizione alto o centro)", i+1))
 		}
 	}
+	if clash := logoTitleClash(m); len(clash) > 0 {
+		var vert []string // formati verticali montati
+		formats, _ := cutFormats(s, "")
+		for _, f := range formats {
+			if w, h, _, err := cutFormatFor(s, f); err == nil && h > w {
+				vert = append(vert, cutAspectOf(s, f))
+			}
+		}
+		if len(vert) > 0 {
+			for _, n := range clash {
+				warn(logoTitleWarning(n, strings.Join(vert, ", ")))
+			}
+		}
+	}
 	return nil
+}
+
+// logoTitleClash sono i numeri (da 1) dei titoli in alto quando anche il logo
+// è in alto (default alto-destra): nei formati verticali il titolo va a capo
+// su tutta la larghezza e il logo lo copre. Nessuno spostamento, solo l'avviso.
+func logoTitleClash(m *story.Montaggio) []int {
+	if m == nil || m.Logo == nil || (m.Logo.Posizione != "" && !strings.HasPrefix(m.Logo.Posizione, "alto")) {
+		return nil
+	}
+	var n []int
+	for i, t := range m.Titoli {
+		if strings.HasPrefix(t.Posizione, "alto") {
+			n = append(n, i+1)
+		}
+	}
+	return n
+}
+
+// logoTitleWarning è l'avviso di logoTitleClash per il titolo n nei formati verticali formats.
+func logoTitleWarning(n int, formats string) string {
+	return fmt.Sprintf("titolo n. %d: in alto come il logo, in %s possono sovrapporsi (titolo al centro o in basso, o logo in basso)", n, formats)
 }
 
 // focusWarnings avvisa delle scene col fuoco quando il montaggio non ritaglia:
