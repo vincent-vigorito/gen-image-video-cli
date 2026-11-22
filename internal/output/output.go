@@ -3,7 +3,9 @@ package output
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -31,13 +33,37 @@ func SaveAll(dir, slug string, media []provider.Media) ([]FileInfo, error) {
 		if len(media) > 1 {
 			name = fmt.Sprintf("%s-%d", name, i+1)
 		}
-		path := filepath.Join(dir, name+Ext(m.Mime))
-		if err := os.WriteFile(path, m.Data, 0o644); err != nil {
+		f, err := createNew(dir, name, Ext(m.Mime))
+		if err != nil {
 			return nil, err
 		}
-		files = append(files, FileInfo{Path: path, Mime: m.Mime, Bytes: len(m.Data)})
+		_, err = f.Write(m.Data)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, FileInfo{Path: f.Name(), Mime: m.Mime, Bytes: len(m.Data)})
 	}
 	return files, nil
+}
+
+// createNew crea in dir un file nuovo name+ext con O_EXCL: un file che c'è
+// già, anche come link simbolico, non si sovrascrive e non si segue; al suo
+// posto si prova name-2, name-3…
+func createNew(dir, name, ext string) (*os.File, error) {
+	for n := 1; ; n++ {
+		base := name
+		if n > 1 {
+			base = fmt.Sprintf("%s-%d", name, n)
+		}
+		f, err := os.OpenFile(filepath.Join(dir, base+ext), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) && n < 100 {
+			continue
+		}
+		return f, err
+	}
 }
 
 func Ext(mime string) string {

@@ -32,6 +32,10 @@ const (
 	ChargeKeyframe = "fotogramma"
 )
 
+// TakeJob è il kind, in previous, di un job partito lasciato con --new-job:
+// solo id ed errore, senza file (il suo addebito resta in charges).
+const TakeJob = "job"
+
 // State è lo stato di giv story run, nel file accanto allo storyboard
 // (StatePath): per ogni scena cosa è fatto, quale job è partito e quanto è
 // stato speso. Il tetto di spesa conta gli addebiti registrati qui: togliendo
@@ -50,15 +54,16 @@ type SceneState struct {
 	Keyframe *Take    `json:"keyframe,omitempty"` // fotogramma chiave, riusato alle riprese successive
 	Job      *Job     `json:"job,omitempty"`      // job avviato e non ancora scaricato
 	Error    string   `json:"error,omitempty"`    // ultimo errore
-	Previous []Take   `json:"previous,omitempty"` // riprese e fotogrammi chiave sostituiti: i file restano su disco
+	Previous []Take   `json:"previous,omitempty"` // riprese, fotogrammi chiave e job sostituiti: i file restano su disco
 	Charges  []Charge `json:"charges,omitempty"`  // generazioni pagate o forse pagate
 }
 
 // Take è un file generato, relativo alla cartella dello storyboard.
 type Take struct {
-	Kind  string    `json:"kind,omitempty"` // in previous: "fotogramma" per un fotogramma chiave sostituito, vuoto per una clip
-	File  string    `json:"file"`
+	Kind  string    `json:"kind,omitempty"` // in previous: "fotogramma" per un fotogramma chiave sostituito, "job" per un job lasciato, vuoto per una clip
+	File  string    `json:"file,omitempty"` // sempre, tranne che per un job lasciato
 	JobID string    `json:"job_id,omitempty"`
+	Error string    `json:"error,omitempty"` // job lasciato: ultimo errore del recupero
 	Done  time.Time `json:"done"`
 }
 
@@ -227,6 +232,15 @@ func (st *State) validate() error {
 		if t.Kind != "" && !slices.Contains(kinds, t.Kind) {
 			fail("%s: kind %q non valido", where, t.Kind)
 		}
+		if t.Kind == TakeJob {
+			if t.File != "" || !ValidJobID(t.JobID) {
+				fail("%s: job lasciato con file o senza job_id valido", where)
+			}
+			return
+		}
+		if t.Error != "" {
+			fail("%s: error vale solo per un job lasciato", where)
+		}
 		if err := localPath(t.File); t.File == "" || err != nil {
 			fail("%s: file %q non valido", where, t.File)
 		}
@@ -261,7 +275,7 @@ func (st *State) validate() error {
 		takeOK(where+" clip", sc.Clip)
 		takeOK(where+" keyframe", sc.Keyframe)
 		for i := range sc.Previous {
-			takeOK(fmt.Sprintf("%s previous n. %d", where, i+1), &sc.Previous[i], ChargeKeyframe)
+			takeOK(fmt.Sprintf("%s previous n. %d", where, i+1), &sc.Previous[i], ChargeKeyframe, TakeJob)
 		}
 		if j := sc.Job; j != nil {
 			if j.Provider == "" || !ValidJobID(j.ID) {
