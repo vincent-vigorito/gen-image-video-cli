@@ -2,9 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"slices"
 	"strings"
+	"syscall"
 
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/provider"
@@ -22,10 +29,7 @@ var mediaTool = montage.Tool{}
 // https passato così com'è al provider (non scaricato da giv).
 func checkClipVideo(p string) error {
 	if isURL(p) {
-		if !strings.HasPrefix(p, "https://") {
-			return usageError("--video %s: serve un URL https", redactURL(p))
-		}
-		return nil
+		return checkClipURL("--video", p, "https")
 	}
 	if _, err := provider.CheckVideo(p); err != nil {
 		return usageError("--video %s: %v", p, err)
@@ -44,16 +48,50 @@ func checkClipAudio(p string) error {
 	return nil
 }
 
-// checkClipImage controlla --image locale come giv video; gli URL si
-// controllano dopo il download.
+// checkClipImage controlla --image locale come giv video; di un URL qui
+// sintassi, schema e host, il contenuto dopo il download.
 func checkClipImage(p string) error {
 	if isURL(p) {
-		return nil
+		return checkClipURL("--image", p, "http", "https")
 	}
 	if _, err := provider.CheckImage(p); err != nil {
 		return usageError("--image %s: %v", p, err)
 	}
 	return nil
+}
+
+// checkClipURL controlla un URL d'ingresso prima di chiave e chiamate:
+// sintassi, schema fra quelli ammessi e host presente. Negli errori l'URL è
+// ridotto a schema e host.
+func checkClipURL(flag, p string, schemes ...string) error {
+	u, err := url.Parse(p)
+	if err != nil || u.Opaque != "" || u.Hostname() == "" {
+		return usageError("%s %s: URL non valido (serve schema e host)", flag, redactURL(p))
+	}
+	if !slices.Contains(schemes, u.Scheme) {
+		return usageError("%s %s: serve un URL %s", flag, redactURL(p), strings.Join(schemes, " o "))
+	}
+	return nil
+}
+
+// clipHash è l'impronta breve di un ingresso dei comandi sulle clip: file
+// regolare aperto senza blocco e letto al massimo per limit byte; "" se non è
+// regolare, non si legge o supera il limite.
+func clipHash(path string, limit int64) string {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, limit+1))
+	if err != nil || n > limit {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // probeClip legge con ffprobe le misure dei file locali di req (video e
