@@ -358,13 +358,15 @@ type content struct {
 	URI      string `json:"uri"`
 }
 
+// usage sono i contatori riportati: puntatori per distinguere un totale
+// assente da uno zero.
 type usage struct {
-	TotalInput       int64 `json:"total_input_tokens"`
-	TotalOutput      int64 `json:"total_output_tokens"`
-	TotalThought     int64 `json:"total_thought_tokens"`
+	TotalInput       *int64 `json:"total_input_tokens"`
+	TotalOutput      *int64 `json:"total_output_tokens"`
+	TotalThought     *int64 `json:"total_thought_tokens"`
 	OutputByModality []struct {
 		Modality string `json:"modality"`
-		Tokens   int64  `json:"tokens"`
+		Tokens   *int64 `json:"tokens"`
 	} `json:"output_tokens_by_modality"`
 }
 
@@ -452,20 +454,29 @@ func (c *Client) result(ctx context.Context, job provider.Job, it *interaction) 
 }
 
 // cost è il costo dai token riportati: l'uscita non di testo (video, audio)
-// alla tariffa video, quella non suddivisa per modalità pure.
+// alla tariffa video, quella non suddivisa per modalità pure. ok false (resta
+// la riserva) se i contatori sono parziali o incoerenti: un totale assente,
+// una modalità senza nome o senza token, la somma per modalità oltre il totale.
 func (u *usage) cost() (float64, string, bool) {
-	if u == nil {
+	if u == nil || u.TotalInput == nil || u.TotalOutput == nil || u.TotalThought == nil {
 		return 0, "", false
 	}
-	g := caps.GeminiUsage{Input: u.TotalInput, Thought: u.TotalThought, OutputVideo: u.TotalOutput}
+	g := caps.GeminiUsage{Input: *u.TotalInput, Thought: *u.TotalThought, OutputVideo: *u.TotalOutput}
 	if len(u.OutputByModality) > 0 {
-		g.OutputVideo = 0
+		var video, sum int64
 		for _, m := range u.OutputByModality {
+			if m.Modality == "" || m.Tokens == nil || *m.Tokens < 0 {
+				return 0, "", false
+			}
+			sum += *m.Tokens
 			if !strings.EqualFold(m.Modality, "text") {
-				g.OutputVideo += m.Tokens
+				video += *m.Tokens
 			}
 		}
-		g.OutputOther = max(u.TotalOutput-g.OutputVideo, 0)
+		if sum > *u.TotalOutput {
+			return 0, "", false
+		}
+		g.OutputVideo, g.OutputOther = video, *u.TotalOutput-video
 	}
 	return caps.GeminiUsageCost(g)
 }
