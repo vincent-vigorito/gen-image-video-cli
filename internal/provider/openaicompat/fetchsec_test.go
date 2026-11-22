@@ -77,12 +77,12 @@ func TestFetchRedirectPollingFuoriOrigineRifiutatoDownloadSenzaBearer(t *testing
 	if n := atomic.LoadInt32(&otherAuth); n != 0 {
 		t.Errorf("Authorization arrivata fuori origine %d volte", n)
 	}
-	// polling: nemmeno un redirect sulla stessa origine si segue (3xx = errore)
-	if _, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-43", PollingURL: api.URL + "/videos/job-43"}, time.Minute); err == nil || !strings.Contains(err.Error(), "302") {
-		t.Fatalf("redirect del polling sulla stessa origine: atteso errore 3xx, err=%v", err)
+	// stessa origine: il redirect si segue e la chiave resta
+	if _, err := c.FetchVideo(context.Background(), provider.Job{ID: "job-43", PollingURL: api.URL + "/videos/job-43"}, time.Minute); err != nil {
+		t.Fatal(err)
 	}
-	if n := atomic.LoadInt32(&apiAuthSame); n != 0 {
-		t.Errorf("il redirect del polling e' stato seguito (%d)", n)
+	if n := atomic.LoadInt32(&apiAuthSame); n != 1 {
+		t.Errorf("Authorization sulla stessa origine=%d, attesa 1", n)
 	}
 }
 
