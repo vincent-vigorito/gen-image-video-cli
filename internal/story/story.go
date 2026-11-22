@@ -54,6 +54,9 @@ type Storyboard struct {
 	Kit string `json:"kit,omitempty"`
 	// Parlato sono le impostazioni della voce delle scene con testo.
 	Parlato *Parlato `json:"parlato,omitempty"`
+	// Controllo è il controllo dei file in giv story run e cut: avvisa e
+	// basta, non rigenera e non spende.
+	Controllo *Controllo `json:"controllo,omitempty"`
 
 	// Dir è la cartella dello storyboard: i percorsi sono relativi a questa.
 	Dir string `json:"-"`
@@ -222,7 +225,7 @@ type FotogrammaChiave struct {
 type Montaggio struct {
 	Transizione string  `json:"transizione,omitempty"` // taglio (default) o dissolvenza
 	Musica      *Musica `json:"musica,omitempty"`
-	Sottotitoli string  `json:"sottotitoli,omitempty"` // file
+	Sottotitoli string  `json:"sottotitoli,omitempty"` // file, o "auto": dai testi delle scene
 	Uscita      string  `json:"uscita,omitempty"`      // file finale
 
 	// Formati sono i formati da montare, un file per formato
@@ -237,6 +240,31 @@ type Montaggio struct {
 	CartelloFinale *Cartello   `json:"cartello_finale,omitempty"`
 	Volume         *float64    `json:"volume,omitempty"` // volume finale in LUFS; assente: come prima
 	StileTesti     *StileTesti `json:"stile_testi,omitempty"`
+	// Senza toglie ciò che il kit mette da solo: logo, cartello (finale),
+	// musica.
+	Senza []string `json:"senza,omitempty"`
+}
+
+// SottotitoliAuto in montaggio.sottotitoli: sottotitoli scritti da giv story
+// cut dai testi delle scene e dai tempi delle voci (un file che si chiama
+// auto si scrive ./auto).
+const SottotitoliAuto = "auto"
+
+// Senza sono gli elementi che montaggio.senza può togliere.
+var Senza = []string{"logo", "cartello", "musica"}
+
+// Controllo è il blocco controllo dello storyboard.
+type Controllo struct {
+	// Tecnico: giv story run controlla clip e voci, giv story cut i montati
+	// (giv qc), con il risultato in <nome>.controllo.json.
+	Tecnico bool `json:"tecnico,omitempty"`
+	// Voce: trascrizione delle voci confrontata col testo (a pagamento).
+	Voce bool `json:"voce,omitempty"`
+}
+
+// Without dice se montaggio.senza toglie l'elemento name.
+func (s *Storyboard) Without(name string) bool {
+	return s.Montaggio != nil && slices.Contains(s.Montaggio.Senza, name)
 }
 
 // Musica è la traccia sotto tutto il video.
@@ -415,6 +443,11 @@ func (s *Storyboard) Validate() error {
 	if s.Formato != nil && s.Formato.FPS < 0 {
 		fail("formato.fps deve essere positivo")
 	}
+	if c := s.Controllo; c != nil && c.Voce {
+		// la trascrizione (giv qc --voice) arriva con V-T2: fino ad allora
+		// nessuna richiesta a pagamento non disponibile
+		fail("controllo.voce: il controllo della voce non è ancora disponibile: togli controllo.voce (resta controllo.tecnico)")
+	}
 	if p := s.Parlato; p != nil {
 		// i limiti della voce (provider, voce, lingua, velocità, pronunce) li
 		// controlla giv story check sulla richiesta di ogni scena con testo
@@ -515,8 +548,26 @@ func (s *Storyboard) Validate() error {
 				fail("montaggio.musica.volume deve essere fra 0 e 1")
 			}
 		}
-		if m.Sottotitoli != "" {
+		switch {
+		case m.Sottotitoli == SottotitoliAuto:
+			if !slices.ContainsFunc(s.Scene, func(sc Scene) bool { return strings.TrimSpace(sc.Testo) != "" }) {
+				fail("montaggio.sottotitoli auto: nessuna scena ha un testo da sottotitolare")
+			}
+		case m.Sottotitoli != "":
 			file("montaggio.sottotitoli", &m.Sottotitoli, false)
+		}
+		seenSenza := map[string]bool{}
+		for _, w := range m.Senza {
+			switch {
+			case !slices.Contains(Senza, w):
+				fail("montaggio.senza: %q sconosciuto (%s)", w, strings.Join(Senza, ", "))
+			case seenSenza[w]:
+				fail("montaggio.senza: %s ripetuto", w)
+			case w == "logo" && m.Logo != nil, w == "cartello" && m.CartelloFinale != nil, w == "musica" && m.Musica != nil:
+				name := map[string]string{"logo": "logo", "cartello": "cartello_finale", "musica": "musica"}[w]
+				fail("montaggio.senza %s: lo storyboard indica anche montaggio.%s: togli uno dei due", w, name)
+			}
+			seenSenza[w] = true
 		}
 		if m.Uscita != "" {
 			if err := localPath(m.Uscita); err != nil {

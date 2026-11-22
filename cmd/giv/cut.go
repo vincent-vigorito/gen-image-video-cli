@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"gen-image-video-cli/internal/montage"
 	"gen-image-video-cli/internal/output"
+	"gen-image-video-cli/internal/speech"
 	"gen-image-video-cli/internal/story"
 )
 
@@ -44,6 +46,8 @@ type storyCutResult struct {
 	Format     string   `json:"format,omitempty"` // con più formati: il formato del file
 	// Exports sono i file per canale di --export (senza più formati)
 	Exports []exportItem `json:"exports,omitempty"`
+	// Controllo è il controllo dei file dopo il montaggio (controllo.tecnico)
+	Controllo *storyControl `json:"controllo,omitempty"`
 }
 
 // storyCutFormats è l'uscita di giv story cut con montaggio.formati o
@@ -54,6 +58,7 @@ type storyCutFormats struct {
 	Scenes     int              `json:"scenes"`
 	Formats    []storyCutResult `json:"formats"`
 	Exports    []exportItem     `json:"exports,omitempty"`
+	Controllo  *storyControl    `json:"controllo,omitempty"`
 }
 
 // runStoryCut è giv story cut: monta con ffmpeg le clip già presenti, senza
@@ -141,9 +146,12 @@ func runStoryCut(args []string) error {
 			return err
 		}
 	}
+	if controlOn(s) {
+		multi.Controllo = controlStory(s, path, "story cut")
+	}
 	if formats[0] == "" {
 		out := multi.Formats[0]
-		out.Exports = multi.Exports
+		out.Exports, out.Controllo = multi.Exports, multi.Controllo
 		return output.PrintJSON(out)
 	}
 	return output.PrintJSON(multi)
@@ -167,7 +175,9 @@ func storyFiles(s *story.Storyboard) []string {
 		if m.Musica != nil {
 			add(m.Musica.File)
 		}
-		add(m.Sottotitoli)
+		if m.Sottotitoli != story.SottotitoliAuto {
+			add(m.Sottotitoli)
+		}
 		if m.Logo != nil {
 			add(m.Logo.File)
 		}
@@ -204,7 +214,7 @@ func storyFiles(s *story.Storyboard) []string {
 // video).
 func cutProtected(s *story.Storyboard, path string) []string {
 	files := storyFiles(s)
-	for _, p := range []string{path, story.StatePath(path)} {
+	for _, p := range []string{path, story.StatePath(path), story.ControlPath(path)} {
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
 			files = append(files, p)
 		}
@@ -234,8 +244,14 @@ func cutProtected(s *story.Storyboard, path string) []string {
 			if t == nil || t.File == "" || story.IsURL(t.File) {
 				continue
 			}
-			if st, err := os.Stat(s.Path(t.File)); err == nil && st.Mode().IsRegular() {
-				files = append(files, s.Path(t.File))
+			names := []string{t.File}
+			if t == sc.Voice || t.Kind == story.TakeVoice {
+				names = append(names, voiceTimingsFile(t.File)) // tempi della voce
+			}
+			for _, n := range names {
+				if st, err := os.Stat(s.Path(n)); err == nil && st.Mode().IsRegular() {
+					files = append(files, s.Path(n))
+				}
 			}
 		}
 	}
@@ -526,6 +542,8 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 		trans = montage.Transition{Kind: montage.Fade, Duration: cutFadeSeconds}
 	}
 	var missing []string
+	var captions []montage.ClipCaption // sottotitoli "auto"
+	auto := m.Sottotitoli == story.SottotitoliAuto
 	var st *story.State // stato di giv story run, letto alla prima scena che lo usa
 	state := func() (*story.State, error) {
 		if st == nil {
@@ -575,6 +593,12 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 				continue
 			}
 			c.Voice, c.VoiceAt = voice, sc.Ritardo()
+			if auto {
+				captions = append(captions, cutCaption(s, sc, len(p.Clips)+1, st.Scenes[sc.ID].Voice.File))
+			}
+		} else if auto && strings.TrimSpace(sc.Testo) != "" && sc.Voce != "" {
+			// voce da file (anche quella di un avatar, nella clip)
+			captions = append(captions, cutCaption(s, sc, len(p.Clips)+1, sc.Voce))
 		}
 		sceneCut(&c, sc)
 		p.Clips = append(p.Clips, c)
@@ -596,7 +620,8 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 			p.Music = &montage.Music{Path: s.Path(mu.File), Volume: vol}
 		}
 	}
-	if m.Sottotitoli != "" {
+	p.Captions = captions
+	if m.Sottotitoli != "" && !auto {
 		p.Subtitles = s.Path(m.Sottotitoli)
 		// con montaggio.formati o --formato un .srt sta nei margini sicuri del
 		// formato (nel 9:16 sopra il 35% in basso); senza, come prima
@@ -749,7 +774,46 @@ func cutOverlays(s *story.Storyboard, m *story.Montaggio, p *montage.Plan) error
 	if m.Volume != nil {
 		p.Loudness = *m.Volume
 	}
+	if m.Sottotitoli == story.SottotitoliAuto {
+		ts, err := style(montage.DefaultCaptionStyle(p.Width, h), m.StileTesti)
+		if err != nil {
+			return fmt.Errorf("montaggio.sottotitoli: %v", err)
+		}
+		p.CaptionStyle = ts
+	}
 	return nil
+}
+
+// cutCaption è il sottotitolo dal testo della scena sc (sottotitoli "auto")
+// per la clip numero n del piano, con la voce voice (relativa alla cartella
+// dello storyboard): testo scritto, pronunce del parlato e tempi della voce
+// da <voce>.tempi.json, se c'è, sta nella cartella dello storyboard ed è
+// dello stesso testo; altrimenti i sottotitoli si distribuiscono sulla
+// durata della voce, con l'avviso del montaggio.
+func cutCaption(s *story.Storyboard, sc *story.Scene, n int, voice string) montage.ClipCaption {
+	c := montage.ClipCaption{Clip: n, Text: sc.Testo}
+	if p := s.Parlato; p != nil && len(p.Pronuncia) > 0 {
+		c.Dict = speech.Dictionary(maps.Clone(p.Pronuncia))
+	}
+	f, err := s.CheckFile(voiceTimingsFile(voice))
+	if err != nil {
+		return c
+	}
+	data, err := speech.ReadSmallFile(f, speech.MaxTimingsFileBytes)
+	if err != nil {
+		return c
+	}
+	if tf, err := speech.ParseTimings(data); err == nil && tf.Text == strings.TrimSpace(sc.Testo) {
+		c.Timings = tf.Chars
+	}
+	return c
+}
+
+// voiceTimingsFile è il file dei tempi accanto alla voce voice
+// (voce/s1-v1.wav -> voce/s1-v1.tempi.json), come li scrivono giv voice e
+// giv story run.
+func voiceTimingsFile(voice string) string {
+	return strings.TrimSuffix(voice, filepath.Ext(voice)) + ".tempi.json"
 }
 
 // sceneCut porta nella clip fuoco, taglio e velocità della scena. Una scena

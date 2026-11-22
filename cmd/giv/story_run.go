@@ -86,6 +86,14 @@ func cmdStoryRun(args []string) error {
 	if man != nil && ctx.Err() == nil {
 		if s, lerr := story.LoadWithKit(path, *kitFile); lerr == nil {
 			contactSheet(s, path)
+			if controlOn(s) {
+				// avvisa e basta: nessuna scena si rigenera; con strict un
+				// difetto fa uscire con 1 dopo il manifest
+				man.Controllo = controlStory(s, path, "story run")
+				if c := man.Controllo; c != nil && s.Strict && c.Result == montage.QCDefect && err == nil {
+					err = &cliError{code: exitError, msg: fmt.Sprintf("controllo dei file: difetti (strict nello storyboard): vedi %s; nessuna scena rigenerata", firstOf(c.File, "controllo nel JSON"))}
+				}
+			}
 		}
 	}
 	if man != nil {
@@ -115,6 +123,8 @@ type storyRunManifest struct {
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"`
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
 	CapUSD          *float64       `json:"cap_usd,omitempty"`
+	// Controllo è il controllo dei file a fine giro (controllo.tecnico)
+	Controllo *storyControl `json:"controllo,omitempty"`
 }
 
 type sceneRun struct {
