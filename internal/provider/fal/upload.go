@@ -43,6 +43,21 @@ func (c *Client) uploadAudio(ctx context.Context, path string, n int) (string, e
 	return c.put(ctx, path, mime, data, n)
 }
 
+// uploadVideo carica una clip locale (mp4, regole di provider.OpenVideo) come
+// upload, letta al massimo per la dimensione controllata.
+func (c *Client) uploadVideo(ctx context.Context, path string, n int) (string, error) {
+	f, mime, size, err := provider.OpenVideo(path)
+	if err != nil {
+		return "", fmt.Errorf("video %s: %w", path, err)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, size))
+	f.Close()
+	if err != nil {
+		return "", fmt.Errorf("video %s: file non leggibile", path)
+	}
+	return c.put(ctx, path, mime, data, n)
+}
+
 // put carica data (di tipo mime, letto da path) in due passi e restituisce
 // file_url. Un solo tentativo per passo, nessun redirect seguito: un errore
 // (anche un 5xx dopo la ricezione o un 3xx) ferma il comando prima di ogni
@@ -85,4 +100,4 @@ func (c *Client) put(ctx context.Context, path, mime string, data []byte, n int)
 }
 
 var uploadExt = map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
-	"audio/wav": ".wav", "audio/mpeg": ".mp3"}
+	"audio/wav": ".wav", "audio/mpeg": ".mp3", "video/mp4": ".mp4"}

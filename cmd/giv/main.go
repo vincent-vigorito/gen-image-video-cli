@@ -198,7 +198,7 @@ Uso:
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
-  giv upscale --video <file|url> [--factor 1.5-3] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter, a pagamento)
+  giv upscale --video <file|url> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter o fal, a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv version                      stampa la versione
 

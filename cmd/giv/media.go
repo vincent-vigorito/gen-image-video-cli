@@ -126,6 +126,7 @@ func probeClip(req *provider.ClipRequest) ([]string, error) {
 					return nil, usageError("--video %s: nessuna traccia video", req.Video)
 				}
 				req.Source.Duration, req.Source.Width, req.Source.Height = info.Duration, info.Video.Width, info.Video.Height
+				req.Source.FPS = info.Video.FPS
 			}
 		}
 	}
