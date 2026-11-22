@@ -8,9 +8,10 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 > **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
 > `giv voice` o dai testi dello storyboard (xAI predefinita, voce `eve`; Gemini seconda
-> via), a pagamento: con xAI frazioni di centesimo per spot. Il kit (`kit.json`) e il
-> controllo tecnico (`giv qc`) sono gratuiti e lavorano in locale; solo la trascrizione di
-> `giv qc --voice` è a pagamento. I comandi e gli storyboard della 0.11.0 danno lo stesso
+> via), a pagamento: con xAI frazioni di centesimo per spot. Il kit (`kit.json`), i
+> sottotitoli dai testi e il controllo tecnico (`giv qc`, anche dentro `giv story run` e
+> `cut`) sono gratuiti e lavorano in locale; solo la trascrizione (`giv qc --voice`,
+> `controllo.voce`) è a pagamento. I comandi e gli storyboard della 0.11.0 danno lo stesso
 > risultato, salvo il picco audio, ora entro -1 dBTP.
 
 ### Aggiunto
@@ -77,10 +78,45 @@ versioning [SemVer](https://semver.org/lang/it/).
   immediato (4xx) toglie la riserva. Una voce fatta non si rifà da sola quando testo o
   impostazioni cambiano: `check` e `run` lo dicono. `giv story check` riporta per scena
   `text_chars`, `voice_status` (`da_generare`, `fatto`, `cambiata`, `incerto`),
-  `voice_cost_est_usd` e `voice_duration_est_s`, il totale `voice_cost_est_usd` e, col
-  kit, `kit` con `file` e `inherited`; `giv story run` riporta `voices` e per scena `voice`
-  e `voice_this_run`. Ogni voce entra in `giv log` con `command` `story voice`. Esempio in
-  `examples/spot/storyboard-kit.json`.
+  `voice_cost_est_usd` (con `voice_cost_probable` per gemini) e `voice_duration_est_s`, il
+  totale `voice_cost_est_usd` e, col kit, `kit` con `file` e `inherited`; `giv story run`
+  riporta `voices` e per scena `voice` e `voice_this_run`. Ogni voce entra in `giv log` con
+  `command` `story voice`. Esempio in `examples/spot/storyboard-kit.json`, con sottotitoli
+  dai testi e controllo dei file.
+- **Sottotitoli dai testi** (`"montaggio": {"sottotitoli": "auto"}`): `giv story cut` li
+  scrive dal `testo` di ogni scena con una voce (il file della scena o quella generata), in
+  ogni formato, in basso dentro i margini sicuri, al più due righe, spezzati alle frasi e
+  alla punteggiatura, con lo stile di `stile_testi`. I tempi sono quelli della voce
+  (`<voce>.tempi.json` dello stesso testo, come lo scrivono `giv voice` e `giv story run`),
+  col ritardo della voce; senza tempi (Gemini, o un file di voce senza `.tempi.json`) le
+  righe si distribuiscono sulla durata della voce, con un avviso. Resta la grafia scritta: le pronunce servono solo
+  ad allineare i tempi. Serve almeno una scena con `testo` (codice 2); un file di
+  sottotitoli che si chiama proprio `auto` si scrive `./auto`.
+- **`montaggio.senza`** (`["logo", "cartello", "musica"]`): toglie ciò che il kit mette da
+  solo nel montaggio; uno storyboard che indica anche l'elemento tolto (per esempio
+  `montaggio.logo` con `senza` `logo`) esce con codice 2.
+- **Controllo dei file nello storyboard** (`"controllo": {"tecnico": true, "voce": true}`).
+  Con `tecnico` `giv story run`, a fine giro, e `giv story cut`, dopo il montaggio,
+  controllano come `giv qc` (soglie di default) la clip di ogni scena, ogni voce in uso e
+  ogni montato: il risultato va in `<nome>.controllo.json` accanto allo storyboard
+  (riscritto ogni volta, leggibile solo dall'utente, mai al posto di un file d'ingresso) e
+  nel campo `controllo` del JSON, avvisi e difetti anche su stderr. Avvisa e basta: non
+  rigenera, non scarta, non spende; con `strict` un difetto fa uscire `giv story run` con
+  1, dopo il manifest. Senza ffmpeg o ffprobe il controllo è un avviso. Con `voce` `giv
+  story run` trascrive ogni voce **generata da giv** (appena fatta, prima dei video, o già
+  fatta e mai trascritta) e la confronta col testo come `giv qc --voice` (xai, lingua e
+  pronunce del blocco `parlato`; serve `XAI_API_KEY`): **a pagamento** (0,10 $ l'ora, al
+  minuto per eccesso), nella stima (`voice_check_cost_est_usd` in `giv story check`) e nel
+  tetto, con la riserva prima della richiesta; se il tetto non basta la trascrizione si
+  salta con un avviso (i video hanno la precedenza). Una sola richiesta, mai rilanciata:
+  dall'esito incerto resta contata. Si carica solo `voce/<id>-v<N>.wav` della scena, file
+  normale in una cartella `voce` vera. L'esito va in `voice_check` della scena nello stato
+  e in `voices[]` del controllo; `giv story run` riporta `voice_checks`.
+- **Spesa dell'esecuzione nel JSON di `giv story run`**: `run_cost_est_usd` e
+  `run_spent_usd`, stime e spesa contata delle sole richieste partite in questa esecuzione
+  (fotogrammi chiave, video, voci e trascrizioni; i job recuperati restano dell'esecuzione
+  che li ha avviati), assenti se non è partito niente; `cost_est_usd`, `cost_usd` e
+  `spent_usd` restano quelli dell'intero storyboard.
 - **`giv qc <file|storyboard.json>`**: controllo tecnico in locale con `ffprobe` e
   `ffmpeg`, gratuito, senza scrivere file. Controlli `duration`, `size`, `fps`, `audio`,
   `black`, `freeze` (esclusi i tratti neri), `silence`, `loudness`, `peak` (picco vero
@@ -114,9 +150,9 @@ versioning [SemVer](https://semver.org/lang/it/).
 ### Modificato
 
 - **Stato di `giv story run`** (`<nome>.stato.json`): per le voci dai testi scrive nella
-  scena `voice`, `voice_key` (impronta di testo e impostazioni), `voice_status` e
-  `voice_error`, addebiti e riprese precedenti di tipo `voce`; i file del kit non vi
-  entrano. **Un giv più vecchio rifiuta uno stato scritto con le voci.** Gli storyboard e
+  scena `voice`, `voice_key` (impronta di testo e impostazioni), `voice_status`,
+  `voice_error` e, con `controllo.voce`, `voice_check`; addebiti e riprese precedenti di
+  tipo `voce` e addebiti di tipo `trascrizione`; i file del kit non vi entrano. **Un giv più vecchio rifiuta uno stato scritto con le voci.** Gli storyboard e
   gli stati della 0.11.0 si leggono come prima.
 - **Picco audio entro -1 dBTP** nei file di `giv post mix`, `giv export` e `giv story cut`:
   la normalizzazione chiede -1,5 dBTP e lascia il margine alla codifica AAC, che alzava il
@@ -145,9 +181,9 @@ versioning [SemVer](https://semver.org/lang/it/).
   0,15 $ a richiesta con flash, 0,10 $ con flash-lite, il doppio dal 2027) è *probabile*,
   non un massimo. Finché una prova reale non conferma che l'API rispetta il limite, con un
   tetto attivo (`--max-cost` o `tetto_costo_usd`) la voce Gemini non è stimabile: codice 2
-  prima di qualsiasi richiesta («usa xai o togli il tetto»), e `giv story check` rifiuta
-  allo stesso modo uno storyboard con tetto e voce Gemini. Senza tetto parte, con un avviso
-  su stderr. La voce xAI (prezzo per carattere, stima esatta) non cambia.
+  prima di qualsiasi richiesta («usa xai o togli il tetto»), e `giv story check` e `giv
+  story run` rifiutano allo stesso modo uno storyboard con `tetto_costo_usd` e una voce
+  Gemini ancora da generare. Senza tetto parte, con un avviso su stderr. La voce xAI (prezzo per carattere, stima esatta) non cambia.
 - **Durata di una voce non ancora generata**: `giv story check` la stima dai caratteri
   (circa 15 al secondo) e l'avviso lo dice; per le durate vere `giv story run --voices`
   (centesimi), poi di nuovo `check`. Un kit cambiato dopo la generazione non rigenera
@@ -159,6 +195,30 @@ versioning [SemVer](https://semver.org/lang/it/).
 - **`giv qc`, scene quasi ferme**: con la soglia predefinita (`--freeze-noise -60`) una
   ripresa quasi ferma ma non immobile può non risultare ferma; -50 la trova più spesso, a
   costo di qualche falso allarme. Soglie da tarare sulle clip vere.
+- **Solo il fotogramma chiave non si rigenera**: `giv story run --scene <id>
+  --new-keyframe` rifà anche la clip, e con un tetto la stima di entrambi deve starci.
+- **`giv image` senza stima né tetto**: non ha `--dry-run` né `--max-cost`; il costo si
+  vede solo dopo la chiamata (`cost_usd` dove il provider lo riporta).
+- **`giv story check` e le scene già fatte**: la stima del video di una scena compare anche
+  quando la scena è già generata; il tetto di `giv story run` conta invece la spesa
+  registrata più le stime di ciò che resta da fare.
+
+### Prove dal vivo
+
+Spesa complessiva delle prove della 0.12.0 finora: circa 0,07 $, solo materiale nostro.
+
+- **Voce xAI**: 12 chiamate su 12 riuscite, WAV mono a 24 kHz con i tempi per carattere;
+  la voce `eve` è stata scelta all'ascolto.
+- **Voce Gemini**: provata su due frasi brevi, funziona e il limite dei token in uscita è
+  stato rispettato in quei due casi, che non bastano a dire che l'API lo rispetti sempre:
+  il tetto resta non stimabile (vedi sopra).
+- **`giv story run --voices`** sullo spot di prova col kit: 6 voci `eve`, nessun video
+  rigenerato, poi montato con logo, cartello finale e musica dal kit.
+- **Kit e fotogramma**: il fotogramma del personaggio coi riferimenti del kit è stato fatto
+  con `giv image`; il passaggio dal kit al fotogramma chiave dentro `giv story run` è
+  coperto solo dai test con un server finto.
+- **Non ancora provati dal vivo**: la trascrizione (`giv qc --voice` e `controllo.voce`), i
+  sottotitoli dai testi e il controllo dei file in un montaggio reale.
 
 ## [0.11.0] - 2026-11-22
 

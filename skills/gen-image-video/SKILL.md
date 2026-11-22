@@ -92,10 +92,12 @@ giv story check [--kit <kit.json>] <storyboard.json>
                                                 # valida uno storyboard e ne stima il costo (voci comprese), gratis
 giv story run [--scene <id> [--new-keyframe | --new-job | --new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
                                                 # genera le voci dai testi, poi le scene video e avatar, a pagamento;
-                                                # riprende da dove si era fermato; --voices solo le voci
+                                                # riprende da dove si era fermato; --voices solo le voci;
+                                                # con controllo.tecnico controlla i file come giv qc
 giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
                                                 # monta con ffmpeg le scene pronte, un file per formato
-                                                # di montaggio.formati, gratis; --export come giv export --for
+                                                # di montaggio.formati, gratis; --export come giv export --for;
+                                                # sottotitoli "auto" dai testi, controllo.tecnico sui montati
 giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
@@ -472,6 +474,17 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    - `giv story run` e `giv story cut` riscrivono `foglio-contatto.jpg` accanto allo
      storyboard (una riga per scena): guardarlo per primo; `"foglio_contatto": false`
      per non farlo.
+   Dalla 0.12.0, facoltativi:
+   - `"sottotitoli": "auto"`: sottotitoli scritti dal `testo` delle scene con una voce,
+     coi tempi della voce (`.tempi.json`; senza, distribuiti sulla durata con un avviso),
+     in basso nei margini sicuri di ogni formato: mettere i `titoli` in alto o fuori dalle
+     frasi;
+   - `"senza": ["logo", "cartello", "musica"]` toglie ciò che il kit mette da solo
+     (codice 2 se lo storyboard indica anche l'elemento tolto);
+   - `"controllo": {"tecnico": true}` a livello di storyboard: `giv story run` e `giv story
+     cut` controllano clip, voci e montati come `giv qc` e scrivono
+     `storyboard.controllo.json`; avvisa e basta (con `strict` un difetto esce con 1 in
+     `run`). Leggere `result` e i `warnings` prima di consegnare.
 
 **Voce fuori campo** (`giv voice`, xAI: 15 $ per milione di caratteri, uno spot da 30 s
 costa meno di un centesimo):
@@ -515,7 +528,17 @@ costa meno di un centesimo):
    rifà da sola: dopo aver cambiato il testo, `giv story run --scene s2 --new-voice
    storyboard.json` (a pagamento). Codice 2 per una voce incerta: controllare sul provider
    prima di `--new-voice`.
-5. Con `tetto_costo_usd` la voce deve essere xai: Gemini con un tetto esce con codice 2.
+5. Con `tetto_costo_usd` la voce deve essere xai: Gemini con un tetto esce con codice 2
+   (in `story check` e `story run`); senza tetto la stima Gemini è solo probabile
+   (`voice_cost_probable`).
+6. `"controllo": {"voce": true}`: `giv story run` trascrive ogni voce generata e la
+   confronta col testo (xai, a pagamento, frazioni di centesimo, nel tetto: stima in
+   `voice_check_cost_est_usd`); una sola richiesta, mai rilanciata. Esito in
+   `voice_check` della scena e in `voices[]` di `storyboard.controllo.json`: una
+   differenza sui nomi propri è da ascoltare, non da rifare alla cieca.
+7. `"montaggio": {"sottotitoli": "auto"}` per i sottotitoli dalle stesse frasi.
+8. JSON di `giv story run`: `run_cost_est_usd` e `run_spent_usd` sono la stima e la spesa
+   di questa esecuzione; `spent_usd` è tutta la spesa contata nel tetto.
 
 **Rifinire uno spot in locale** (gratis, nessuna chiamata; ogni passo scrive un file nuovo
 in `--out` e ne dà il percorso in `files[0].path` del JSON):

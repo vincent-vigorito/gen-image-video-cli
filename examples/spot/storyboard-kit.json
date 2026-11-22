@@ -5,6 +5,7 @@
   "default": { "provider": "openrouter", "modello": "alibaba/wan-3.0", "audio": "off" },
   "tetto_costo_usd": 3,
   "parlato": { "velocita": 1.05 },
+  "controllo": { "tecnico": true },
   "scene": [
     {
       "id": "s1", "tipo": "video", "durata": 5,
@@ -23,6 +24,7 @@
   "montaggio": {
     "transizione": "dissolvenza", "uscita": "spot-kit.mp4",
     "formati": ["16:9", "9:16"], "adatta": "ritaglio",
-    "titoli": [ { "testo": "Crema alle erbe", "scena": "s1", "da": 0.5, "durata": 3 } ]
+    "sottotitoli": "auto",
+    "titoli": [ { "testo": "Crema alle erbe", "scena": "s1", "da": 0.5, "durata": 3, "posizione": "alto" } ]
   }
 }
