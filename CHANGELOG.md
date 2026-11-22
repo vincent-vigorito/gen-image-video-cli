@@ -27,6 +27,16 @@ versioning [SemVer](https://semver.org/lang/it/).
   (`cost_est_usd`). Una sola richiesta, mai ripetuta: un esito incerto (redirect, errore
   del server, rete, risposta non valida) esce con codice 5 e una riga `failed` nel
   registro; voce sconosciuta codice 3.
+- **Voce con Gemini**, seconda via (`giv voice --provider gemini`, chiave
+  `GEMINI_API_KEY`, `POST /v1beta/interactions`): modelli `gemini-3.8-flash-tts`
+  (predefinito) e `gemini-3.8-flash-lite-tts`, voce predefinita `Kore`, `--style` a parole,
+  lingua rilevata dal testo, `--speed` ignorata con un avviso. Gemini non ha dizionario né
+  tempi: le pronunce si sostituiscono nel testo e i sottotitoli si distribuiscono sulla
+  durata. Listino: 0,50 $ per milione di token di testo e 9 $ (flash-lite 6 $) per milione
+  di token audio, 25 al secondo; **dal 1° gennaio 2027 il doppio**. Il costo viene dai
+  token riportati o dalla durata. `giv voice --voices --provider gemini` elenca le voci
+  (gratuito). `--kit <kit.json>` dà a `giv voice` i predefiniti del blocco `voce` e le
+  pronunce del kit (i flag vincono).
 - **Kit di marca e personaggi** (`kit.json`) e **`giv kit check <kit.json>`**: colori, logo,
   font, cartello finale, musica e volume della marca, personaggi con immagini di
   riferimento, descrizione e tutela, voce e pronunce, scritti una volta. Il kit è in sola
@@ -75,6 +85,12 @@ versioning [SemVer](https://semver.org/lang/it/).
   marketing, mai dati di clienti. I tempi per carattere sono quelli di ciò che la voce ha
   detto (col dizionario, la pronuncia): giv li riallinea al testo scritto; se mancano o
   non tornano, solo il WAV, con un avviso.
+- **Voce con Gemini senza un costo massimo garantito**: ogni richiesta porta il limite di
+  token in uscita e la stima usa quel limite, ma finché una prova reale non conferma che
+  l'API lo rispetta, con un tetto attivo (`--max-cost` o `tetto_costo_usd`) la voce Gemini
+  non è stimabile: codice 2 prima di qualsiasi richiesta (`giv story check` rifiuta lo
+  storyboard allo stesso modo); per un tetto si usa xAI. Senza tetto parte con un avviso e
+  una stima probabile (circa 0,15 $ a richiesta, 0,30 $ dal 2027), mai esatta.
 - **`giv qc`, scene quasi ferme**: con la soglia predefinita (`--freeze-noise -60`) una
   ripresa quasi ferma ma non immobile può non risultare ferma; -50 la trova più spesso, a
   costo di qualche falso allarme. Soglie da tarare sulle clip vere.
