@@ -45,11 +45,11 @@ func v4ff(t *testing.T, out string, args ...string) {
 }
 
 // clip: sorgente video (v) e audio (a) lavfi, durata dur.
-func v4clip(t *testing.T, dir, name, v, a string, dur int) string {
+func v4clip(t *testing.T, dir, name, v, a string, dur float64) string {
 	p := filepath.Join(dir, name)
-	args := []string{"-f", "lavfi", "-i", fmt.Sprintf("%s:duration=%d", v, dur)}
+	args := []string{"-f", "lavfi", "-i", fmt.Sprintf("%s:duration=%g", v, dur)}
 	if a != "" {
-		args = append(args, "-f", "lavfi", "-i", fmt.Sprintf("%s:duration=%d", a, dur), "-af", "volume=0.1", "-c:a", "aac", "-b:a", "128k", "-ar", "48000")
+		args = append(args, "-f", "lavfi", "-i", fmt.Sprintf("%s:duration=%g", a, dur), "-af", "volume=0.1", "-c:a", "aac", "-b:a", "128k", "-ar", "48000")
 	}
 	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest")
 	v4ff(t, p, args...)
@@ -124,7 +124,7 @@ func TestV4DifettiSuClipSintetiche(t *testing.T) {
 	v4clip(t, dir, "nera.mp4", "color=c=black:size=320x180:rate=25", "sine=frequency=440", 4)
 	v4clip(t, dir, "ferma.mp4", "color=c=red:size=320x180:rate=25", "sine=frequency=440", 5)
 	v4clip(t, dir, "muta.mp4", "testsrc=size=320x180:rate=25", "anullsrc=r=48000:cl=stereo", 4)
-	v4clip(t, dir, "corta.mp4", "testsrc=size=320x180:rate=25", "sine=frequency=440", 1)
+	v4clip(t, dir, "corta.mp4", "testsrc=size=320x180:rate=25", "sine=frequency=440", 0.5)
 	v4clip(t, dir, "senzaaudio.mp4", "testsrc=size=320x180:rate=25", "", 4)
 
 	cases := []struct {
@@ -268,13 +268,15 @@ func TestV4Storyboard(t *testing.T) {
 	v4clip(t, dir, "s2.mp4", "color=c=black:size=320x180:rate=25", "sine=frequency=440", 3)
 	sb := filepath.Join(dir, "spot.json")
 	// Storyboard minimo; se il formato non e' accettato il test segnala il contratto da verificare.
-	os.WriteFile(sb, []byte(`{"scene":[{"id":"s1","tipo":"clip","clip":"s1.mp4"},{"id":"s2","tipo":"clip","clip":"s2.mp4"}]}`), 0o644)
+	os.WriteFile(sb, []byte(`{"formato":{"aspect":"16:9"},"scene":[{"id":"s1","tipo":"clip","file":"s1.mp4"},{"id":"s2","tipo":"clip","file":"s2.mp4"}]}`), 0o644)
 	cmd := exec.Command(binPath, "qc", "spot.json")
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+	var se bytes.Buffer
+	cmd.Stderr = &se
 	out, err := cmd.Output()
 	if err != nil {
-		t.Skipf("storyboard sintetico non accettato (formato da verificare col developer): %v", err)
+		t.Fatalf("storyboard: %v %s", err, se.String())
 	}
 	var m struct {
 		Mode   string `json:"mode"`
