@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,7 +43,8 @@ const qcVoiceHelp = `Controllo della voce (a pagamento: trascrizione con xai, 0,
             delle parole attese sentite uguali: difetto
   language  lingua rilevata diversa da --lang: avviso (non riportata: saltato)
 
-  --voice <file>         audio da controllare: wav, mp3, ogg, flac, aac, m4a, mp4 (al massimo 100 MiB)
+  --voice <file>         audio da controllare: wav, mp3, ogg, flac, aac, m4a, mp4 (al massimo 100 MiB),
+                         con una sola traccia audio (più tracce: codice 2, estrai quella da controllare)
   --script "<testo>"     testo atteso (come scritto); oppure --script-file <file> UTF-8
   --pronuncia <file>     pronunce JSON {"parola": "come dirla"} (sopra quelle del kit)
   --kit <kit.json>       pronunce e lingua dal kit
@@ -52,7 +54,7 @@ const qcVoiceHelp = `Controllo della voce (a pagamento: trascrizione con xai, 0,
   --dry-run              controlli tecnici, richiesta e stima, senza trascrizione
   --strict               un difetto fa uscire con codice 1 (il JSON esce comunque)
 
-  Stima dalla durata misurata, arrotondata al minuto per eccesso (la granularità
+  Stima dalla durata contata sui campioni decodificati, arrotondata al minuto per eccesso (la granularità
   dell'addebito non è documentata): 30 s contano 0,001667 $. Una trascrizione
   dall'esito incerto esce con codice 5 e una riga failed in giv-log.jsonl, senza
   rilancio; un caricamento non arrivato fino in fondo è un errore senza addebito.
@@ -290,6 +292,12 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 		return nil, withPath(err, tmp, o.File)
 	}
 	rep.File = o.File
+	// una sola traccia audio: quella misurata è quella che trascrive il provider
+	if n, err := audioTracks(tmp); err != nil {
+		return nil, usageError("--voice %s: tracce audio non lette: %v", o.File, withPath(err, tmp, o.File))
+	} else if n != 1 {
+		return nil, usageError("--voice %s: %d tracce audio: giv qc --voice ne accetta una sola (estrai quella da controllare, es. ffmpeg -i <file> -map 0:a:0 -c copy voce.%s)", o.File, n, format)
+	}
 	secs, measureErr := decodedSeconds(tmp)
 	if measureErr != nil {
 		measureErr = withPath(measureErr, tmp, o.File)
@@ -368,8 +376,50 @@ func withPath(err error, tmp, path string) error {
 // qcVoiceDecodeTimeout: tempo massimo della decodifica che misura l'audio.
 const qcVoiceDecodeTimeout = 5 * time.Minute
 
+// audioTracks conta le tracce audio di path con ffprobe (gli argomenti di
+// montage.ProbeArgs: lista, solo file locali e formati ammessi).
+func audioTracks(path string) (int, error) {
+	args, err := montage.ProbeArgs(path)
+	if err != nil {
+		return 0, err
+	}
+	bin := localTool.FFprobe
+	if bin == "" {
+		bin = "ffprobe"
+	}
+	if bin, err = exec.LookPath(bin); err != nil {
+		return 0, errors.New("ffprobe non trovato")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), montage.ProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return 0, errors.New("ffprobe oltre il tempo massimo")
+		}
+		return 0, fmt.Errorf("ffprobe non riuscito (%v)", err)
+	}
+	var raw struct {
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return 0, errors.New("risposta di ffprobe illeggibile")
+	}
+	n := 0
+	for _, st := range raw.Streams {
+		if st.CodecType == "audio" {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // decodedSeconds è la durata dell'audio di path contata sui campioni
-// decodificati della prima traccia audio (ffmpeg con argomenti separati, PCM
+// decodificati dell'unica traccia audio (audioTracks) (ffmpeg con argomenti separati, PCM
 // a 16 bit mono alla frequenza della traccia, nessun ricampionamento): non la
 // durata dichiarata dal contenitore, nessun arrotondamento.
 func decodedSeconds(path string) (float64, error) {
