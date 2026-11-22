@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.11.0]
+## [0.11.0] - 2026-11-22
 
 > **Tutto in locale**: i comandi nuovi lavorano con `ffmpeg` e `ffprobe` sui file che ci
 > sono già, senza rete, chiavi né spesa. **Convenzioni, non valori ufficiali**: il volume
