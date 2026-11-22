@@ -170,12 +170,12 @@ func copyTree(t *testing.T, from, to string) {
 	})
 }
 
-// 3) versione: 0.9.1 fino al cambio, 0.10.0 sulla punta finale.
+// 3) versione: 0.9.1 fino al cambio, 0.11.0 sulla punta finale.
 func TestVersioneRilascio(t *testing.T) {
 	so, _, code, _ := runGiv(t, nil, "version")
 	want := os.Getenv("GIV_ATTESA_VERSIONE")
 	if want == "" {
-		want = "0.10.0"
+		want = "0.11.0"
 	}
 	if code != 0 || strings.TrimSpace(so) != "giv "+want {
 		t.Fatalf("code=%d out=%q, atteso giv %s", code, so, want)
