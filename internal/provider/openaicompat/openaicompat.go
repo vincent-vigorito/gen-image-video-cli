@@ -57,7 +57,7 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 // decide se il job è finito male, e deve venire dal provider.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
-		return fmt.Errorf("%s: troppi redirect", c.name)
+		return redirectError{fmt.Errorf("%s: troppi redirect", c.name)}
 	}
 	if !c.apiOrigin(req.URL) {
 		if req.Context().Value(pollKey{}) != nil {
@@ -361,7 +361,8 @@ func (c *Client) mediaFromImages(ctx context.Context, resp imagesResponse) ([]pr
 		case d.B64JSON != "":
 			data, err = base64.StdEncoding.DecodeString(d.B64JSON)
 		case d.URL != "":
-			data, err = c.fetchResult(ctx, d.URL)
+			// sempre senza chiave, come nella 0.9.1, anche sull'origine dell'API
+			data, err = c.externalGet(ctx, d.URL)
 		default:
 			continue
 		}
@@ -707,8 +708,9 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		if st.Video.URL == "" {
 			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 		}
-		// il video sta su una CDN: scaricato senza chiave (fetchResult)
-		data, err := c.fetchResult(ctx, st.Video.URL)
+		// il video sta su una CDN: sempre senza chiave, anche se l'indirizzo
+		// è sull'origine dell'API (externalGet)
+		data, err := c.externalGet(ctx, st.Video.URL)
 		if err != nil {
 			return nil, err
 		}

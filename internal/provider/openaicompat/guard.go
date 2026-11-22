@@ -197,10 +197,10 @@ func (c *Client) externalClient() *http.Client {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			req.Header.Del("Referer")
 			if len(via) >= 5 {
-				return errors.New("troppi redirect")
+				return redirectError{errors.New("troppi redirect")}
 			}
 			if err := checkExternal(req.URL.String()); err != nil {
-				return fmt.Errorf("redirect: %w", err)
+				return redirectError{fmt.Errorf("redirect: %w", err)}
 			}
 			return nil
 		},
@@ -274,13 +274,53 @@ func redactURL(raw string) string {
 }
 
 // hideURL riduce a schema e host l'URL degli errori di net/http nella catena
-// di err (sul posto: tipo e classificazione dell'errore restano).
+// di err (sul posto: tipo e classificazione dell'errore restano). La causa
+// resta solo se è di un tipo che non riporta testi della risposta (net/http
+// mette nella causa un Location non leggibile o una riga di risposta
+// malformata); altrimenti un testo nostro, con la catena per errors.Is ed
+// errors.As.
 func hideURL(err error) error {
 	var ue *url.Error
-	if errors.As(err, &ue) {
-		ue.URL = redactURL(ue.URL)
+	if !errors.As(err, &ue) {
+		return err
+	}
+	ue.URL = redactURL(ue.URL)
+	e := ue.Err
+	var re redirectError
+	var oe *net.OpError
+	var de *net.DNSError
+	var ne net.Error
+	var op opaqueError
+	switch {
+	case e == nil, errors.As(e, &re), errors.As(e, &oe), errors.As(e, &de), errors.As(e, &op),
+		errors.Is(e, context.Canceled), errors.Is(e, context.DeadlineExceeded),
+		errors.Is(e, io.EOF), errors.Is(e, io.ErrUnexpectedEOF):
+	case errors.As(e, &ne) && ne.Timeout():
+		ue.Err = opaqueError{e, "tempo scaduto"}
+	default:
+		ue.Err = opaqueError{e, fmt.Sprintf("risposta di rete non valida (%T, dettaglio omesso: può contenere indirizzi firmati)", e)}
 	}
 	return err
+}
+
+// redirectError è un rifiuto di CheckRedirect: testo nostro, con gli
+// indirizzi già ridotti.
+type redirectError struct{ error }
+
+func (e redirectError) Unwrap() error { return e.error }
+
+// opaqueError mostra solo msg e tiene la causa per errors.Is ed errors.As (e
+// per Timeout di url.Error).
+type opaqueError struct {
+	err error
+	msg string
+}
+
+func (e opaqueError) Error() string { return e.msg }
+func (e opaqueError) Unwrap() error { return e.err }
+func (e opaqueError) Timeout() bool {
+	var ne net.Error
+	return errors.As(e.err, &ne) && ne.Timeout()
 }
 
 type hideKey struct{}
