@@ -94,6 +94,22 @@ versioning [SemVer](https://semver.org/lang/it/).
   mancano sono `assente`. Esce con 0 anche con difetti, con `--strict` un difetto esce
   con 1. Avvisa e basta: non corregge, non rigenera, non spende. I tratti si leggono
   mentre ffmpeg scrive: nessun evento si perde anche con un'analisi lunga.
+- **`giv qc --voice <file audio> --script "<testo>"`** (o `--script-file`): dopo i
+  controlli tecnici del file, la trascrizione con xAI (`POST /v1/stt`, chiave
+  `XAI_API_KEY`, **a pagamento**: 0,10 $ per ora di audio) e il confronto parola per parola
+  col testo atteso, senza maiuscole, punteggiatura e accenti; una parola detta come la sua
+  pronuncia (`--pronuncia`, o le pronunce del kit con `--kit`) vale come quella scritta.
+  File `wav`, `mp3`, `ogg`, `flac`, `aac`, `m4a` o `mp4`, al più 100 MiB, con una sola
+  traccia audio (con più tracce codice 2 prima di ogni richiesta). Due controlli in coda a
+  `checks`: `voice` (differenze: avviso; meno di metà delle parole attese sentite uguali:
+  difetto) e `language` (lingua rilevata diversa da `--lang`, default `it`, o da quella del
+  kit: avviso). Il JSON ha `mode` `voice`, `script`, `transcript` (`text`, `language`,
+  `duration_s`, `words`), `comparison` (`words`, `matched`, `ratio`, `different`,
+  `missing`, `extra`), `cost_est_usd` e `cost_usage_usd`. La stima viene dalla durata
+  contata sui campioni decodificati, arrotondata al minuto per eccesso; `--max-cost`
+  rifiuta con codice 2 se la supera o se la durata non si misura; `--dry-run` fa i
+  controlli tecnici e stampa richiesta e stima senza trascrivere. Un esito incerto esce
+  con codice 5 e una riga `failed` nel registro, senza rilancio.
 
 ### Modificato
 
@@ -136,6 +152,10 @@ versioning [SemVer](https://semver.org/lang/it/).
   (circa 15 al secondo) e l'avviso lo dice; per le durate vere `giv story run --voices`
   (centesimi), poi di nuovo `check`. Un kit cambiato dopo la generazione non rigenera
   niente: cambia solo il montaggio e le generazioni successive.
+- **`giv qc --voice`**: la trascrizione sbaglia sui nomi propri, quindi una differenza è
+  un avviso da ascoltare, non un errore. La granularità dell'addebito della trascrizione
+  non è documentata: la stima conta i minuti interi (30 secondi stimati 0,001667 $, il vero
+  è circa la metà).
 - **`giv qc`, scene quasi ferme**: con la soglia predefinita (`--freeze-noise -60`) una
   ripresa quasi ferma ma non immobile può non risultare ferma; -50 la trova più spesso, a
   costo di qualche falso allarme. Soglie da tarare sulle clip vere.
