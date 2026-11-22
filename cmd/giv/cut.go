@@ -100,11 +100,19 @@ func runStoryCut(args []string) error {
 	}
 	// tutti i piani prima di montare: un problema in un formato ferma tutto
 	plans := make([]montage.Plan, len(formats))
+	var outs []string // montati ed esportazioni, controllati prima di pubblicare
 	for i, f := range formats {
 		if plans[i], err = cutPlanFor(s, path, f); err != nil {
 			return err
 		}
 		plans[i].RootDir = root
+		outs = append(outs, plans[i].Output)
+	}
+	for k, pr := range profiles {
+		outs = append(outs, exportName(plans[sources[k]].Output, formats[sources[k]], pr))
+	}
+	if err := checkCutOutputs(s, path, outs); err != nil {
+		return err
 	}
 	tool := montage.Tool{}
 	if err := tool.Check(); err != nil {
@@ -134,8 +142,7 @@ func runStoryCut(args []string) error {
 
 // storyFiles sono i file locali che lo storyboard nomina e che esistono come
 // file normali (scene, voci, immagini, riferimenti, musica, sottotitoli,
-// logo, font, stato e clip generate): i file che giv story riscrive da solo
-// (foglio di contatto, esportazioni) non li sostituiscono mai.
+// logo, font): con cutProtected, i file che giv story cut non sostituisce mai.
 func storyFiles(s *story.Storyboard) []string {
 	var names []string
 	add := func(p ...string) { names = append(names, p...) }
@@ -180,6 +187,86 @@ func storyFiles(s *story.Storyboard) []string {
 	return out
 }
 
+// cutProtected sono i file che le uscite di giv story cut e il foglio di
+// contatto non sostituiscono mai: lo storyboard, il suo stato, i file che
+// nomina (storyFiles) e quelli generati che lo stato elenca (clip in uso,
+// fotogrammi chiave, riprese sostituite) che esistono come file normali.
+// Uno stato illeggibile non elenca file (ferma già il montaggio delle scene
+// video).
+func cutProtected(s *story.Storyboard, path string) []string {
+	files := storyFiles(s)
+	for _, p := range []string{path, story.StatePath(path)} {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			files = append(files, p)
+		}
+	}
+	st, err := story.LoadState(story.StatePath(path))
+	if err != nil {
+		return files
+	}
+	for _, sc := range st.Scenes {
+		takes := []*story.Take{sc.Clip, sc.Keyframe}
+		for i := range sc.Previous {
+			takes = append(takes, &sc.Previous[i])
+		}
+		for _, t := range takes {
+			if t == nil || t.File == "" || story.IsURL(t.File) {
+				continue
+			}
+			if st, err := os.Stat(s.Path(t.File)); err == nil && st.Mode().IsRegular() {
+				files = append(files, s.Path(t.File))
+			}
+		}
+	}
+	return files
+}
+
+// samePath dice se due percorsi sono lo stesso file: stesso percorso
+// assoluto o, se esistono tutti e due, lo stesso file (link compresi).
+func samePath(a, b string) bool {
+	if aa, err := filepath.Abs(a); err == nil {
+		if bb, err := filepath.Abs(b); err == nil && aa == bb {
+			return true
+		}
+	}
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	return err == nil && os.SameFile(sa, sb)
+}
+
+// checkCutOutputs controlla, prima di pubblicare qualcosa, le uscite di giv
+// story cut (montati per formato ed esportazioni): diverse fra loro e mai uno
+// dei file di cutProtected. Errore d'uso, nessun montaggio.
+func checkCutOutputs(s *story.Storyboard, path string, outs []string) error {
+	protected := cutProtected(s, path)
+	for i, o := range outs {
+		for _, p := range protected {
+			if samePath(o, p) {
+				return usageError("%s: l'uscita %s sostituirebbe %s, un file dello storyboard o generato da giv story run: cambia montaggio.uscita", path, o, p)
+			}
+		}
+		for _, prev := range outs[:i] {
+			if samePath(o, prev) {
+				return usageError("%s: due uscite nello stesso file %s: cambia montaggio.uscita", path, o)
+			}
+		}
+	}
+	return nil
+}
+
+// exportName è il file dell'esportazione pr dal montato del formato format
+// ("" : quello dello storyboard): <uscita>-<canale>-<WxH>.mp4.
+func exportName(montato, format string, pr montage.Profile) string {
+	stem := strings.TrimSuffix(montato, filepath.Ext(montato))
+	if format != "" {
+		stem = strings.TrimSuffix(stem, "-"+strings.ReplaceAll(format, ":", "x"))
+	}
+	return stem + "-" + pr.Tag() + ".mp4"
+}
+
 // cutAspectOf è il rapporto del formato montato f ("" : quello dello storyboard).
 func cutAspectOf(s *story.Storyboard, f string) string {
 	if f != "" {
@@ -219,13 +306,9 @@ func cutExport(s *story.Storyboard, path string, profiles []montage.Profile, sou
 		if caches[src.Output] == nil {
 			caches[src.Output] = &montage.ExportCache{}
 		}
-		stem := strings.TrimSuffix(src.Output, filepath.Ext(src.Output))
-		if src.Format != "" {
-			stem = strings.TrimSuffix(stem, "-"+strings.ReplaceAll(src.Format, ":", "x"))
-		}
-		out := stem + "-" + pr.Tag() + ".mp4"
+		out := exportName(src.Output, src.Format, pr)
 		fmt.Fprintf(os.Stderr, "esportazione %s in %s\n", pr.Spec(), out)
-		res, err := localTool.RunOp(context.Background(), montage.Op{Inputs: append(storyFiles(s), src.Output), Output: out, Root: s.Dir,
+		res, err := localTool.RunOp(context.Background(), montage.Op{Inputs: append(cutProtected(s, path), src.Output), Output: out, Root: s.Dir,
 			Replace: true, Build: montage.ExportBuild(src.Output, e, caches[src.Output])})
 		if err != nil {
 			if errors.Is(err, montage.ErrInvalid) {
@@ -279,7 +362,7 @@ func contactSheet(s *story.Storyboard, path string) {
 		warn(err)
 		return
 	}
-	inputs := storyFiles(s)
+	inputs := cutProtected(s, path)
 	for _, k := range sortedKeys(p.Inputs) {
 		inputs = append(inputs, p.Inputs[k])
 	}
@@ -618,8 +701,9 @@ func cutOverlays(s *story.Storyboard, m *story.Montaggio, p *montage.Plan) error
 }
 
 // sceneCut porta nella clip fuoco, taglio e velocità della scena. Una scena
-// video o avatar tagliata o accelerata dura quanto il pezzo usato (la sua
-// durata è quella chiesta al modello), una clip la sua durata se c'è.
+// tagliata o accelerata dura quanto il pezzo usato (tratto di taglio,
+// altrimenti la clip, diviso velocità), anche con durata dichiarata: durata
+// è la lunghezza della clip chiesta o attesa.
 func sceneCut(c *montage.Clip, sc *story.Scene) {
 	if f := sc.Fuoco; f != nil {
 		x, y := f.XY()
@@ -637,9 +721,7 @@ func sceneCut(c *montage.Clip, sc *story.Scene) {
 	if v := sc.Velocita; v != nil {
 		c.Speed = *v
 	}
-	if sc.Generata() {
-		c.Duration = 0
-	}
+	c.Duration = 0
 }
 
 // retimedLength è la durata nel montaggio di una scena lunga length secondi
@@ -848,35 +930,62 @@ func (chk *storyChecker) voiceOverlaps(out *storyCheck) {
 	}
 }
 
-// titleWarnings avvisa dei titoli che escono dalla loro scena (durata
-// prevista nota) o che stanno in basso come i sottotitoli: in out.Warnings e
-// su stderr.
-func titleWarnings(s *story.Storyboard, out *storyCheck) {
+// titleWarnings controlla i titoli sulle durate previste (quando sono note):
+// un titolo che comincia oltre la fine delle scene è un errore d'uso; uno che
+// esce dalla sua scena o dalla fine (dove si ferma) o sta in basso come i
+// sottotitoli è un avviso, in out.Warnings e su stderr.
+func titleWarnings(s *story.Storyboard, path string, out *storyCheck) error {
 	m := s.Montaggio
 	if m == nil || len(m.Titoli) == 0 {
-		return
+		return nil
 	}
 	warn := func(w string) {
 		out.Warnings = append(out.Warnings, w)
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
 	}
-	length := map[string]float64{}
-	for _, c := range out.Scenes {
-		length[c.ID] = c.length
+	secs := func(v float64) string { return strconv.FormatFloat(round3(v), 'f', -1, 64) }
+	// inizio di ogni scena nel montaggio e fine delle scene; NaN da una scena
+	// di durata ignota in poi (nessun confronto)
+	fade := 0.0
+	if m.Transizione == "dissolvenza" {
+		fade = cutFadeSeconds
+	}
+	start, length := map[string]float64{}, map[string]float64{}
+	total := 0.0
+	for i, c := range out.Scenes {
+		start[c.ID], length[c.ID] = total, c.length
+		l := c.length
+		if l <= 0 {
+			l = math.NaN()
+		}
+		total += l
+		if i+1 < len(out.Scenes) {
+			total -= fade
+		}
 	}
 	for i, t := range m.Titoli {
 		d := 3.0
 		if t.Durata != nil {
 			d = *t.Durata
 		}
+		at := t.Da
+		if t.Scena != "" {
+			at += start[t.Scena]
+		}
+		if at >= total {
+			return usageError("%s: titolo n. %d: comincia a %s s del montaggio, le scene finiscono a %s s", path, i+1, secs(at), secs(total))
+		}
 		if l := length[t.Scena]; t.Scena != "" && l > 0 && t.Da+d > l+cutVoiceSlack {
-			warn(fmt.Sprintf("titolo n. %d: finisce a %s s della scena %s, che dura %s s", i+1,
-				strconv.FormatFloat(round3(t.Da+d), 'f', -1, 64), t.Scena, strconv.FormatFloat(round3(l), 'f', -1, 64)))
+			warn(fmt.Sprintf("titolo n. %d: finisce a %s s della scena %s, che dura %s s", i+1, secs(t.Da+d), t.Scena, secs(l)))
+		}
+		if at+d > total+cutVoiceSlack {
+			warn(fmt.Sprintf("titolo n. %d: finisce a %s s, le scene finiscono a %s s: si ferma lì", i+1, secs(at+d), secs(total)))
 		}
 		if pos := t.Posizione; m.Sottotitoli != "" && (pos == "" || strings.HasPrefix(pos, "basso")) {
 			warn(fmt.Sprintf("titolo n. %d: in basso come i sottotitoli, possono sovrapporsi (posizione alto o centro)", i+1))
 		}
 	}
+	return nil
 }
 
 // focusWarnings avvisa delle scene col fuoco quando il montaggio non ritaglia:

@@ -505,6 +505,13 @@ func inputOpts(formats string) []string {
 	return []string{"-protocol_whitelist", "file", "-format_whitelist", formats}
 }
 
+// literalImage sono le opzioni d'ingresso di un'immagine da posare (logo,
+// sfondo e logo del cartello): un file solo letto alla lettera, mai una
+// sequenza (un nome con %d non fa leggere altri file della cartella).
+func literalImage() []string {
+	return []string{"-protocol_whitelist", "file", "-f", "image2", "-pattern_type", "none"}
+}
+
 const audioFmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
 
 // Args costruisce gli argomenti di ffmpeg (senza il nome del programma) per il
@@ -607,7 +614,7 @@ func buildArgs(p Plan, analyze bool) ([]string, error) {
 	}
 	// immagini delle sovrimpressioni: logo, sfondo e logo del cartello
 	image := func(path string) (string, error) {
-		if err := addInput(path, inputOpts(imageFormats)...); err != nil {
+		if err := addInput(path, literalImage()...); err != nil {
 			return "", err
 		}
 		next++
@@ -845,6 +852,22 @@ func LastFrameArgs(clip, out string, overwrite bool) ([]string, error) {
 	args = append(args, codec...)
 	args = append(args, "-f", "image2", o)
 	return args, nil
+}
+
+// imageProbeArgs è ProbeArgs per un'immagine da posare, letta come la legge
+// il montaggio (literalImage).
+func imageProbeArgs(path string) ([]string, error) {
+	if err := checkPath(path); err != nil {
+		return nil, invalid("%v", err)
+	}
+	f, err := fileArg(path)
+	if err != nil {
+		return nil, invalid("%s: %v", path, err)
+	}
+	args := append([]string{"-hide_banner", "-loglevel", "error"}, literalImage()...)
+	return append(args, "-show_entries",
+		"format=format_name,duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,duration",
+		"-of", "json", "-i", f), nil
 }
 
 // ProbeArgs costruisce gli argomenti di ffprobe per leggere durata e formato.

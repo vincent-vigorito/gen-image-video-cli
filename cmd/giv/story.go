@@ -273,7 +273,9 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		return nil, err
 	}
 	chk.voiceOverlaps(out)
-	titleWarnings(s, out)
+	if err := titleWarnings(s, path, out); err != nil {
+		return nil, err
+	}
 	focusWarnings(s, out)
 	out.RemovedScenes, out.removedExact = removedSpend(s, st)
 	out.RemovedSpentUSD = round4(out.removedExact)
@@ -410,6 +412,16 @@ func (sc *storyChecker) client(name string) (*storyClient, error) {
 	return c, nil
 }
 
+// sceneRetime porta in c.length (durata prevista, 0 se ignota) taglio e
+// velocità della scena: taglio.da oltre la durata è un errore d'uso.
+func sceneRetime(scene *story.Scene, c *sceneCheck) error {
+	if t := scene.Taglio; t != nil && c.length > 0 && t.Da >= c.length {
+		return usageError("taglio.da %g s: la scena dura %g s", t.Da, c.length)
+	}
+	c.length = retimedLength(scene, c.length)
+	return nil
+}
+
 func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c := sceneCheck{ID: scene.ID, Tipo: scene.Tipo, Duration: scene.Durata, Voice: scene.Voce, VoiceDelayS: scene.RitardoVoce}
 	if scene.Tipo == story.Avatar {
@@ -417,7 +429,7 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	}
 	if scene.Tipo != story.Video {
 		c.File, c.length = scene.File, float64(scene.Durata)
-		return c, nil
+		return c, sceneRetime(scene, &c)
 	}
 	o, err := sc.videoOptions(scene)
 	if err != nil {
@@ -434,10 +446,9 @@ func (sc *storyChecker) scene(scene *story.Scene) (sceneCheck, error) {
 	c.Provider, c.Model = o.Provider, job.req.Model
 	c.PromptFinal, c.Params, c.Inputs, c.Warnings = plan.PromptFinal, plan.Params, plan.Inputs, plan.Warnings
 	c.length = float64(max(job.req.Duration, scene.Durata))
-	if t := scene.Taglio; t != nil && c.length > 0 && t.Da >= c.length {
-		return c, usageError("taglio.da %g s: la scena dura %g s", t.Da, c.length)
+	if err := sceneRetime(scene, &c); err != nil {
+		return c, err
 	}
-	c.length = retimedLength(scene, c.length)
 	switch {
 	case plan.CostEstUSD != nil:
 		c.CostEstUSD, c.CostSource = plan.CostEstUSD, plan.CostSource
