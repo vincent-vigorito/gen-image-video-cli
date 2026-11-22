@@ -28,7 +28,7 @@ import (
 type v7Env struct {
 	dir, board, kitDir string
 	srv                *httptest.Server
-	tts, videos        int32
+	tts, videos, gem   int32
 	mode               string // "", "drop" (connessione chiusa), "400"
 	mu                 sync.Mutex
 	ttsBodies          []string
@@ -77,7 +77,7 @@ func newV7Env(t *testing.T, board string) *v7Env {
 	root := t.TempDir()
 	e.dir, e.kitDir = filepath.Join(root, "spot"), filepath.Join(root, "marca")
 	os.MkdirAll(e.dir, 0o755)
-	v7Copy(t, "../../examples/kit", e.kitDir)
+	v7Copy(t, v7ExamplesKit, e.kitDir)
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/tts":
@@ -99,6 +99,11 @@ func newV7Env(t *testing.T, board string) *v7Env {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"audio":%q,"duration":1}`, base64.StdEncoding.EncodeToString(v7WAV(1)))
 			}
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/interactions"):
+			io.Copy(io.Discard, r.Body)
+			atomic.AddInt32(&e.gem, 1)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"status":"completed","outputs":[{"type":"audio","mime_type":"audio/wav","data":%q}],"usage":{"total_input_tokens":20,"total_output_tokens":50}}`, base64.StdEncoding.EncodeToString(v7WAV(1)))
 		case r.Method == http.MethodPost && r.URL.Path == "/videos":
 			atomic.AddInt32(&e.videos, 1)
 			io.Copy(io.Discard, r.Body)
@@ -109,13 +114,14 @@ func newV7Env(t *testing.T, board string) *v7Env {
 		}
 	}))
 	t.Cleanup(e.srv.Close)
-	for _, p := range []string{"xai", "openrouter"} {
+	for _, p := range []string{"xai", "openrouter", "gemini"} {
 		old := baseURLs[p]
 		baseURLs[p] = e.srv.URL
 		t.Cleanup(func() { baseURLs[p] = old })
 	}
 	t.Setenv("XAI_API_KEY", "fake-xai")
 	t.Setenv("OPENROUTER_API_KEY", "fake-or")
+	t.Setenv("GEMINI_API_KEY", "fake-gem")
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(e.dir)
 	e.board = filepath.Join(e.dir, "spot.json")
@@ -163,6 +169,9 @@ func (e *v7Env) state(t *testing.T) map[string]any {
 	}
 	return m["scenes"].(map[string]any)
 }
+
+// v7ExamplesKit: percorso assoluto, preso prima che i test cambino cartella.
+var v7ExamplesKit, _ = filepath.Abs("../../examples/kit")
 
 const v7Text = "Ciao a tutti, questa e' la voce dello spot."
 
