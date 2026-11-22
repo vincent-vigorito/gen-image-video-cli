@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.11.0]
+## [0.11.0] - 2026-11-22
 
 > **Tutto in locale**: i comandi nuovi lavorano con `ffmpeg` e `ffprobe` sui file che ci
 > sono già, senza rete, chiavi né spesa. **Convenzioni, non valori ufficiali**: il volume
@@ -48,8 +48,12 @@ versioning [SemVer](https://semver.org/lang/it/).
   `titoli` (tempi relativi a una scena), `cartello_finale`, `stile_testi`, `volume` (LUFS),
   `musica.sotto_voce` e `musica.sfuma_fine`; per scena `fuoco`, `taglio` e `velocita`;
   `foglio_contatto`. `giv story cut --formato <r>` monta un solo formato, `--export
-  <canali>` esporta per canale dal montato. `giv story run` e `giv story cut` riscrivono
-  `foglio-contatto.jpg` accanto allo storyboard. `examples/spot` usa i campi nuovi (con un
+  <canali>` esporta per canale dal montato. Con i formati un `.srt` sta nei margini sicuri
+  del formato; nei verticali e nell'1:1 un titolo in alto col logo in alto dà un avviso;
+  nel 9:16 il sottotesto del cartello va subito sotto il testo (anche in `giv post
+  overlay`).
+  `giv story run` e `giv story cut` riscrivono `foglio-contatto.jpg` accanto allo
+  storyboard. `examples/spot` usa i campi nuovi (con un
   segnaposto in `musica/`).
 - **`giv export --video <file> --for <canali>`**: un file per canale (`instagram`,
   `tiktok`, `youtube`, `linkedin`, ognuno con `:<formato>` facoltativo; predefiniti 9:16
@@ -58,6 +62,17 @@ versioning [SemVer](https://semver.org/lang/it/).
   `--focus` come `reframe`); una durata fuori dai limiti del canale esce con codice 2
   prima di scrivere. Le convenzioni non ufficiali (volume, misure del feed di Instagram,
   formato di TikTok) sono elencate nel manifest in `exports[].convention`.
+
+### Limiti noti
+
+- **Picco del montato**: il volume finale di `giv story cut` e `giv post mix` arriva al
+  valore chiesto (-14 LUFS), ma il picco reale (true peak) può restare a -0,8 dBTP invece
+  di -1; le esportazioni di `giv export` stanno a -1,0/-0,9 dBTP. Da rivedere.
+- **Titoli e logo**: nessuno spostamento automatico; un titolo in alto col logo in alto
+  dà solo un avviso, la posizione la sceglie l'autore.
+- **Sottotitoli `.srt` nel 9:16**: coi formati stanno sopra il 35% in basso (margine
+  sicuro dei Reels), quindi a metà quadro; per un'altra posizione serve un `.ass` col
+  suo stile.
 
 ## [0.10.0] - 2026-11-22
 
