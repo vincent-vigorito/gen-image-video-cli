@@ -129,9 +129,6 @@ func TestV3KitRifiuti(t *testing.T) {
 		{"percorso con ..", strings.Replace(v3Kit, `"logo.png"`, `"../fuori.png"`, 1), func(t *testing.T, d string) {
 			v3PNG(t, filepath.Join(filepath.Dir(d), "fuori.png"))
 		}},
-		{"percorso che comincia con -", strings.Replace(v3Kit, `"logo.png"`, `"-logo.png"`, 1), func(t *testing.T, d string) {
-			v3PNG(t, filepath.Join(d, "-logo.png"))
-		}},
 		{"link a file fuori dal kit", v3Kit, func(t *testing.T, d string) {
 			out := filepath.Join(filepath.Dir(d), "esterno.png")
 			v3PNG(t, out)
@@ -169,5 +166,15 @@ func TestV3KitSenzaArgomentiOFileInesistente(t *testing.T) {
 	}
 	if _, _, code := v3Run(t, t.TempDir(), "kit", "check", filepath.Join(t.TempDir(), "no.json")); code != 2 {
 		t.Errorf("kit inesistente: codice %d, atteso 2", code)
+	}
+}
+
+// Un file del kit che comincia con '-' e' un nome come gli altri: non diventa un'opzione.
+func TestV3NomeConTrattino(t *testing.T) {
+	d := v3Dir(t, strings.Replace(v3Kit, `"logo.png"`, `"-logo.png"`, 1))
+	v3PNG(t, filepath.Join(d, "-logo.png"))
+	so, se, code := v3Run(t, t.TempDir(), "kit", "check", filepath.Join(d, "kit.json"))
+	if code != 0 || !strings.Contains(so+se, "-logo.png") {
+		t.Fatalf("codice %d\n%s\n%s", code, so, se)
 	}
 }
