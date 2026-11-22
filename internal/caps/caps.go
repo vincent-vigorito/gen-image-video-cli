@@ -26,6 +26,8 @@ type Model struct {
 	MaxRefs         *int               `json:"max_refs,omitempty"`        // 0 = riferimenti non supportati
 	RefResolutions  []string           `json:"ref_resolutions,omitempty"` // risoluzioni ammesse con --ref
 	RefMaxDuration  int                `json:"ref_max_duration,omitempty"`
+	ImageWithRefs   *bool              `json:"image_with_refs,omitempty"` // false = --image e --ref non insieme
+	ImageWithRefsOn string             `json:"-"`                         // provider che li accetta insieme
 	Passthrough     []string           `json:"passthrough,omitempty"`
 	Pricing         map[string]float64 `json:"pricing,omitempty"` // sku -> valore, unità nel nome
 	Source          string             `json:"source"`
@@ -65,6 +67,11 @@ func ParseOpenRouter(data []byte) ([]Model, error) {
 			ID: d.ID, Durations: d.Durations, Resolutions: d.Resolutions, Aspects: d.Aspects,
 			Frames: d.Frames, Audio: d.Audio, Seed: d.Seed, Passthrough: d.Passthrough,
 			Source: "openrouter /videos/models",
+		}
+		// via OpenRouter i modelli x-ai rispondono 400 a immagine iniziale e
+		// riferimenti insieme (prove di CLI-869); xai diretto li accetta
+		if strings.HasPrefix(d.ID, "x-ai/") {
+			m.ImageWithRefs, m.ImageWithRefsOn = ptr(false), "xai"
 		}
 		for k, v := range d.Pricing {
 			var f float64
@@ -172,6 +179,13 @@ func Check(prov string, m *Model, catalog []Model, req *provider.VideoRequest, s
 	if req.LastFrame != "" && !slices.Contains(m.Frames, "last_frame") {
 		return nil, reject("--last-frame non supportato da %s; %s", m.ID,
 			supporting(func(x *Model) bool { return slices.Contains(x.Frames, "last_frame") }))
+	}
+	if req.Image != "" && len(req.Refs) > 0 && m.ImageWithRefs != nil && !*m.ImageWithRefs {
+		alt := ""
+		if m.ImageWithRefsOn != "" {
+			alt = " oppure --provider " + m.ImageWithRefsOn
+		}
+		return nil, reject("--image e --ref insieme non supportati da %s su %s: usa uno solo dei due%s", m.ID, prov, alt)
 	}
 	resolutions, maxDuration := m.Resolutions, 0
 	if len(req.Refs) > 0 {
