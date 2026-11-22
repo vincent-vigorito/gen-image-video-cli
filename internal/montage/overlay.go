@@ -322,6 +322,9 @@ func (c EndCard) LogoBox(w, h int, m Margins) (Rect, error) {
 	switch {
 	case strings.TrimSpace(c.Text) != "":
 		bottom = h/2 - text.Size // il testo sta al centro, alto circa text.Size
+		if line, _, ok := c.stacked(h, m); ok {
+			bottom = line - text.Size*3/2 // il testo sale: finisce a line
+		}
 	case strings.TrimSpace(c.Subtext) != "":
 		bottom = h - b - sub.Size*3/2
 	}
@@ -386,13 +389,42 @@ func EndCardFilter(c EndCard, image, logo, out string, w, h int, fps float64, m 
 	return strings.Join(g, ";"), nil
 }
 
+// stacked dice se nel quadro alto h coi margini m il sottotesto va subito
+// sotto il testo invece che in basso: quando fra il testo al centro e il
+// margine basso non restano due righe di sottotesto (i verticali, col margine
+// basso del 35%), il sottotesto in basso finirebbe sul testo. Allora line è
+// l'ordinata in pixel dove finisce il testo, alzato quanto basta a lasciare
+// due righe di sottotesto dentro i margini (non oltre il margine alto), e gap
+// lo stacco fra testo e sottotesto.
+func (c EndCard) stacked(h int, m Margins) (line, gap int, ok bool) {
+	if strings.TrimSpace(c.Text) == "" || strings.TrimSpace(c.Subtext) == "" {
+		return 0, 0, false
+	}
+	text, sub := c.style(h)
+	t, b, _, _ := m.Pixels(0, h) // solo alto e basso
+	gap = max(1, sub.Size/4)
+	line = h - b - 2*sub.Size - gap
+	if line >= h/2+text.Size/2 {
+		return 0, 0, false
+	}
+	return max(line, t+text.Size), gap, true
+}
+
 // EndCardTexts sono i testi del cartello che comincia a start secondi, per un
-// quadro alto h pixel: il testo al centro, il sottotesto in basso, con la
-// dissolvenza di default (TextFade). Vanno nel file .ass coi titoli.
-func EndCardTexts(c EndCard, start float64, h int) []Text {
+// quadro alto h pixel coi margini m: il testo al centro, il sottotesto in
+// basso, con la dissolvenza di default (TextFade). Se in basso il sottotesto
+// non ci sta (stacked) il testo sale un poco e il sottotesto va subito sotto.
+// Vanno nel file .ass coi titoli.
+func EndCardTexts(c EndCard, start float64, h int, m Margins) []Text {
 	text, sub := c.style(h)
 	end := start + c.Duration
 	fade := TextFade(c.Duration)
+	if line, gap, ok := c.stacked(h, m); ok {
+		return []Text{
+			{Text: c.Text, Start: start, End: end, Pos: Bottom, Style: text, Fade: fade, MarginV: max(1, h-line)},
+			{Text: c.Subtext, Start: start, End: end, Pos: Top, Style: sub, Fade: fade, MarginV: max(1, line+gap)},
+		}
+	}
 	var ts []Text
 	if strings.TrimSpace(c.Text) != "" {
 		ts = append(ts, Text{Text: c.Text, Start: start, End: end, Pos: Center, Style: text, Fade: fade})
@@ -408,7 +440,7 @@ func EndCardTexts(c EndCard, start float64, h int) []Text {
 func (o Overlay) Texts() []Text {
 	ts := append([]Text(nil), o.Titles...)
 	if o.EndCard != nil {
-		ts = append(ts, EndCardTexts(*o.EndCard, o.Duration, o.Height)...)
+		ts = append(ts, EndCardTexts(*o.EndCard, o.Duration, o.Height, o.Margins)...)
 	}
 	return ts
 }
