@@ -13,8 +13,11 @@ import (
 
 // externalClient è il client del PUT firmato e degli scaricamenti: nessuna
 // chiave, connessione diretta (niente proxy) solo verso indirizzi pubblici,
-// controllati sull'indirizzo effettivo di ogni connessione, e redirect solo
-// verso https.
+// controllati sull'indirizzo effettivo di ogni connessione. Redirect solo per
+// le GET, al massimo 5, ognuno rivalidato come gli indirizzi di fal e senza
+// Referer (porterebbe percorso e query firmati della richiesta precedente);
+// il PUT non segue redirect: un 301/302/303 lo trasformerebbe in una GET e un
+// 200 finale passerebbe per un caricamento riuscito.
 func externalClient(rt http.RoundTripper) *http.Client {
 	if rt == nil {
 		rt = &http.Transport{
@@ -28,11 +31,15 @@ func externalClient(rt http.RoundTripper) *http.Client {
 		Timeout:   10 * time.Minute,
 		Transport: rt,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			req.Header.Del("Referer")
+			if via[0].Method != http.MethodGet {
+				return fmt.Errorf("redirect rifiutato per %s: il caricamento va solo all'indirizzo firmato", via[0].Method)
+			}
 			if len(via) >= 5 {
 				return errors.New("troppi redirect")
 			}
-			if req.URL.Scheme != "https" {
-				return errors.New("redirect verso uno schema diverso da https")
+			if err := checkExternal(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect: %w", err)
 			}
 			return nil
 		},
