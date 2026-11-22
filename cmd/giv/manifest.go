@@ -183,7 +183,9 @@ func (t *logTotals) add(r logRow) {
 		return
 	}
 	t.Generations++
-	t.CostEstUSD += r.CostEstUSD
+	if r.CostUSD == 0 { // la stima accanto a un costo riportato (comandi sulle clip) non si somma
+		t.CostEstUSD += r.CostEstUSD
+	}
 }
 
 // sumLog somma le righe del registro; by ("provider" o "model") aggiunge i

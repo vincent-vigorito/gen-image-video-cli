@@ -220,6 +220,9 @@ func prepareClip(spec clipSpec, o clipOptions) (*clipJob, error) {
 		return nil, usageError("%v", err)
 	}
 	req.Model = op.Model
+	if op.VideoURLOnly && req.Video != "" && !isURL(req.Video) {
+		return nil, usageError("--video %s: %s", req.Video, localVideoRefusal(spec, o.Provider))
+	}
 
 	// file in ingresso: solo quelli ammessi dalla tabella arrivano qui
 	for _, in := range []struct {
@@ -279,6 +282,21 @@ func prepareClip(spec clipSpec, o clipOptions) (*clipJob, error) {
 		plan.Source = &clipSourceInfo{DurationS: s.Duration, Width: s.Width, Height: s.Height, AudioDurationS: s.AudioDuration}
 	}
 	return &clipJob{c: o.client, provider: o.Provider, req: req, op: op, plan: plan, out: o.Out, name: o.Name}, nil
+}
+
+// localVideoRefusal è il motivo del rifiuto di un --video locale con prov, che
+// vuole la clip da URL: le vie sono un URL https pubblico o un altro provider
+// del comando che carica il file.
+func localVideoRefusal(spec clipSpec, prov string) string {
+	msg := fmt.Sprintf("giv %s con %s accetta solo un indirizzo https pubblico, non un file locale: pubblica la clip e passa l'URL", spec.Op, prov)
+	for _, p := range spec.Providers {
+		if table := clipOpTables[p]; p != prov && table != nil {
+			if op := caps.FindOp(table(), spec.Op, ""); op != nil && !op.VideoURLOnly {
+				msg += ", oppure usa --provider " + p
+			}
+		}
+	}
+	return msg
 }
 
 // clipParams sono i valori indicati dall'utente, per piano e manifest.
@@ -365,7 +383,10 @@ func (j *clipJob) run(ctx context.Context) (manifest, error) {
 	if err != nil {
 		return manifest{}, err
 	}
+	// col costo riportato dal provider la stima resta accanto (come nel manifest di story run)
+	est, src := man.CostEstUSD, man.CostSource
 	man.done(files, res)
+	man.CostEstUSD, man.CostSource = est, src
 	return man, nil
 }
 

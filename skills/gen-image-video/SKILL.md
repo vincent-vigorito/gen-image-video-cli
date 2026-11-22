@@ -28,7 +28,7 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
   quando non servono: `command`, `prompt_final` (inviato coi preset), `presets[]`,
   `inputs` (`image`/`last_frame`/`refs[]` con `sha256` breve), `params`, `job_id`,
   `duration_s`, `cost_est_usd` + `cost_source` (stima da listino dove il costo non è
-  riportato, es. xai), `cost_usage_usd` + `cost_usage_source` (gemini: costo dai token
+  riportato, es. xai; nei comandi sulle clip resta accanto a `cost_usd`), `cost_usage_usd` + `cost_usage_source` (gemini: costo dai token
   riportati, accanto alla stima), `warnings[]` (controlli ignorati).
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
@@ -57,8 +57,8 @@ giv extend  --provider gemini --from <job_id> [--duration 3-10] "<come continua>
                                                 # allunga un video fatto con gemini (a pagamento)
 giv edit    --video <mp4|url> "<cosa cambiare>"                      # modifica una clip (xai, a pagamento)
 giv edit    --provider gemini --from <job_id> "<cosa cambiare>"     # modifica un video gemini (a pagamento)
-giv upscale --video <file|url> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]
-                                                # ingrandisce una clip (openrouter o fal, a pagamento)
+giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]
+                                                # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                                 # personaggio che parla (fal, a pagamento)
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
@@ -244,11 +244,10 @@ stesso formato di `internal/presets/presets.json`.
 
 Sorgente mp4 locale (max 50 MiB, caricato su xAI) o URL `https` che finisce in `.mp4`.
 extend: sorgente 2-15 s, aggiunge 2-10 s (default 6); edit: sorgente fino a 8,7 s. Stima
-sul caso caro (extend = (sorgente + aggiunta) × 0,07 + sorgente × 0,01 $/s; edit =
-sorgente × 0,08 $/s); il costo vero è `cost_usd` a fine job. Nella prova del 22/11/2026
-3 s aggiunti a una clip di 6 s sono costati 0,27 $ contro una stima di 0,69 (xAI fattura
-solo i secondi aggiunti più l'ingresso); l'edit 0,48 $, come la stima. Senza ffprobe la
-durata non si misura: niente stima, e con `--max-cost` codice 2.
+come la fatturazione vista nella prova del 22/11/2026: extend = secondi aggiunti × 0,07 +
+sorgente (secondi interi per eccesso) × 0,01 $/s (3 s su una clip di 6 s: 0,27 $), edit =
+sorgente × 0,08 $/s (0,48 $ su 6 s); il costo vero è `cost_usd` a fine job, con la stima
+accanto. Senza ffprobe la durata non si misura: niente stima, e con `--max-cost` codice 2.
 
 **Allungare o modificare un video Gemini** (`--from`, dall'UE solo video generati da Gemini):
 
@@ -267,14 +266,15 @@ directory del `giv video`, altrimenti niente stima (con `--max-cost` codice 2).
 
 ```bash
 ./bin/giv upscale --video https://example.com/clip.mp4 --factor 2 --dry-run
-./bin/giv upscale --video https://example.com/clip.mp4 --factor 2 --mode precise --max-cost 2.00
+./bin/giv upscale --video https://example.com/clip.mp4 --factor 2 --mode precise
 ```
 
 `--factor` 1,5-3 (default 2), `--mode precise` (default) o `creative`, prompt facoltativo.
-Serve un URL `https` pubblico: il file locale va come data URI e nella prova del
-22/11/2026 OpenRouter l'ha rifiutato (HTTP 400, solo URL `https`, nessun addebito). Stima
-prudente a megapixel-secondo: lati × fattore² × durata × 0,035 $ (precise) o 0,05 $
-(creative).
+Solo un URL `https` pubblico: un file locale esce con codice 2 e il messaggio propone
+`--provider fal` (nella prova del 22/11/2026 OpenRouter ha rifiutato il file come data URI,
+HTTP 400, senza addebito). Da URL giv non misura il sorgente: niente stima, quindi niente
+`--max-cost` (codice 2); listino 0,035 $ (precise) o 0,05 $ (creative) al megapixel-secondo,
+il costo vero è `cost_usd` a fine job. Per un file locale usare fal (sotto).
 
 **Ingrandire un file locale** (fal, Topaz `topaz-upscale`; serve `FAL_KEY`):
 
@@ -412,7 +412,8 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
 
 - Il costo reale di una chiamata è `cost_usd` nel manifest (openrouter); dove il
   provider non lo riporta (xai) c'è la stima `cost_est_usd`. Il totale registrato è
-  `giv log --sum-cost` (`cost_usd` riportato, `cost_est_usd` stimato, `failed_jobs` e
+  `giv log --sum-cost` (`cost_usd` riportato, `cost_est_usd` stimato delle sole righe
+  senza costo riportato, `failed_jobs` e
   `failed_cost_est_usd` per i job partiti e poi falliti o scaduti, che possono essere
   stati addebitati); `--by provider|model` divide i totali. Usarli per il budget.
 - Prima della chiamata: `giv video … --dry-run` dà `cost_est_usd` (listino × durata) e
@@ -438,11 +439,10 @@ e controllare: stile coerente, palette giusta, **nessun testo/lettera** indeside
   secondi d'uscita (0,0695 $/s a 720p, 0,1043 a 1080p, 0,2085 in 4k, 0,0232 a 360p) più
   ingresso al limite con immagini e il massimo del testo di ragionamento (circa 0,59 $). A
   fine job `cost_usage_usd` dà il costo dai token riportati.
-- Comandi sulle clip: extend e edit xai stimati sul caso più caro, con il costo vero di
-  xAI in `cost_usd` a fine job (extend nella prova: fatturati solo i secondi aggiunti più
-  l'ingresso); extend ed edit gemini come `giv video` gemini; upscale openrouter a
-  megapixel-secondo, con `cost_usd` di openrouter; upscale fal a secondi per fascia, solo
-  stima.
+- Comandi sulle clip: extend xai stimato su secondi aggiunti più ingresso ed edit xai sul
+  sorgente, con il costo vero di xAI in `cost_usd` a fine job e la stima accanto; extend
+  ed edit gemini come `giv video` gemini; upscale openrouter senza stima (da URL), con
+  `cost_usd` di openrouter; upscale fal a secondi per fascia, solo stima.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 

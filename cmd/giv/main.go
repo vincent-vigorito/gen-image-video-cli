@@ -193,8 +193,8 @@ Uso:
              [--kind image|video|other] [--caps]   --caps (con --kind video): capacità e $/s
   giv image  [flag] "<prompt>"     genera immagini
   giv video  [flag] "<prompt>"     genera un video (job asincrono ~1-5 min)
-  giv extend --video <mp4|url https> [--duration 2-10] "<come continua>"  allunga una clip (xai)
-  giv edit   --video <mp4|url https> "<cosa cambiare>"  modifica una clip (xai)
+  giv extend --video <mp4|url https> | --from <job_id> [--provider xai|gemini] [--duration 2-10|gemini 3-10] "<come continua>"  allunga una clip (xai; gemini solo da --from)
+  giv edit   --video <mp4|url https> | --from <job_id> [--provider xai|gemini] "<cosa cambiare>"  modifica una clip (xai; gemini solo da --from)
   giv job fetch --provider <p> <id>  scarica un job video già partito, senza nuovo avvio (--out, --name, --timeout)
   giv log    [-n N|--sum-cost [--by provider|model]]
                                    registro locale delle generazioni (giv-log.jsonl)
@@ -204,7 +204,7 @@ Uso:
                                    frase finale dei preset per quel modello (nessuna chiamata)
   giv story check|run|cut <file.json>  storyboard a più scene (check: valida e stima, gratuito;
                                    run: --scene <id> [--new-keyframe] [--new-job]; aiuto: giv story help)
-  giv upscale --video <file|url> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (openrouter o fal, a pagamento)
+  giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1-4] [--mode precise|creative] ["<prompt>"]  ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
   giv avatar --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]  personaggio che parla (fal)
   giv version                      stampa la versione
 
