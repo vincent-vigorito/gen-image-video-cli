@@ -7,11 +7,11 @@ versioning [SemVer](https://semver.org/lang/it/).
 ## [0.12.0] - in preparazione
 
 > **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
-> `giv voice` (xAI predefinita, voce `eve`; Gemini seconda via), a pagamento: con xAI
-> frazioni di centesimo per spot; il kit (`kit.json`) e il
-> controllo tecnico (`giv qc`) sono gratuiti e lavorano in locale. I comandi e gli
-> storyboard della 0.11.0 danno lo stesso risultato, salvo il picco audio, ora entro
-> -1 dBTP.
+> `giv voice` o dai testi dello storyboard (xAI predefinita, voce `eve`; Gemini seconda
+> via), a pagamento: con xAI frazioni di centesimo per spot. Il kit (`kit.json`) e il
+> controllo tecnico (`giv qc`) sono gratuiti e lavorano in locale; solo la trascrizione di
+> `giv qc --voice` è a pagamento. I comandi e gli storyboard della 0.11.0 danno lo stesso
+> risultato, salvo il picco audio, ora entro -1 dBTP.
 
 ### Aggiunto
 
