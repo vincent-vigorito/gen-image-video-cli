@@ -1,6 +1,7 @@
 package montage
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -39,17 +40,18 @@ const (
 )
 
 const (
-	qcBlackPixTh   = 0.10    // pixel nero: luminanza sotto il 10% (default di blackdetect)
-	qcDefectShare  = 0.5     // neri, fermi o muti per almeno metà della durata: difetto
-	qcMinDurationS = 1.0     // senza durata attesa, sotto 1 s è un avviso
-	qcDurationTolS = 0.2     // scarto ammesso dalla durata attesa: 0,2 s o il 2%
-	qcDurationTolP = 0.02    //
-	qcFPSTol       = 0.1     // scarto ammesso dagli fps attesi
-	qcLoudnessTol  = 1.0     // LU di scarto ammessi dal volume atteso
-	qcMaxIntervals = 50      // tratti riportati per controllo (il totale resta in value)
-	qcLogTail      = 1 << 20 // stderr letto della passata di analisi
-	qcMaxSeconds   = 86400.0 // tetto delle durate impostabili
-	qcMaxAtoms     = 1024    // atomi MP4 letti cercando moov
+	qcBlackPixTh   = 0.10     // pixel nero: luminanza sotto il 10% (default di blackdetect)
+	qcDefectShare  = 0.5      // neri, fermi o muti per almeno metà della durata: difetto
+	qcMinDurationS = 1.0      // senza durata attesa, sotto 1 s è un avviso
+	qcDurationTolS = 0.2      // scarto ammesso dalla durata attesa: 0,2 s o il 2%
+	qcDurationTolP = 0.02     //
+	qcFPSTol       = 0.1      // scarto ammesso dagli fps attesi
+	qcLoudnessTol  = 1.0      // LU di scarto ammessi dal volume atteso
+	qcMaxIntervals = 50       // tratti riportati per controllo (il totale resta in value)
+	qcLogTail      = 1 << 20  // coda dello stderr della passata di analisi (volume, errori)
+	qcMaxLine      = 64 << 10 // righe dello stderr più lunghe ignorate (quelle dei filtri sono corte)
+	qcMaxSeconds   = 86400.0  // tetto delle durate impostabili
+	qcMaxAtoms     = 1024     // atomi MP4 letti cercando moov
 )
 
 // QCThresholds sono le soglie del controllo; un campo a zero vale il suo
@@ -373,54 +375,115 @@ func qcSpan(start, end, duration float64) (QCInterval, bool) {
 	return QCInterval{Start: qcRound(start, 3), End: qcRound(end, 3), Duration: qcRound(end-start, 3)}, true
 }
 
-// parseQCLog legge dallo stderr della passata di analisi (QCArgs) i tratti
-// neri, fermi e muti e il volume; un tratto ancora aperto alla fine del file
-// si chiude alla durata.
-func parseQCLog(log string, duration float64, audio bool) qcAnalysis {
-	var a qcAnalysis
-	freeze, silence := -1.0, -1.0
-	add := func(list *[]QCInterval, start, end float64) {
-		if iv, ok := qcSpan(start, end, duration); ok {
-			*list = append(*list, iv)
+// qcParser legge lo stderr della passata di analisi (QCArgs) riga per riga,
+// man mano che arriva: i tratti neri, fermi e muti si contano tutti, anche
+// quando l'uscita supera la coda tenuta per il volume (qcLogTail).
+type qcParser struct {
+	duration        float64
+	a               qcAnalysis
+	freeze, silence float64 // inizio del tratto aperto; -1: nessuno
+	line            []byte  // riga in corso
+	skip            bool    // riga oltre qcMaxLine: ignorata fino all'a capo
+}
+
+// newQCParser è il lettore per un file lungo duration secondi (0: ignota).
+func newQCParser(duration float64) *qcParser {
+	return &qcParser{duration: duration, freeze: -1, silence: -1}
+}
+
+// Write divide b in righe (a capo o ritorno carrello) e le legge.
+func (p *qcParser) Write(b []byte) (int, error) {
+	n := len(b)
+	for len(b) > 0 {
+		i := bytes.IndexAny(b, "\r\n")
+		chunk := b
+		if i >= 0 {
+			chunk = b[:i]
 		}
-	}
-	for _, line := range strings.Split(log, "\n") {
-		name, rest := qcFilterLine(strings.TrimRight(line, "\r"))
-		switch name {
-		case "blackdetect":
-			s, ok1 := qcField(rest, "black_start:")
-			e, ok2 := qcField(rest, "black_end:")
-			if ok1 && ok2 {
-				add(&a.Black, s, e)
-			}
-		case "freezedetect":
-			if v, ok := qcField(rest, "freeze_start:"); ok {
-				freeze = v
-			} else if v, ok := qcField(rest, "freeze_end:"); ok && freeze >= 0 {
-				add(&a.Freeze, freeze, v)
-				freeze = -1
-			}
-		case "silencedetect":
-			if v, ok := qcField(rest, "silence_start:"); ok {
-				silence = math.Max(v, 0)
-			} else if v, ok := qcField(rest, "silence_end:"); ok && silence >= 0 {
-				add(&a.Silence, silence, v)
-				silence = -1
+		if !p.skip {
+			if len(p.line)+len(chunk) > qcMaxLine {
+				p.skip, p.line = true, p.line[:0]
+			} else {
+				p.line = append(p.line, chunk...)
 			}
 		}
+		if i < 0 {
+			break
+		}
+		if !p.skip {
+			p.parse(string(p.line))
+		}
+		p.line, p.skip = p.line[:0], false
+		b = b[i+1:]
 	}
-	if freeze >= 0 && duration > 0 {
-		add(&a.Freeze, freeze, duration)
+	return n, nil
+}
+
+// add aggiunge a list il tratto da start a end, se non è vuoto.
+func (p *qcParser) add(list *[]QCInterval, start, end float64) {
+	if iv, ok := qcSpan(start, end, p.duration); ok {
+		*list = append(*list, iv)
 	}
-	if silence >= 0 && duration > 0 {
-		add(&a.Silence, silence, duration)
+}
+
+// parse legge una riga.
+func (p *qcParser) parse(line string) {
+	name, rest := qcFilterLine(line)
+	switch name {
+	case "blackdetect":
+		s, ok1 := qcField(rest, "black_start:")
+		e, ok2 := qcField(rest, "black_end:")
+		if ok1 && ok2 {
+			p.add(&p.a.Black, s, e)
+		}
+	case "freezedetect":
+		if v, ok := qcField(rest, "freeze_start:"); ok {
+			p.freeze = v
+		} else if v, ok := qcField(rest, "freeze_end:"); ok && p.freeze >= 0 {
+			p.add(&p.a.Freeze, p.freeze, v)
+			p.freeze = -1
+		}
+	case "silencedetect":
+		if v, ok := qcField(rest, "silence_start:"); ok {
+			p.silence = math.Max(v, 0)
+		} else if v, ok := qcField(rest, "silence_end:"); ok && p.silence >= 0 {
+			p.add(&p.a.Silence, p.silence, v)
+			p.silence = -1
+		}
 	}
+}
+
+// finish chiude la lettura: l'ultima riga, i tratti ancora aperti alla fine
+// del file (chiusi alla durata) e, con l'audio, il volume letto da tail (la
+// coda dello stderr, dove loudnorm scrive la misura).
+func (p *qcParser) finish(tail string, audio bool) qcAnalysis {
+	if len(p.line) > 0 && !p.skip {
+		p.parse(string(p.line))
+	}
+	p.line, p.skip = p.line[:0], false
+	if p.freeze >= 0 && p.duration > 0 {
+		p.add(&p.a.Freeze, p.freeze, p.duration)
+	}
+	if p.silence >= 0 && p.duration > 0 {
+		p.add(&p.a.Silence, p.silence, p.duration)
+	}
+	p.freeze, p.silence = -1, -1
+	a := p.a
 	sortIntervals(a.Black)
 	if audio {
-		a.Loudness, a.LoudErr = ParseLoudnorm(log)
+		a.Loudness, a.LoudErr = ParseLoudnorm(tail)
 		a.Mute = errors.Is(a.LoudErr, ErrInvalid)
 	}
 	return a
+}
+
+// parseQCLog legge dallo stderr completo della passata di analisi (QCArgs)
+// i tratti neri, fermi e muti e il volume (qcParser); un tratto ancora aperto
+// alla fine del file si chiude alla durata.
+func parseQCLog(log string, duration float64, audio bool) qcAnalysis {
+	p := newQCParser(duration)
+	p.Write([]byte(log))
+	return p.finish(log, audio)
 }
 
 // qcSubtract è a senza i tratti di b (ordinati), tenendo i pezzi lunghi
@@ -481,11 +544,13 @@ func (t Tool) QC(ctx context.Context, path string, info *Info, o QCOptions) (*QC
 		if err != nil {
 			return nil, err
 		}
-		_, stderr, err := runTail(ctx, bin, t.timeout(), args, qcLogTail)
+		// i tratti si leggono mentre ffmpeg scrive: la coda serve solo al volume
+		p := newQCParser(info.Duration)
+		_, stderr, err := runTailTo(ctx, bin, t.timeout(), args, qcLogTail, p)
 		if err != nil {
 			return nil, fmt.Errorf("%s: analisi: %w", path, err)
 		}
-		a = parseQCLog(string(stderr), info.Duration, info.Audio != nil)
+		a = p.finish(string(stderr), info.Audio != nil)
 	}
 	r := &QCReport{File: path, DurationS: qcRound(info.Duration, 3)}
 	if v := info.Video; v != nil {
