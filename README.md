@@ -148,7 +148,8 @@ giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
 giv story check <storyboard.json>             # valida uno storyboard a più scene e ne stima il costo
 giv story run [--scene <id> [--new-keyframe]] <storyboard.json>
                                               # genera le scene video (a pagamento), riprende da dove si era fermato
-giv story cut <storyboard.json>               # monta con ffmpeg le scene già pronte in un solo video
+giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+                                              # monta con ffmpeg le scene già pronte, un file per formato
 giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
 giv presets [--json]                          # preset di camera ed effetti
@@ -159,6 +160,17 @@ giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1
                                               # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https; a pagamento)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                               # personaggio che parla (fal, job asincrono, a pagamento)
+giv post <operazione> --video <file> [flag dell'operazione] [--out D] [--name S] [--dry-run]
+                                              # rifinitura in locale con ffmpeg, gratuita: trim, speed, freeze,
+                                              # reframe, overlay, mix (giv post help)
+giv sheet   <file|cartella|storyboard.json> [--every <s> | --frames <n>] [--cols <n>] [--labels]
+                                              # foglio di contatto JPEG (locale con ffmpeg, gratuito)
+giv frame   --video <file> --at <s> | --last [--width <px>]
+                                              # un fotogramma PNG, con --width la miniatura (locale, gratuito)
+giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
+                                              # GIF animata, palette in due passate (locale, gratuita)
+giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
+                                              # un file per canale col suo profilo, in locale con ffmpeg (gratuito)
 giv version
 ```
 
@@ -178,7 +190,12 @@ prima o dopo.
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | nessun flag: il file dello storyboard è l'unico argomento |
 | `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
-| `story cut` | nessun flag: il file dello storyboard è l'unico argomento |
+| `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS |
+| `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
+| `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
+| `frame` | `--video <file>` obbligatorio · `--at <s>` oppure `--last` · `--width <px>` · `--out` · `--name` · `--dry-run` |
+| `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
+| `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -500,6 +517,162 @@ giv job fetch --provider xai --timeout 30m --name s2 <id>
 - `--timeout` (di `giv video` e di `job fetch`) copre l'attesa, i controlli dello stato e
   lo scaricamento.
 
+## Rifinitura in locale: `giv post`
+
+`giv post <operazione>` rifinisce un video che c'è già con `ffmpeg` e `ffprobe` (da
+installare e nel PATH): niente rete, nessuna chiave, nessuna spesa.
+
+```bash
+giv post help                                     # operazioni disponibili; giv post <operazione> --help
+giv post trim    --video spot.mp4 --start 0.5 --end 6
+giv post speed   --video spot.mp4 --factor 0.5
+giv post freeze  --video spot.mp4 --at 4 --duration 2
+giv post reframe --video spot.mp4 --aspect 9:16 --fit crop --focus 0.4
+giv post overlay --video spot.mp4 --logo img/logo.png --logo-pos alto-destra --logo-width 0.12 \
+                 --title "Crema alle erbe" --from 1 --duration 3 --pos basso \
+                 --end-card img/sfondo.png --end-text "Swerpify" --end-duration 3
+giv post mix     --video spot.mp4 --music musica.mp3 --music-volume 0.25 --duck \
+                 --voice voce.wav --voice-at 0.5 --loudness -14
+```
+
+Comune a tutte le operazioni:
+
+- **flag comuni**: `--video <file>` (obbligatorio, file locale con una traccia video),
+  `--out <dir>` (default `out`, creata se manca), `--name <nome>` (nome del file senza
+  cartelle; default `<nome del video>-<operazione>`), `--dry-run` (solo controlli e piano
+  in JSON, nessun file);
+- **mai sovrascrivere**: l'ingresso non si modifica mai; se il nome d'uscita è già preso
+  il file nuovo prende `-2`, `-3`… (leggere il percorso dal JSON); un'uscita che è il file
+  in ingresso esce con codice 2. Il file compare in `--out` solo a lavoro riuscito;
+- **controlli**: un valore non valido (numero fuori intervallo, `NaN`, flag vuoto, flag che
+  dipende da un altro assente, posizione o colore fuori elenco) esce con codice 2 prima di
+  lanciare ffmpeg; ffmpeg o ffprobe mancanti danno codice 1. Tutto entro 30 minuti;
+- **uscita**: su stdout solo il JSON del risultato (`command`, per esempio `post trim`;
+  `provider` `local`, `model` `ffmpeg`; `inputs` per ruolo col percorso e l'impronta;
+  `params`; `files`; `duration_s`, `width`, `height`, `fps`, `video_codec`, `audio_codec`;
+  `cost_usd` 0; `warnings`), avvisi ed errori su stderr; una riga a costo zero in
+  `giv-log.jsonl`. Video H.264, audio AAC 48 kHz, `moov` in testa.
+
+| Operazione | Flag | Cosa fa |
+|---|---|---|
+| `trim` | `--start <s>` (default 0) · `--end <s>` (default: la fine) | tiene solo il tratto fra i due istanti |
+| `speed` | `--factor <0.25-4>` obbligatorio | 2 = due volte più veloce (metà durata), 0.5 = rallentato; l'audio segue alla stessa velocità senza cambiare tono (`atempo`) |
+| `freeze` | `--at <s>` (default 0) · `--duration <s>` obbligatorio (fino a 60) | ferma il fotogramma a `--at` per `--duration` secondi, poi il video riprende; l'audio fa una pausa di silenzio; tempi arrotondati al fotogramma |
+| `reframe` | `--aspect 9:16\|1:1\|4:5\|16:9` obbligatorio · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` | cambio formato: il lato corto resta quello del video (da 1920×1080: 1080×1920, 1080×1080, 1080×1350); `crop` riempie il quadro tagliando i bordi, `pad` mette bande nere, `blur` mette il video intero sopra lo stesso video sfocato; `--focus` (solo `crop`, da 0 a 1, default 0.5,0.5) dice quale punto tenere. Nome di default `<video>-9x16.mp4`… |
+| `overlay` | vedi sotto | logo, titolo e cartello finale |
+| `mix` | vedi sotto | musica, voce fuori campo e volume finale |
+
+Con `reframe` l'inquadratura è **fissa**: un soggetto che si sposta può uscire dal quadro;
+controllare l'uscita (o scegliere `pad`/`blur`).
+
+**`giv post overlay`** posa sul video, dentro i **margini sicuri** del formato (14% in
+alto, 35% in basso e 6% ai lati per i 9:16, dalla guida annunci Meta per i Reels; 5% per
+lato per gli altri formati):
+
+- un **logo**: `--logo <png|jpg|webp>` (la trasparenza resta), `--logo-pos` (default
+  `alto-destra`), `--logo-width` (frazione della larghezza del video, default 0.12),
+  `--logo-opacity` (da 0 a 1, default 1), `--logo-from` e `--logo-to` (secondi; default
+  tutto il video). Un logo che non sta nei margini esce con codice 2;
+- un **titolo**: `--title "<testo>"`, `--from <s>` (default 0), `--duration <s>`
+  (default 3, dentro la durata del video), `--pos` (default `basso`), con una dissolvenza
+  di 0,3 s;
+- un **cartello finale** accodato dopo il video, lungo `--end-duration` secondi (default
+  3, al più 60; sotto il cartello l'audio è muto): `--end-color <#RRGGBB>` (sfondo, default
+  nero), `--end-card <immagine>` (sfondo, contenuta nel quadro sul colore), `--end-logo
+  <immagine>` (al centro, o sopra il testo), `--end-text` (al centro), `--end-subtext` (in
+  basso, più piccolo). Basta uno di questi flag per avere il cartello;
+- per titolo e cartello: `--font <ttf|otf|ttc>` (default DejaVu Sans, se installato) e
+  `--color <#RRGGBB>` (default bianco, col bordo nero).
+
+Posizioni: `alto-sinistra`, `alto`, `alto-destra`, `sinistra`, `centro`, `destra`,
+`basso-sinistra`, `basso`, `basso-destra`. I testi si scrivono **alla lettera** (graffe,
+barre inverse e `\N` compresi; un a capo va a riga nuova) in un file `.ass` generato da
+giv, mai nella stringa dei filtri di ffmpeg. Il JSON riporta in `params` il riquadro del
+logo in pixel (`logo.box`, `end_card.logo_box`), i margini e `duration_out`.
+
+**`giv post mix`** lavora sull'audio:
+
+- `--music <file>` (wav, mp3, m4a, ogg, flac…): ripetuta da capo se è più corta del video,
+  tagliata alla fine; `--music-volume` (moltiplicatore oltre 0 e fino a 4, default 0.25);
+  `--duck` abbassa la musica mentre parla la voce (servono `--music` e `--voice`);
+- `--voice <file>`: voce fuori campo sommata all'audio del video, da `--voice-at <s>`
+  (default 0); la parte oltre la fine del video si taglia;
+- `--loudness <LUFS>`: volume finale in LUFS integrati, da -70 a -5, misurato e corretto in
+  due passate (`loudnorm`); default **-14**, la convenzione dei social (nessuna fonte
+  ufficiale, quindi impostabile); `off` lascia il volume com'è.
+
+L'audio del video resta e si somma a voce e musica (senza audio si parte dal silenzio); il
+video si copia senza ricodifica se è già H.264. Serve almeno uno fra `--music`, `--voice` e
+un `--loudness` diverso da `off`.
+
+## Foglio di contatto, fotogramma e GIF: `giv sheet`, `giv frame`, `giv gif`
+
+Tre comandi per **guardare** un video senza aprirlo, in locale con `ffmpeg` e `ffprobe`:
+niente rete, nessuna spesa. Valgono le regole comuni di `giv post` (`--out`, `--name`,
+`--dry-run`, mai sovrascrivere, codice 2 prima di ffmpeg, JSON su stdout e riga a costo
+zero in `giv-log.jsonl`).
+
+```bash
+giv sheet spot.mp4 --frames 8 --cols 4 --labels   # foglio di contatto JPEG di un video
+giv sheet clip/ --frames 4 --labels               # una riga per file della cartella
+giv sheet storyboard.json --labels                # una riga per scena: fotogramma chiave e clip
+giv frame --video spot.mp4 --at 1.5               # un fotogramma PNG
+giv frame --video scena-1.mp4 --last              # l'ultimo fotogramma (attacco della scena dopo)
+giv gif   --video spot.mp4 --start 2 --end 5 --width 480 --fps 12
+```
+
+- **`giv sheet <file|cartella|storyboard.json>`** (il file si può dare anche con
+  `--video`) mette in griglia i fotogrammi e salva `<nome>-foglio.jpg`: `--every <s>` un
+  fotogramma ogni s secondi da 0 (più di 0, al più 3600), oppure `--frames <n>` n
+  fotogrammi a intervalli uguali (1-100); senza nessuno dei due, uno per colonna. `--cols`
+  da 1 a 12 (default 4), al più 200 riquadri. `--labels` scrive su ogni riquadro
+  l'istante, con una cartella anche il nome del file, con uno storyboard l'id della scena
+  e la ripresa. Con una **cartella**: una riga per file, in ordine di nome (video `.mp4`
+  `.m4v` `.mov` `.mkv` `.webm` `.avi` `.ts`, immagini `.png` `.jpg` `.jpeg` `.webp`; solo
+  file normali, i link si saltano con un avviso). Con uno **storyboard**: una riga per
+  scena, col fotogramma chiave se c'è e i fotogrammi della clip in uso (`giv story run`) o
+  del file della scena; le scene senza clip né fotogramma chiave si saltano con un avviso.
+  In `params`: `mode` (`file`, `cartella`, `storyboard`), `cols`, `rows`, `cells`, le misure
+  dei riquadri e del foglio, `scenes` con uno storyboard.
+- **`giv frame --video <file>`** salva un fotogramma in PNG (`<nome>-fotogramma.png`):
+  `--at <s>` (dall'inizio, entro la durata) oppure `--last` (l'ultimo), uno solo dei due;
+  `--width <px>` (16-7680, altezza in proporzione) ne fa una miniatura.
+- **`giv gif --video <file>`** fa una GIF animata ripetuta all'infinito (`<nome>-gif.gif`,
+  palette calcolata in due passate) dal tratto fra `--start` (default 0) e `--end`
+  (default la fine), al più 60 s; `--width` da 16 a 1920 (default 480, mai oltre la
+  larghezza del video: in quel caso un avviso), `--fps` da 1 a 30 (default 12).
+
+## Esportazione per canale: `giv export`
+
+`giv export` prende un video finito e scrive **un file per canale** col suo profilo, in
+locale con `ffmpeg` (niente rete, nessuna spesa; regole comuni di `giv post`):
+
+```bash
+giv export --video spot.mp4 --for instagram,tiktok,youtube,linkedin
+giv export --video spot.mp4 --for instagram:4:5,youtube:9:16 --fit blur --loudness -16
+```
+
+- `--for <canali>` (obbligatorio): `instagram`, `tiktok`, `youtube`, `linkedin` separati da
+  virgole, ognuno col formato facoltativo `<canale>:<formato>`. Formato predefinito: 9:16
+  per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; YouTube in 9:16, 1:1 o 4:5 è
+  uno Short.
+- `--fit crop|pad|blur` e `--focus <x>[,<y>]` come in `giv post reframe`;
+  `--loudness <lufs>|off` come in `giv post mix` (default -14 LUFS, picco -1 dBTP).
+- Misure 1080×1920, 1080×1080, 1080×1350, 1920×1080; H.264 High, AAC 48 kHz stereo,
+  `moov` in testa. Fotogrammi al secondo: 30 per Instagram e TikTok; per YouTube quelli
+  del video (altrimenti 30); per LinkedIn quelli del video se fra 10 e 60 (altrimenti 30).
+- Durata: Instagram da 3 s a 15 min, TikTok fino a 10 min, YouTube fino a 15 min (Shorts
+  3 min), LinkedIn da 3 s a 10 min. Un video fuori dai limiti di un canale esce con
+  codice 2 prima di scrivere qualsiasi file.
+- File `<nome>-<canale>-<formato>.mp4` in `--out` (es. `spot-instagram-9x16.mp4`;
+  `<nome>` è `--name` o il nome del video), una riga a costo zero in `giv-log.jsonl` per
+  file. Il JSON ha `command` `export`, `files` ed `exports[]` con `channel`, `aspect`,
+  `file` (con `--dry-run` `output`), misure, codec, `loudness_lufs` e `convention`.
+
+I valori che non vengono da una specifica ufficiale del canale (i -14 LUFS, le misure del
+feed di Instagram 4:5 e 1:1, il formato di TikTok) sono **convenzioni**: il manifest le
+elenca in `exports[].convention`.
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -525,22 +698,33 @@ errori vanno su stderr. `giv story help` (o `giv story --help`) e `giv story <so
   "riferimenti": { "prodotto": ["img/prodotto.png"] },
   "scene": [
     { "id": "s1", "tipo": "video", "durata": 5, "immagine": "img/prodotto.png",
-      "preset": ["dolly-in"], "prompt": "il vasetto di crema su un piano di legno chiaro…",
-      "voce": "voce/s1.wav" },
+      "preset": ["dolly-in"], "fuoco": 0.4,
+      "prompt": "il vasetto di crema su un piano di legno chiaro…", "voce": "voce/s1.wav" },
     { "id": "s2", "tipo": "video", "durata": 5, "continua_da": "s1", "preset": ["orbit"],
       "prompt": "la camera gira attorno al vasetto…", "voce": "voce/s2.wav" },
     { "id": "s3", "tipo": "video", "durata": 5, "usa": ["prodotto"], "preset": ["static"],
-      "prompt": "una mano apre il vasetto e mostra la crema…" },
+      "taglio": { "da": 0.5 }, "prompt": "una mano apre il vasetto e mostra la crema…" },
     { "id": "chiusura", "tipo": "immagine", "durata": 3, "file": "img/logo.png",
       "voce": "voce/chiusura.wav" }
   ],
-  "montaggio": { "transizione": "dissolvenza", "uscita": "spot.mp4" }
+  "montaggio": {
+    "transizione": "dissolvenza", "uscita": "spot.mp4",
+    "formati": ["16:9", "9:16"], "adatta": "ritaglio",
+    "musica": { "file": "musica/musica.wav", "volume": 0.2, "sotto_voce": true, "sfuma_fine": 2 },
+    "logo": { "file": "img/logo.png", "posizione": "alto-destra", "larghezza": 0.12 },
+    "titoli": [ { "testo": "Crema alle erbe", "scena": "s1", "da": 0.5, "durata": 3 } ],
+    "cartello_finale": { "durata": 3, "sfondo": "#1E3A2B", "testo": "Crema alle erbe",
+                         "sottotesto": "in erboristeria" },
+    "stile_testi": { "colore": "#FFFFFF", "bordo": "#000000" },
+    "volume": -14
+  }
 }
 ```
 
 Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost_total_usd`
-1,5. I file in `examples/spot/img/` e `voce/` sono segnaposto (tinte piatte e silenzio):
-sostituirli con la foto del prodotto, il logo e la voce vera.
+1,5 (il `taglio` di s3 cambia solo il montaggio, non la durata chiesta al modello). I file in
+`examples/spot/img/`, `voce/` e `musica/` sono segnaposto (tinte piatte e silenzio):
+sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
 
 | Campo | Cosa contiene |
 |---|---|
@@ -552,7 +736,8 @@ sostituirli con la foto del prodotto, il logo e la voce vera.
 | `riferimenti` | insiemi di immagini per nome (`"prodotto": ["img/prodotto.png"]`), richiamati dalle scene con `usa` |
 | `scene` | le scene, in ordine |
 | `avatar` | `modello` (`standard`, default, o `pro`) delle scene avatar che non lo indicano |
-| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1), `sottotitoli` (file), `uscita` (file finale) |
+| `montaggio` | `transizione` (`taglio`, default, o `dissolvenza`), `musica` (`file`, `volume` da 0 a 1, `sotto_voce`, `sfuma_fine`), `sottotitoli` (file), `uscita` (file finale); dalla 0.11.0 `formati`, `adatta`, `logo`, `titoli`, `cartello_finale`, `stile_testi`, `volume`: vedi [Montaggio](#montaggio-giv-story-cut) |
+| `foglio_contatto` | `false` perché `giv story run` e `giv story cut` non scrivano `foglio-contatto.jpg` accanto allo storyboard (default: lo scrivono) |
 
 Ogni scena ha un `id` (lettere, cifre, `_` e `-`, al massimo 64 caratteri), un `tipo`, una
 `durata` in secondi e, facoltativa, la `voce`: un file audio fuori campo, messo al
@@ -578,6 +763,14 @@ montaggio. `ritardo_voce` (secondi, anche decimali, finito e non negativo; solo 
   un'illustrazione serve `"tutela": "illustrazione"`. Un valore sconosciuto esce con
   codice 2.
 - `clip`: un `file` video già pronto (ripresa vera, screencast).
+- campi di montaggio di una scena (facoltativi, usati solo da `giv story cut`): `fuoco`, il
+  punto da tenere quando il montaggio ritaglia la scena per un altro formato (`"adatta":
+  "ritaglio"`): un numero da 0 (sinistra) a 1 (destra) oppure `{"x": …, "y": …}` (y da 0 in
+  alto a 1 in basso), default 0.5 cioè il centro; per le scene `video`, `clip` e `avatar`
+  anche `taglio` (`{"da": 0.5, "a": 4}`: il pezzo della clip da usare, in secondi dall'inizio
+  del file; senza `a` fino alla fine) e `velocita` (da 0.25 a 4, 2 = due volte più veloce,
+  l'audio della clip segue). Con `taglio` o `velocita` la scena dura nel montaggio quanto
+  il pezzo usato diviso la velocità; `durata` resta la lunghezza chiesta al modello.
 - `immagine`: un `file` immagine fermo, con `durata` obbligatoria (cartelli, chiusure).
 - `avatar`: un personaggio che parla, generato da `giv story run` come `giv avatar` (fal).
   `immagine` (un file della cartella dello storyboard) e `voce` obbligatorie; poi
@@ -637,6 +830,9 @@ scaricano e si controllano prima del fotogramma chiave: uno non valido ferma la 
 senza spesa. Le clip vanno in `clip/` nella cartella
 dello storyboard (`<id>-r<N>-<data>.mp4`, mai sovrascritte) e ogni clip entra nel
 registro di `giv log` con `command` `story video` (`story avatar` per le scene avatar).
+Alla fine riscrive `foglio-contatto.jpg` accanto allo storyboard, come `giv sheet
+storyboard.json --labels` (salvo `"foglio_contatto": false`; un problema col foglio è solo
+un avviso).
 L'attesa di ogni video ha un tetto di 15 minuti.
 
 **Stato.** Lo stato delle scene sta in un solo file accanto allo storyboard,
@@ -698,10 +894,13 @@ le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `cost_
 ### Montaggio: `giv story cut`
 
 ```bash
-giv story cut examples/spot/storyboard.json       # JSON su stdout: file scritto, durata, formato
+giv story cut examples/spot/storyboard.json       # JSON su stdout: file scritti, durata, formato
+giv story cut --formato 9:16 examples/spot/storyboard.json          # solo spot-9x16.mp4
+giv story cut --export instagram,youtube examples/spot/storyboard.json
+                                                  # in più un file per canale dal montato
 ```
 
-`giv story cut` monta in un solo video le scene già pronte, con `ffmpeg` e `ffprobe` (da
+`giv story cut` monta in un video le scene già pronte, con `ffmpeg` e `ffprobe` (da
 installare e nel PATH, per esempio `apt install ffmpeg`): niente rete, niente generazione,
 nessuna chiave. Ogni scena dà al montaggio:
 
@@ -727,6 +926,57 @@ Come monta:
 - **uscita**: `montaggio.uscita`, altrimenti `<nome dello storyboard>.mp4`, sempre dentro
   la cartella dello storyboard anche seguendo i link. Si riscrive a ogni `giv story cut`;
   il file compare solo a montaggio riuscito. Tutto il montaggio sta entro 30 minuti.
+  Un'uscita non sostituisce mai lo storyboard, il suo stato, i file che nomina né le clip
+  generate (codice 2 prima di montare).
+- **foglio di contatto**: dopo il montaggio riscrive `foglio-contatto.jpg` accanto allo
+  storyboard (una riga per scena con id e ripresa, come `giv sheet`), salvo
+  `"foglio_contatto": false`.
+
+Dalla 0.11.0 il blocco `montaggio` ha anche questi campi, tutti facoltativi (senza, il
+montaggio resta quello di prima):
+
+- **`formati`**: i formati da montare, un file per formato (`"16:9"`, `"9:16"`, `"1:1"`,
+  `"4:5"`): `<uscita>-16x9.mp4`, `<uscita>-9x16.mp4`… Nessun formato predefinito: senza il
+  campo un solo file nel formato dello storyboard, come prima. Il lato corto resta quello
+  della `risoluzione` (720p in 9:16 è 720×1280). `--formato <r>` monta solo quel formato
+  (che deve essere fra `formati`, se ci sono).
+- **`adatta`**: come una scena entra in un formato diverso dal suo: `bande` (default,
+  bande nere), `ritaglio` (riempie il quadro tenendo il `fuoco` della scena) o `sfocato`
+  (la scena intera sopra la stessa sfocata).
+- **`logo`**: `file` (`.png`, `.jpg` o `.webp` nella cartella, la trasparenza resta),
+  `posizione` (default `alto-destra`; le posizioni di `giv post overlay`), `larghezza`
+  (frazione della larghezza del quadro, default 0.12), `opacita` (default 1), `da` e `a`
+  (secondi dall'inizio del montato; default dall'inizio alla fine delle scene, non sul
+  cartello). Sta dentro i margini sicuri di ogni formato, come in `giv post overlay`.
+- **`titoli`**: elenco (al più 50) di `{"testo": …}` con `scena` (id: i tempi contano
+  dall'inizio di quella scena; senza, dall'inizio del montato), `da` (secondi, default 0),
+  `durata` (default 3), `posizione` (default `basso`) e `stile` (al posto di
+  `stile_testi`), con una dissolvenza di 0,3 s.
+- **`cartello_finale`**: accodato dopo l'ultima scena a taglio netto, senza audio suo (la
+  musica continua): `durata` (default 3, al più 60), `sfondo` (`#RRGGBB`, default nero),
+  `logo` (immagine al centro), `testo` e `sottotesto`; serve almeno uno fra logo, testo e
+  sottotesto.
+- **`stile_testi`**: stile di titoli e cartello: `font` (file `.ttf`, `.otf` o `.ttc`
+  nella cartella dello storyboard; default DejaVu Sans, se installato), `colore`
+  (`#RRGGBB`, default bianco), `bordo` (colore del contorno, default nero, o `"nessuno"`),
+  `dimensione` (altezza dei caratteri in frazione dell'altezza del quadro, da 0.01 a
+  0.25).
+- **`musica`**: oltre a `file` e `volume`, `sotto_voce: true` abbassa la musica mentre
+  parlano le voci (serve almeno una scena con `voce`) e `sfuma_fine` sono i secondi di
+  dissolvenza in chiusura (da 0 a 60).
+- **`volume`**: volume finale in LUFS integrati, da -70 a -5 (es. -14, la convenzione dei
+  social), misurato e corretto in due passate; senza il campo il volume resta com'è.
+
+Testi di titoli e cartello: alla lettera (al più 2000 byte, UTF-8), in un file `.ass`
+generato da giv, mai nella stringa dei filtri di ffmpeg. Font, logo e musica devono stare
+nella cartella dello storyboard.
+
+`--export <canali>` (come `giv export --for`: `instagram`, `tiktok`, `youtube`,
+`linkedin`, anche `<canale>:<formato>`) esporta dopo il montaggio un file per canale dal
+montato nel formato del canale: `<uscita>-<canale>-<formato>.mp4` (es.
+`spot-instagram-9x16.mp4`), col profilo di [`giv export`](#esportazione-per-canale-giv-export),
+ritaglio al centro e volume `montaggio.volume` o -14 LUFS. Il formato del canale deve
+essere fra quelli montati, altrimenti codice 2 prima di montare.
 - **cartella di lavoro**: privata, nella cartella temporanea del sistema (come per le
   scene avatar di `giv story run`). Se `TMPDIR` o una cartella sopra è scrivibile da altri
   utenti senza sticky bit, `giv` si ferma prima e chiede di impostare `TMPDIR` su una
@@ -735,7 +985,9 @@ Come monta:
 Il JSON su stdout ha `storyboard`, `output`, `scenes`, `duration_s` (letta dal file
 scritto), `expected_duration_s` (dalle durate delle scene), `width`, `height`, `fps`,
 `video_codec`, `audio_codec` e `warnings` (per esempio una clip più corta della sua
-durata o una voce tagliata). Esce con codice 2 per clip mancanti, file illeggibili,
+durata o una voce tagliata); con `--export`, `exports` come in `giv export`. Con
+`formati` o `--formato` il JSON ha `storyboard`, `scenes`, `formats` (un risultato come
+sopra per formato, con `format`) ed `exports`. Esce con codice 2 per clip mancanti, file illeggibili,
 storyboard o formato non validi e uscita fuori dalla cartella; con codice 1 se mancano
 `ffmpeg` o `ffprobe` o il montaggio fallisce.
 
@@ -751,7 +1003,8 @@ Da quel momento qualsiasi sessione sa usare il CLI: contratto di output, matrice
 provider, ricette (reference di stile, image-to-video, spot da foto di prodotto, mascotte
 fra scene, preset di camera, video con Gemini, Kling 4.0 con fotogrammi intermedi e
 inquadrature, spot a più scene con lo storyboard, voce fuori campo,
-allungare, modificare e ingrandire una clip, personaggio che parla),
+allungare, modificare e ingrandire una clip, personaggio che parla, rifinitura in locale
+con `giv post`, foglio di contatto e fotogrammi, esportazione per canale),
 controlli prima di spendere, recupero dei job, costi indicativi e quirk.
 
 ## Multi-progetto
@@ -778,7 +1031,7 @@ internal/caps/            capacità e prezzi dei modelli video (OpenRouter /vide
 internal/presets/         libreria dei preset (presets.json incorporato) e composizione del prompt
 internal/jobs/            stato dei job video avviati (giv-jobs.jsonl), per giv job fetch
 internal/story/           formato, controlli e stato (<nome>.stato.json) dello storyboard di giv story
-internal/montage/         montaggio con ffmpeg e ffprobe, per giv story cut
+internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut e operazioni locali (giv post…, sheet, frame, gif, export)
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
 examples/spot/            storyboard d'esempio con file segnaposto

@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -61,12 +61,25 @@ giv upscale --video <url|file> [--provider openrouter|fal] [--factor 1.5-3|fal 1
                                                 # ingrandisce una clip (file locale solo con fal; openrouter vuole un URL https)
 giv avatar  --image <file|url> --audio <wav|mp3> [--model standard|pro] ["<prompt>"]
                                                 # personaggio che parla (fal, a pagamento)
+giv post <operazione> --video <file> [flag] [--out D] [--name S] [--dry-run]
+                                                # rifinitura in locale con ffmpeg, gratis: trim, speed,
+                                                # freeze, reframe, overlay, mix (giv post help)
+giv sheet   <file|cartella|storyboard.json> [--every <s> | --frames <n>] [--cols <n>] [--labels]
+                                                # foglio di contatto JPEG, in locale e gratis
+giv frame   --video <file> --at <s> | --last [--width <px>]
+                                                # un fotogramma PNG (con --width la miniatura), gratis
+giv gif     --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]
+                                                # GIF animata (default 480 px, 12 fps), gratis
+giv export  --video <file> --for instagram,tiktok,youtube,linkedin [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]
+                                                # un file per canale col suo profilo, in locale e gratis
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
 giv story run [--scene <id> [--new-keyframe | --new-job]] <storyboard.json>
                                                 # genera le scene video e avatar, a pagamento; riprende da dove si era fermato
-giv story cut <storyboard.json>                 # monta con ffmpeg le scene pronte in un solo video, gratis
+giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+                                                # monta con ffmpeg le scene pronte, un file per formato
+                                                # di montaggio.formati, gratis; --export come giv export --for
 giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
@@ -105,6 +118,24 @@ gemini, `--image` e `--audio` per avatar), `--duration` (extend), `--factor` e `
 (upscale; `--mode` e prompt solo openrouter), `--model` (avatar `standard|pro`),
 `--dry-run`, `--max-cost`, `--strict`, `--timeout`, `--out`, `--name`; ogni altro flag di
 `giv video` è rifiutato con codice 2.
+`post <operazione>` (locale, nessuna chiave né spesa): `--video <file>` obbligatorio,
+`--out`, `--name`, `--dry-run`; `trim --start --end` · `speed --factor 0.25-4` ·
+`freeze --at --duration` · `reframe --aspect 9:16|1:1|4:5|16:9 --fit crop|pad|blur --focus
+<x>[,<y>]` · `overlay --logo --logo-pos --logo-width --logo-opacity --logo-from --logo-to
+--title --from --duration --pos --end-card --end-color --end-logo --end-text --end-subtext
+--end-duration --font --color` · `mix --music --music-volume --duck --voice --voice-at
+--loudness -14|off`. JSON con `command` `post <operazione>`, `provider` `local`,
+`cost_usd` 0; l'ingresso non si sovrascrive mai (nome preso → `-2`, `-3`…).
+`sheet` (locale, stesse regole): file, cartella o storyboard come argomento, `--every <s>`
+oppure `--frames 1-100`, `--cols 1-12` (default 4, al più 200 riquadri), `--labels`
+(istante; nome del file con una cartella; scena e ripresa con uno storyboard) →
+`<nome>-foglio.jpg`. `frame --video <file> --at <s>|--last [--width 16-7680]` →
+`<nome>-fotogramma.png`. `gif --video <file> [--start] [--end] (al più 60 s) [--width
+16-1920, default 480] [--fps 1-30, default 12]` → `<nome>-gif.gif`.
+`export --video <file> --for <canale>[:<formato>],…` (instagram 9:16 Reel, anche 4:5 e
+1:1; tiktok 9:16; youtube 16:9, Shorts in 9:16/1:1/4:5; linkedin 16:9) `[--fit] [--focus]
+[--loudness -14|off]` → `<nome>-<canale>-<formato>.mp4` per canale; durata fuori dai
+limiti del canale = codice 2 prima di scrivere; convenzioni in `exports[].convention`.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -337,6 +368,10 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    - `clip` per un video già pronto, `immagine` con `durata` per cartelli e chiusura;
    - `voce` sulle scene con la voce fuori campo; `ritardo_voce` (secondi) la fa partire
      dopo l'inizio della scena;
+   - per il montaggio, facoltativi: `fuoco` (0-1, o `{"x": …, "y": …}`: il punto da
+     tenere quando un altro formato ritaglia la scena), `taglio` (`{"da": 0.5, "a": 4}`,
+     il pezzo della clip da usare) e `velocita` (0.25-4); `durata` resta quella chiesta
+     al modello, quindi la stima non cambia;
    - `avatar` per un personaggio che parla in scena (fal): `immagine` e `voce`
      obbligatorie, `prompt`, `modello` `standard` o `pro` (default nel blocco
      `"avatar": {"modello": …}`); dura quanto la voce, niente `durata` né `ritardo_voce`.
@@ -383,6 +418,24 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    0,5 s), `musica` in loop (`volume` 0,25 se non indicato), `sottotitoli` (`.srt`,
    `.ass`), `uscita` nella cartella dello spot, riscritta a ogni cut. Sul JSON confrontare
    `duration_s` con `expected_duration_s` e leggere i `warnings`, poi la verifica visiva.
+   Dalla 0.11.0, tutti facoltativi (senza, il montaggio di prima):
+   - `formati` (`["16:9", "9:16", "1:1", "4:5"]`, nessuno predefinito): un file per
+     formato, `spot-9x16.mp4`…; `adatta` `bande` (default), `ritaglio` (col `fuoco` della
+     scena) o `sfocato`; `--formato 9:16` ne monta uno solo;
+   - `logo` (`file`, `posizione` default `alto-destra`, `larghezza` 0.12, `opacita`, `da`,
+     `a`), `titoli` (`[{"testo": …, "scena": "s1", "da": 0.5, "durata": 3, "posizione":
+     "basso"}]`, tempi dall'inizio della scena), `cartello_finale` (`durata` 3, `sfondo`
+     `#RRGGBB`, `logo`, `testo`, `sottotesto`, accodato muto: la musica continua),
+     `stile_testi` (`font` nella cartella, `colore`, `bordo` o `"nessuno"`,
+     `dimensione`), tutti nei margini sicuri del formato e coi testi alla lettera;
+   - `musica.sotto_voce: true` (la abbassa sotto le voci), `musica.sfuma_fine` (secondi),
+     `volume` finale in LUFS (es. -14);
+   - `--export instagram,tiktok,youtube` dopo il montaggio un file per canale dal montato
+     nel formato del canale (`spot-instagram-9x16.mp4`; il formato deve essere fra quelli
+     montati);
+   - `giv story run` e `giv story cut` riscrivono `foglio-contatto.jpg` accanto allo
+     storyboard (una riga per scena): guardarlo per primo; `"foglio_contatto": false`
+     per non farlo.
 
 **Voce fuori campo** (sintesi locale, nessun costo; giv non sintetizza la voce, riceve i
 file già pronti):
@@ -404,9 +457,34 @@ file già pronti):
    ricavano dalla trascrizione automatica del WAV, a partire dall'inizio della scena:
    `giv story cut` sposta da solo le righe del `ritardo_voce`.
 
+**Rifinire uno spot in locale** (gratis, nessuna chiamata; ogni passo scrive un file nuovo
+in `--out` e ne dà il percorso in `files[0].path` del JSON):
+
+```bash
+./bin/giv post trim    --video out/spot.mp4 --start 0.4 --name spot-a          # via l'inizio fermo
+./bin/giv post reframe --video out/spot-a.mp4 --aspect 9:16 --focus 0.45       # → out/spot-a-9x16.mp4
+./bin/giv post overlay --video out/spot-a-9x16.mp4 --logo img/logo.png \
+  --title "Crema alle erbe" --from 1 --duration 3 \
+  --end-color "#1E3A2B" --end-logo img/logo.png --end-text "Swerpify" --end-subtext "swerpify.it"
+./bin/giv post mix     --video out/spot-a-9x16-overlay.mp4 --music musica.mp3 --duck \
+  --voice voce.wav --voice-at 0.5                                               # volume finale -14 LUFS
+```
+
+- Prima `--dry-run` se serve vedere il piano: stessi controlli, nessun file.
+- `reframe` ha l'inquadratura fissa: controllare i fotogrammi (il soggetto può uscire dal
+  quadro) e spostare `--focus`, o usare `--fit blur`.
+- `overlay` tiene logo e titolo dentro i margini sicuri del formato (9:16: 14% alto, 35%
+  basso, 6% lati); i testi sono resi alla lettera (niente tag `.ass`). Il cartello finale
+  allunga il video di `--end-duration` (default 3 s) con audio muto: per una musica che
+  copra anche il cartello fare `mix` **dopo** `overlay`.
+- `mix --loudness -14` è una convenzione dei social, non un requisito ufficiale.
+- Per più canali in un colpo, sul video finito: `giv export --video out/spot.mp4 --for
+  instagram,tiktok,youtube,linkedin` (cambio formato, fps e volume del canale per ogni file).
+
 **Verifica visiva — SEMPRE, dopo ogni generazione**: guardare l'immagine (Read del file);
-per i video estrarre 2-3 frame (`ffmpeg -sseof -0.2 -i <mp4> -frames:v 1 /tmp/last.png`)
-e controllare: stile coerente, palette giusta, **nessun testo/lettera** indesiderato.
+per i video guardare un foglio di contatto (`giv sheet out/clip.mp4 --frames 8 --labels`,
+o `giv sheet storyboard.json --labels` per tutte le scene) o l'ultimo fotogramma
+(`giv frame --video out/clip.mp4 --last`) e controllare: stile coerente, palette giusta, **nessun testo/lettera** indesiderato.
 
 ## Costi
 

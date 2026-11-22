@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // Tipi di scena.
@@ -43,6 +44,9 @@ type Storyboard struct {
 	Riferimenti   map[string][]string `json:"riferimenti,omitempty"`     // insiemi di immagini per nome
 	Scene         []Scene             `json:"scene"`
 	Montaggio     *Montaggio          `json:"montaggio,omitempty"`
+	// FoglioContatto false: giv story run e cut non scrivono
+	// foglio-contatto.jpg accanto allo storyboard.
+	FoglioContatto *bool `json:"foglio_contatto,omitempty"`
 
 	// Dir è la cartella dello storyboard: i percorsi sono relativi a questa.
 	Dir string `json:"-"`
@@ -102,7 +106,68 @@ type Scene struct {
 	// tutte: voce fuori campo, messa al montaggio
 	Voce        string   `json:"voce,omitempty"`
 	RitardoVoce *float64 `json:"ritardo_voce,omitempty"` // secondi dall'inizio della scena; nil = 0
+
+	// montaggio della scena (giv story cut), facoltativi
+	Fuoco    *Fuoco   `json:"fuoco,omitempty"`    // punto da tenere col ritaglio
+	Taglio   *Taglio  `json:"taglio,omitempty"`   // pezzo della clip da usare (video, clip, avatar)
+	Velocita *float64 `json:"velocita,omitempty"` // fattore di velocità della clip, da 0.25 a 4
 }
+
+// Fuoco è il punto dell'inquadratura da tenere quando il montaggio ritaglia
+// la clip per un formato diverso: x da 0 (sinistra) a 1 (destra), y da 0
+// (alto) a 1 (basso); assente vale 0.5. Nello storyboard un numero (solo x) o
+// {"x": …, "y": …}.
+type Fuoco struct {
+	X *float64 `json:"x,omitempty"`
+	Y *float64 `json:"y,omitempty"`
+}
+
+// UnmarshalJSON accetta un numero (x) o un oggetto {x, y} senza altri campi.
+func (f *Fuoco) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] != '{' {
+		var x float64
+		if err := json.Unmarshal(b, &x); err != nil {
+			return errors.New("fuoco: serve un numero da 0 a 1 o un oggetto {\"x\": …, \"y\": …}")
+		}
+		*f = Fuoco{X: &x}
+		return nil
+	}
+	type plain Fuoco
+	var p plain
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return fmt.Errorf("fuoco: %s (campi ammessi x e y, numeri da 0 a 1)", strings.TrimPrefix(err.Error(), "json: "))
+	}
+	*f = Fuoco(p)
+	return nil
+}
+
+// XY sono x e y del fuoco, 0.5 dove mancano.
+func (f *Fuoco) XY() (x, y float64) {
+	x, y = 0.5, 0.5
+	if f.X != nil {
+		x = *f.X
+	}
+	if f.Y != nil {
+		y = *f.Y
+	}
+	return x, y
+}
+
+// Taglio è il pezzo della clip usato nel montaggio: da Da ad A secondi
+// dall'inizio del file (A assente: fino alla fine).
+type Taglio struct {
+	Da float64  `json:"da"`
+	A  *float64 `json:"a,omitempty"`
+}
+
+// Limiti della velocità di una scena (come giv post speed).
+const (
+	MinVelocita = 0.25
+	MaxVelocita = 4
+)
 
 // Inquadratura è una delle inquadrature di una scena video: testo e secondi;
 // la scena dura la loro somma e non ha un prompt suo.
@@ -126,13 +191,83 @@ type Montaggio struct {
 	Musica      *Musica `json:"musica,omitempty"`
 	Sottotitoli string  `json:"sottotitoli,omitempty"` // file
 	Uscita      string  `json:"uscita,omitempty"`      // file finale
+
+	// Formati sono i formati da montare, un file per formato
+	// (<uscita>-9x16.mp4…): "16:9", "9:16", "1:1", "4:5"; vuoto: un solo
+	// file nel formato dello storyboard, come prima.
+	Formati []string `json:"formati,omitempty"`
+	// Adatta è come una clip entra in un formato diverso dal suo: bande
+	// (default), ritaglio (col fuoco della scena) o sfocato.
+	Adatta         string      `json:"adatta,omitempty"`
+	Logo           *Logo       `json:"logo,omitempty"`
+	Titoli         []Titolo    `json:"titoli,omitempty"`
+	CartelloFinale *Cartello   `json:"cartello_finale,omitempty"`
+	Volume         *float64    `json:"volume,omitempty"` // volume finale in LUFS; assente: come prima
+	StileTesti     *StileTesti `json:"stile_testi,omitempty"`
 }
 
 // Musica è la traccia sotto tutto il video.
 type Musica struct {
-	File   string   `json:"file"`
-	Volume *float64 `json:"volume,omitempty"` // 0-1
+	File      string   `json:"file"`
+	Volume    *float64 `json:"volume,omitempty"`     // 0-1
+	SottoVoce bool     `json:"sotto_voce,omitempty"` // si abbassa mentre parla la voce
+	SfumaFine *float64 `json:"sfuma_fine,omitempty"` // secondi di dissolvenza in chiusura
 }
+
+// Logo è il logo sul video, in ogni formato.
+type Logo struct {
+	File      string   `json:"file"`                // immagine .png, .jpg o .webp
+	Posizione string   `json:"posizione,omitempty"` // default alto-destra
+	Larghezza *float64 `json:"larghezza,omitempty"` // frazione della larghezza del quadro, oltre 0 e al più 1
+	Opacita   *float64 `json:"opacita,omitempty"`   // oltre 0 e al più 1; default 1
+	Da        *float64 `json:"da,omitempty"`        // secondi dall'inizio del montato; default 0
+	A         *float64 `json:"a,omitempty"`         // secondi; assente: fino alla fine delle scene
+}
+
+// Titolo è un testo sopra il video: tempi relativi alla scena indicata
+// (assente: all'inizio del montato).
+type Titolo struct {
+	Testo     string      `json:"testo"`
+	Scena     string      `json:"scena,omitempty"`
+	Da        float64     `json:"da,omitempty"`        // secondi
+	Durata    *float64    `json:"durata,omitempty"`    // secondi; default 3
+	Posizione string      `json:"posizione,omitempty"` // default basso
+	Stile     *StileTesti `json:"stile,omitempty"`     // al posto di stile_testi
+}
+
+// Cartello è il cartello finale, generato e accodato dopo l'ultima scena.
+type Cartello struct {
+	Durata     *float64 `json:"durata,omitempty"` // secondi; default 3
+	Sfondo     string   `json:"sfondo,omitempty"` // colore #RRGGBB; default #000000
+	Logo       string   `json:"logo,omitempty"`   // immagine .png, .jpg o .webp
+	Testo      string   `json:"testo,omitempty"`
+	Sottotesto string   `json:"sottotesto,omitempty"`
+}
+
+// StileTesti è lo stile dei testi (titoli, cartello).
+type StileTesti struct {
+	Font       string   `json:"font,omitempty"`       // file .ttf, .otf o .ttc nella cartella
+	Colore     string   `json:"colore,omitempty"`     // #RRGGBB; default #FFFFFF
+	Bordo      string   `json:"bordo,omitempty"`      // colore del contorno #RRGGBB, o "nessuno"; default #000000
+	Dimensione *float64 `json:"dimensione,omitempty"` // altezza dei caratteri in frazione dell'altezza del quadro
+}
+
+// Valori ammessi e limiti dei campi di montaggio.
+var (
+	Formati   = []string{"16:9", "9:16", "1:1", "4:5"}
+	Adatta    = []string{"bande", "ritaglio", "sfocato"}
+	Posizioni = []string{"alto-sinistra", "alto", "alto-destra", "sinistra", "centro", "destra", "basso-sinistra", "basso", "basso-destra"}
+)
+
+const (
+	maxTitoli        = 50
+	maxTestoBytes    = 2000
+	maxCartello      = 60 // secondi
+	maxSfumaFine     = 60 // secondi
+	minLUFS, maxLUFS = -70, -5
+	minDimensione    = 0.01
+	maxDimensione    = 0.25
+)
 
 // Load legge e controlla lo storyboard in path: campi sconosciuti, scene,
 // riferimenti e file. Tutti i problemi trovati sono nell'errore, uno per riga.
@@ -270,6 +405,7 @@ func (s *Storyboard) Validate() error {
 				fail("%s: ritardo_voce senza voce", where)
 			}
 		}
+		validateSceneCut(sc, where, fail)
 		switch sc.Tipo {
 		case Video:
 			s.validateVideo(sc, where, seen, fail, file)
@@ -321,9 +457,212 @@ func (s *Storyboard) Validate() error {
 				fail("montaggio.uscita: %v", err)
 			}
 		}
+		s.validateMontaggio(m, seen, fail, file)
 	}
 	return errors.Join(errs...)
 }
+
+// validateSceneCut controlla fuoco, taglio e velocità di una scena.
+func validateSceneCut(sc *Scene, where string, fail func(string, ...any)) {
+	if f := sc.Fuoco; f != nil {
+		if f.X == nil && f.Y == nil {
+			fail("%s: fuoco vuoto: serve x (e facoltativo y), da 0 a 1", where)
+		}
+		for _, v := range []*float64{f.X, f.Y} {
+			if v != nil && !unit(*v) {
+				fail("%s: fuoco: x e y sono numeri da 0 a 1 (0.5 = centro)", where)
+				break
+			}
+		}
+	}
+	if sc.Taglio == nil && sc.Velocita == nil {
+		return
+	}
+	if sc.Tipo == Immagine {
+		fail("%s: taglio e velocita valgono per le clip, non per una scena immagine", where)
+		return
+	}
+	if t := sc.Taglio; t != nil {
+		if !nonNegative(t.Da) {
+			fail("%s: taglio.da deve essere un numero di secondi finito e non negativo", where)
+		}
+		if t.A != nil && (!nonNegative(*t.A) || *t.A <= t.Da) {
+			fail("%s: taglio.a deve essere un numero di secondi dopo taglio.da", where)
+		}
+		if t.A == nil && t.Da == 0 {
+			fail("%s: taglio senza effetto: indica da (oltre 0) o a", where)
+		}
+	}
+	if v := sc.Velocita; v != nil && (!nonNegative(*v) || *v < MinVelocita || *v > MaxVelocita) {
+		fail("%s: velocita deve essere un numero da %g a %g (2 = due volte più veloce)", where, MinVelocita, float64(MaxVelocita))
+	}
+}
+
+// validateMontaggio controlla i campi di montaggio della 0.11.0: valori da
+// elenco chiuso, numeri negli intervalli, file nella cartella dello storyboard.
+func (s *Storyboard) validateMontaggio(m *Montaggio, seen map[string]int, fail func(string, ...any), file func(string, string, bool)) {
+	dup := map[string]bool{}
+	for _, f := range m.Formati {
+		switch {
+		case !slices.Contains(Formati, f):
+			fail("montaggio.formati: %q sconosciuto (%s)", f, strings.Join(Formati, ", "))
+		case dup[f]:
+			fail("montaggio.formati: %s ripetuto", f)
+		}
+		dup[f] = true
+	}
+	if m.Formati != nil && len(m.Formati) == 0 {
+		fail("montaggio.formati vuoto: togli il campo per un solo formato, o indica i formati")
+	}
+	if m.Adatta != "" && !slices.Contains(Adatta, m.Adatta) {
+		fail("montaggio.adatta %q sconosciuto (%s)", m.Adatta, strings.Join(Adatta, ", "))
+	}
+	if mu := m.Musica; mu != nil {
+		if f := mu.SfumaFine; f != nil && (!nonNegative(*f) || *f > maxSfumaFine) {
+			fail("montaggio.musica.sfuma_fine deve essere un numero di secondi da 0 a %d", maxSfumaFine)
+		}
+		if mu.SottoVoce && !s.hasVoice() {
+			fail("montaggio.musica.sotto_voce: nessuna scena ha una voce sotto cui abbassare la musica")
+		}
+	}
+	if v := m.Volume; v != nil && (!nonNegative(-*v) || *v < minLUFS || *v > maxLUFS) {
+		fail("montaggio.volume deve essere un livello in LUFS da %d a %d (es. -14)", minLUFS, maxLUFS)
+	}
+	if st := m.StileTesti; st != nil {
+		validateStile("montaggio.stile_testi", st, fail, file)
+	}
+	if l := m.Logo; l != nil {
+		where := "montaggio.logo"
+		imageFile(where, l.File, fail, file)
+		position(where+".posizione", l.Posizione, fail)
+		if v := l.Larghezza; v != nil && (!unit(*v) || *v == 0) {
+			fail("%s.larghezza deve essere una frazione della larghezza del quadro, oltre 0 e al più 1", where)
+		}
+		if v := l.Opacita; v != nil && (!unit(*v) || *v == 0) {
+			fail("%s.opacita deve essere un numero oltre 0 e al più 1", where)
+		}
+		if v := l.Da; v != nil && !nonNegative(*v) {
+			fail("%s.da deve essere un numero di secondi finito e non negativo", where)
+		}
+		if v := l.A; v != nil && (!nonNegative(*v) || *v <= 0 || (l.Da != nil && *v <= *l.Da)) {
+			fail("%s.a deve essere un numero di secondi dopo %s.da", where, where)
+		}
+	}
+	if len(m.Titoli) > maxTitoli {
+		fail("montaggio.titoli: al più %d titoli", maxTitoli)
+	}
+	for i := range m.Titoli {
+		t := &m.Titoli[i]
+		where := fmt.Sprintf("montaggio.titoli n. %d", i+1)
+		text(where+".testo", t.Testo, true, fail)
+		if t.Scena != "" {
+			if _, ok := seen[t.Scena]; !ok {
+				fail("%s.scena %q: nessuna scena con questo id", where, t.Scena)
+			}
+		}
+		if !nonNegative(t.Da) {
+			fail("%s.da deve essere un numero di secondi finito e non negativo", where)
+		}
+		if d := t.Durata; d != nil && (!nonNegative(*d) || *d == 0) {
+			fail("%s.durata deve essere un numero di secondi oltre 0", where)
+		}
+		position(where+".posizione", t.Posizione, fail)
+		if t.Stile != nil {
+			validateStile(where+".stile", t.Stile, fail, file)
+		}
+	}
+	if c := m.CartelloFinale; c != nil {
+		where := "montaggio.cartello_finale"
+		if d := c.Durata; d != nil && (!nonNegative(*d) || *d == 0 || *d > maxCartello) {
+			fail("%s.durata deve essere un numero di secondi oltre 0 e al più %d", where, maxCartello)
+		}
+		color(where+".sfondo", c.Sfondo, fail)
+		if c.Logo != "" {
+			imageFile(where+".logo", c.Logo, fail, file)
+		}
+		text(where+".testo", c.Testo, false, fail)
+		text(where+".sottotesto", c.Sottotesto, false, fail)
+		if c.Logo == "" && c.Testo == "" && c.Sottotesto == "" {
+			fail("%s: serve almeno uno fra logo, testo e sottotesto", where)
+		}
+	}
+}
+
+// hasVoice dice se almeno una scena ha una voce fuori campo.
+func (s *Storyboard) hasVoice() bool {
+	for i := range s.Scene {
+		if s.Scene[i].Voce != "" && s.Scene[i].Tipo != Avatar {
+			return true
+		}
+	}
+	return false
+}
+
+// validateStile controlla uno stile dei testi.
+func validateStile(where string, st *StileTesti, fail func(string, ...any), file func(string, string, bool)) {
+	if st.Font != "" {
+		switch strings.ToLower(filepath.Ext(st.Font)) {
+		case ".ttf", ".otf", ".ttc":
+			file(where+".font", st.Font, false)
+		default:
+			fail("%s.font %s: serve un file di font .ttf, .otf o .ttc", where, st.Font)
+		}
+	}
+	color(where+".colore", st.Colore, fail)
+	if st.Bordo != "nessuno" {
+		color(where+".bordo", st.Bordo, fail)
+	}
+	if d := st.Dimensione; d != nil && (!nonNegative(*d) || *d < minDimensione || *d > maxDimensione) {
+		fail("%s.dimensione deve essere una frazione dell'altezza del quadro da %g a %g (es. 0.055)", where, minDimensione, maxDimensione)
+	}
+}
+
+// imageFile controlla un'immagine (logo) nella cartella dello storyboard.
+func imageFile(where, p string, fail func(string, ...any), file func(string, string, bool)) {
+	if p == "" {
+		fail("%s: file mancante", where)
+		return
+	}
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".png", ".jpg", ".jpeg", ".webp":
+		file(where, p, false)
+	default:
+		fail("%s %s: serve un'immagine .png, .jpg o .webp", where, p)
+	}
+}
+
+// position controlla una posizione nel quadro (vuota: quella di default).
+func position(where, p string, fail func(string, ...any)) {
+	if p != "" && !slices.Contains(Posizioni, p) {
+		fail("%s %q sconosciuta (%s)", where, p, strings.Join(Posizioni, ", "))
+	}
+}
+
+// colorRe è un colore #RRGGBB.
+var colorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+
+// color controlla un colore (vuoto: quello di default).
+func color(where, c string, fail func(string, ...any)) {
+	if c != "" && !colorRe.MatchString(c) {
+		fail("%s %q: serve un colore #RRGGBB", where, c)
+	}
+}
+
+// text controlla un testo da mostrare: reso alla lettera, al più
+// maxTestoBytes, UTF-8 valido; required: non vuoto.
+func text(where, t string, required bool, fail func(string, ...any)) {
+	switch {
+	case required && strings.TrimSpace(t) == "":
+		fail("%s mancante", where)
+	case len(t) > maxTestoBytes:
+		fail("%s: al più %d byte", where, maxTestoBytes)
+	case !utf8.ValidString(t):
+		fail("%s: testo non UTF-8", where)
+	}
+}
+
+// unit: numero finito da 0 a 1.
+func unit(v float64) bool { return nonNegative(v) && v <= 1 }
 
 func (s *Storyboard) validateVideo(sc *Scene, where string, seen map[string]int,
 	fail func(string, ...any), file func(string, string, bool)) {

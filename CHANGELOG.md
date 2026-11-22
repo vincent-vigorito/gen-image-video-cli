@@ -4,6 +4,61 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.11.0]
+
+> **Tutto in locale**: i comandi nuovi lavorano con `ffmpeg` e `ffprobe` sui file che ci
+> sono già, senza rete, chiavi né spesa. **Convenzioni, non valori ufficiali**: il volume
+> finale di -14 LUFS di `giv post mix` (nessuna fonte ufficiale dei canali: è
+> impostabile con `--loudness`) e i margini sicuri dei formati diversi dal 9:16 (5% per
+> lato); ufficiali solo i margini del 9:16 (guida annunci Meta per i Reels: 14% in alto,
+> 35% in basso, 6% ai lati).
+
+### Aggiunto
+
+- **`giv post <operazione>`**: rifinitura di un video in locale, gratuita. Flag comuni
+  `--video`, `--out`, `--name`, `--dry-run`; l'ingresso non si sovrascrive mai (un nome
+  preso dà `-2`, `-3`…, un'uscita uguale all'ingresso esce con codice 2), il file compare
+  a lavoro riuscito; JSON su stdout con `command` (`post trim`…), `provider` `local`,
+  `model` `ffmpeg`, `inputs`, `params`, misure del file e `cost_usd` 0, e una riga a costo
+  zero in `giv-log.jsonl`; valori non validi con codice 2 prima di lanciare ffmpeg.
+  - `trim` (`--start`, `--end`), `speed` (`--factor` da 0,25 a 4, audio alla stessa
+    velocità con `atempo`), `freeze` (`--at`, `--duration` fino a 60 s, audio in pausa).
+  - `reframe --aspect 9:16|1:1|4:5|16:9 [--fit crop|pad|blur] [--focus <x>[,<y>]]`: il lato
+    corto resta quello del video; `--focus` sceglie il punto da tenere nel ritaglio
+    (inquadratura fissa).
+  - `overlay`: logo (`--logo`, `--logo-pos`, `--logo-width`, `--logo-opacity`,
+    `--logo-from`, `--logo-to`), titolo (`--title`, `--from`, `--duration`, `--pos`) e
+    cartello finale accodato (`--end-card`, `--end-color`, `--end-logo`, `--end-text`,
+    `--end-subtext`, `--end-duration`), con `--font` e `--color`; tutto dentro i margini
+    sicuri; testi resi alla lettera in un file `.ass` generato, mai nei filtri di ffmpeg.
+  - `mix`: musica (`--music`, `--music-volume`, ripetuta o tagliata sulla durata del
+    video), `--duck` che la abbassa sotto la voce, voce fuori campo (`--voice`,
+    `--voice-at`), volume finale in due passate (`--loudness`, default -14 LUFS, `off`
+    per lasciarlo com'è).
+- **`giv sheet <file|cartella|storyboard.json>`**: foglio di contatto JPEG in locale
+  (`--every <s>` oppure `--frames <n>`, `--cols`, `--labels`); con una cartella una riga
+  per file, con uno storyboard una riga per scena col fotogramma chiave e la clip in uso.
+- **`giv frame --video <file> --at <s>|--last [--width <px>]`**: un fotogramma PNG o la
+  sua miniatura, in locale.
+- **`giv gif --video <file> [--start] [--end] [--width] [--fps]`**: GIF animata in locale
+  con la palette calcolata in due passate (default 480 px, 12 fps, al più 60 s).
+- **Storyboard, campi nuovi del montaggio** (tutti facoltativi: gli storyboard di prima
+  danno lo stesso video): `montaggio.formati` (un file per formato, `<uscita>-9x16.mp4`…,
+  nessun formato predefinito), `adatta` (`bande`, `ritaglio`, `sfocato`), `logo`,
+  `titoli` (tempi relativi a una scena), `cartello_finale`, `stile_testi`, `volume` (LUFS),
+  `musica.sotto_voce` e `musica.sfuma_fine`; per scena `fuoco`, `taglio` e `velocita`;
+  `foglio_contatto`. `giv story cut --formato <r>` monta un solo formato, `--export
+  <canali>` esporta per canale dal montato. `giv story run` e `giv story cut` riscrivono
+  `foglio-contatto.jpg` accanto allo storyboard. `examples/spot` usa i campi nuovi (con un
+  segnaposto in `musica/`).
+- **`giv export --video <file> --for <canali>`**: un file per canale (`instagram`,
+  `tiktok`, `youtube`, `linkedin`, ognuno con `:<formato>` facoltativo; predefiniti 9:16
+  per Instagram Reel e TikTok, 16:9 per YouTube e LinkedIn) col profilo del canale
+  (misure, fps, H.264 High, AAC 48 kHz, volume a -14 LUFS con `--loudness`, `--fit` e
+  `--focus` come `reframe`); una durata fuori dai limiti del canale esce con codice 2
+  prima di scrivere. Le convenzioni non ufficiali (volume, misure del feed di Instagram,
+  formato di TikTok) sono elencate nel manifest in `exports[].convention`.
+
 ## [0.10.0] - 2026-11-22
 
 > **Non ancora provati dal vivo**: il provider fal (`giv avatar`, Kling 3 Pro, Kling 4.0 con
