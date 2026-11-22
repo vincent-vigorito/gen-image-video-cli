@@ -537,9 +537,8 @@ giv voice --voices --provider gemini
 
 - **provider**: xAI (predefinito, chiave `XAI_API_KEY`), `POST /v1/tts`, oppure Gemini
   (`--provider gemini`, chiave `GEMINI_API_KEY`), `POST /v1beta/interactions` col modello
-  `gemini-3.8-flash-tts` (oppure `--model gemini-3.8-flash-lite-tts`). Le voci predefinite
-  `eve` (xai) e `Kore` (gemini) sono **provvisorie**: la scelta finale si fa dopo
-  l'ascolto. Lingua predefinita `it` (`--lang` accetta un codice BCP-47 o `auto`; gemini
+  `gemini-3.8-flash-tts` (oppure `--model gemini-3.8-flash-lite-tts`). Voci predefinite:
+  `eve` per xai (scelta dopo l'ascolto) e `Kore` per gemini. Lingua predefinita `it` (`--lang` accetta un codice BCP-47 o `auto`; gemini
   la rileva dal testo e non la riceve). `--style` vale solo per gemini (stile e ritmo a
   parole): xai lo ignora con un avviso (per ritmo e pause: `--speed` e i tag nel testo,
   come `[pause]`); `--speed` vale solo per xai: gemini la ignora con un avviso.
@@ -570,8 +569,11 @@ giv voice --voices --provider gemini
   il conto): uno spot da 375 caratteri costa circa 0,006 $. xAI non riporta il costo: il
   manifest ha la stima (`cost_est_usd`). Gemini: 0,50 $ per milione di token di testo e
   9 $ (flash-lite 6 $) per milione di token audio, 25 token al secondo; **dal 01/01/2027
-  il doppio** (la tariffa si sceglie dalla data). La stima di gemini è per eccesso (un
-  ritmo lento di 10 caratteri al secondo, almeno 2 secondi, entro il massimo d'uscita);
+  il doppio** (la tariffa si sceglie dalla data). Gemini non ha una velocità e lo stile può
+  allungare il parlato: la stima (`cost_est_usd`), su cui vale `--max-cost`, è il
+  **massimo per richiesta** dai limiti del modello (8.192 token di testo e 16.384 d'uscita:
+  circa 0,15 $ con flash, 0,10 $ con flash-lite, il doppio dal 2027); in `cost_source`
+  anche il costo probabile (10 caratteri al secondo, almeno 2 secondi);
   dopo la generazione il manifest ha anche il costo dai token riportati o, se mancano,
   dalla durata misurata (`cost_usage_usd`). `--dry-run` stampa la richiesta e la stima
   senza chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto

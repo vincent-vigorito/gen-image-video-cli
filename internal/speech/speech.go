@@ -39,7 +39,10 @@ const (
 	// gemini, che dà al più MaxGeminiOutputTokens di audio (circa 11 minuti):
 	// anche a un ritmo lento il testo deve starci, o la voce esce troncata.
 	MaxGeminiTextChars = 6000
-	// MaxGeminiOutputTokens: token d'uscita di gemini per richiesta.
+	// MaxGeminiInputTokens e MaxGeminiOutputTokens: token di gemini per
+	// richiesta in ingresso e in uscita (limiti del modello): danno il
+	// massimo fatturabile, su cui vale il tetto.
+	MaxGeminiInputTokens  = 8192
 	MaxGeminiOutputTokens = 16384
 	// GeminiTokensPerSecond: token audio di gemini per secondo di parlato.
 	GeminiTokensPerSecond = 25
@@ -50,8 +53,8 @@ const (
 	MaxTimings = 4 * MaxTextChars
 )
 
-// Predefiniti della voce. Le voci sono provvisorie fino alla scelta dopo
-// l'ascolto (decisione K4).
+// Predefiniti della voce: xai eve in italiano, scelta dopo l'ascolto
+// (decisione 21); per gemini, seconda via, Kore.
 const (
 	DefaultProvider    = XAI
 	DefaultLanguage    = "it"
