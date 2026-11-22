@@ -448,37 +448,36 @@ func (c *Client) result(ctx context.Context, job provider.Job, it *interaction) 
 	}
 	res := &provider.Result{Media: []provider.Media{{Mime: "video/mp4", Data: data}}, JobID: job.ID}
 	if usd, src, ok := it.Usage.cost(); ok {
-		res.CostEstUSD, res.CostSource = usd, src // non arrotondata: è quella che conta per il tetto
+		res.CostEstUSD, res.CostSource = usd, src // non arrotondata: confrontata con la riserva del tetto
 	}
 	return res, nil
 }
 
-// cost è il costo dai token riportati: l'uscita non di testo (video, audio)
-// alla tariffa video, quella non suddivisa per modalità pure. ok false (resta
-// la riserva) se i contatori sono parziali o incoerenti: un totale assente,
-// una modalità senza nome o senza token, la somma per modalità oltre il totale.
+// cost è il costo dai token riportati: alla tariffa testo solo l'uscita
+// classificata come testo, il resto (video, audio) alla tariffa video. ok
+// false se i contatori sono parziali o incoerenti: un totale assente, una
+// modalità senza nome o senza token, la somma per modalità diversa dal totale.
 func (u *usage) cost() (float64, string, bool) {
 	if u == nil || u.TotalInput == nil || u.TotalOutput == nil || u.TotalThought == nil {
 		return 0, "", false
 	}
-	g := caps.GeminiUsage{Input: *u.TotalInput, Thought: *u.TotalThought, OutputVideo: *u.TotalOutput}
-	if len(u.OutputByModality) > 0 {
-		var video, sum int64
-		for _, m := range u.OutputByModality {
-			if m.Modality == "" || m.Tokens == nil || *m.Tokens < 0 {
-				return 0, "", false
-			}
-			sum += *m.Tokens
-			if !strings.EqualFold(m.Modality, "text") {
-				video += *m.Tokens
-			}
-		}
-		if sum > *u.TotalOutput {
+	var text, sum int64
+	for _, m := range u.OutputByModality {
+		if m.Modality == "" || m.Tokens == nil || *m.Tokens < 0 {
 			return 0, "", false
 		}
-		g.OutputVideo, g.OutputOther = video, *u.TotalOutput-video
+		sum += *m.Tokens
+		if strings.EqualFold(m.Modality, "text") {
+			text += *m.Tokens
+		}
 	}
-	return caps.GeminiUsageCost(g)
+	if len(u.OutputByModality) > 0 && sum != *u.TotalOutput {
+		return 0, "", false
+	}
+	return caps.GeminiUsageCost(caps.GeminiUsage{
+		Input: *u.TotalInput, Thought: *u.TotalThought,
+		OutputVideo: *u.TotalOutput - text, OutputOther: text,
+	})
 }
 
 // downloadFile scarica il file di un video generato: indirizzo solo
