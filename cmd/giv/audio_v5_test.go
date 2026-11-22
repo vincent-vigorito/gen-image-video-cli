@@ -72,24 +72,31 @@ func TestV5PiccoStoryCut(t *testing.T) {
 	v5Check(t, "story cut", r.file(), -14)
 }
 
-// Voce a 600 s: parte al tempo giusto e la memoria del comando non cresce col ritardo
-// (un adelay di 600 s in float stereo a 48 kHz sarebbe ~230 MB).
+// Voce a 600 s: parte al tempo giusto e la memoria del comando non cresce col
+// ritardo (confronto con la stessa voce a 0 s: un buffer di 600 s in float
+// stereo a 48 kHz sarebbe ~230 MB in piu').
 func TestV5RitardoLungo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("lento (~75 s)")
+	}
 	d := r4Setup(t)
 	r4ff(t, "-f", "lavfi", "-i", "color=c=gray:size=64x64:rate=2:duration=610", "-f", "lavfi", "-i", "sine=frequency=330:duration=610",
 		"-af", "volume=0.1", "-c:v", "mpeg4", "-shortest", "-pix_fmt", "yuv420p", filepath.Join(d, "lungo.mp4"))
-	cmd := exec.Command(binPath, "post", "mix", "--video", "lungo.mp4", "--voice", "voice.wav", "--voice-at", "600", "--out", "o")
-	cmd.Dir = d
-	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + t.TempDir()}
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("mix: %v\n%s", err, b)
+	mix := func(at, out string) int64 {
+		cmd := exec.Command(binPath, "post", "mix", "--video", "lungo.mp4", "--voice", "voice.wav", "--voice-at", at, "--out", out)
+		cmd.Dir = d
+		cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + t.TempDir()}
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("mix at=%s: %v\n%s", at, err, b)
+		}
+		return cmd.ProcessState.SysUsage().(*syscall.Rusage).Maxrss / 1024 // MB, compresi i figli
 	}
-	rss := cmd.ProcessState.SysUsage().(*syscall.Rusage).Maxrss // KB, compresi i figli
-	if rss > 120*1024 {
-		t.Errorf("memoria massima %d MB: cresce col ritardo (soglia 120 MB)", rss/1024)
+	base := mix("0", "o0")
+	long := mix("600", "o")
+	if long-base > 60 {
+		t.Errorf("memoria: %d MB con ritardo 600 s contro %d MB senza ritardo (> 60 MB in piu')", long, base)
 	}
-	o := filepath.Join(d, "o")
-	matches, _ := filepath.Glob(filepath.Join(o, "*.mp4"))
+	matches, _ := filepath.Glob(filepath.Join(d, "o", "*.mp4"))
 	if len(matches) != 1 {
 		t.Fatalf("uscite: %v", matches)
 	}
