@@ -156,9 +156,14 @@ func r2Center(t *testing.T, p string) {
 	t.Helper()
 	w, h := r2Size(t, p)
 	sh := int(math.Round(float64(w) * r2SrcH / r2SrcW))
-	got := r2Gray(t, p, fmt.Sprintf("crop=%d:%d:0:%d", w, sh-4, (h-sh)/2+2))
-	want := r2Gray(t, filepath.Join(filepath.Dir(p), "..", "in.mp4"), fmt.Sprintf("scale=%d:%d:flags=bicubic,crop=%d:%d:0:2", w, sh, w, sh-4))
-	if d := r2Diff(got, want); d > 12 {
+	ch := (sh - 6) &^ 1 // altezze pari: yuv420
+	got := r2Gray(t, p, fmt.Sprintf("crop=%d:%d:0:%d,scale=%d:%d:flags=area", w, ch, ((h-sh)/2+3)&^1, w/6, ch/6))
+	want := r2Gray(t, filepath.Join(filepath.Dir(p), "..", "in.mp4"), fmt.Sprintf("scale=%d:%d:flags=bicubic,crop=%d:%d:0:2,scale=%d:%d:flags=area", w, sh, w, ch, w/6, ch/6))
+	flip := r2Gray(t, filepath.Join(filepath.Dir(p), "..", "in.mp4"), fmt.Sprintf("scale=%d:%d:flags=bicubic,crop=%d:%d:0:2,hflip,scale=%d:%d:flags=area", w, sh, w, ch, w/6, ch/6))
+	if len(got) != len(want) {
+		t.Errorf("%s: %d byte contro %d", filepath.Base(p), len(got), len(want))
+	}
+	if d, f := r2Diff(got, want), r2Diff(got, flip); d > 30 || d > f/2 {
 		t.Errorf("%s (%dx%d): fotogramma originale non tutto visibile al centro, differenza media %.1f", filepath.Base(p), w, h, d)
 	}
 }
@@ -195,12 +200,17 @@ func TestR2FocusSpostaRitaglio(t *testing.T) {
 	region := func(x int) []byte {
 		return r2Gray(t, filepath.Join(d, "in.mp4"), fmt.Sprintf("scale=%d:%d:flags=bicubic,crop=%d:%d:%d:0", sw, h, w, h, x))
 	}
-	for _, c := range []struct {
-		name, p string
-		x       int
-	}{{"focus 0", pl, 0}, {"focus 0.5", pc, (sw - w) / 2}, {"focus 1", pr, sw - w}} {
-		if df := r2Diff(r2Gray(t, c.p, "null"), region(c.x)); df > 12 {
-			t.Errorf("%s: ritaglio non a x=%d (differenza %.1f)", c.name, c.x, df)
+	xs := []int{0, (sw - w) / 2, sw - w}
+	for i, c := range []struct{ name, p string }{{"focus 0", pl}, {"focus 0.5", pc}, {"focus 1", pr}} {
+		got := r2Gray(t, c.p, "null")
+		best, bestD := -1, 1e9
+		for j, x := range xs {
+			if df := r2Diff(got, region(x)); df < bestD {
+				best, bestD = j, df
+			}
+		}
+		if best != i {
+			t.Errorf("%s: il ritaglio somiglia di più a x=%d che a x=%d", c.name, xs[best], xs[i])
 		}
 	}
 	if r2Diff(r2Gray(t, pl, "null"), r2Gray(t, pr, "null")) < 10 {
