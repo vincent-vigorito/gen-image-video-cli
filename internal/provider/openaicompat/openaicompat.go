@@ -322,13 +322,14 @@ func (c *Client) routerImages(ctx context.Context, req provider.ImageRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati;
-	// ripetizioni come prima (httpx.Retry), nessun redirect
+	// /images accetta solo n=1: con -n > 1 una richiesta per immagine, costi sommati.
+	// La richiesta a pagamento non si ripete né segue redirect: con un 3xx, un 5xx
+	// o un timeout l'immagine potrebbe essere stata generata
 	res := &provider.Result{}
 	for i := 0; i < max(req.N, 1); i++ {
 		var resp imagesResponse
-		if err := c.apiCall(ctx, httpx.Retry, http.MethodPost, c.baseURL+"/images", "application/json", payload, &resp); err != nil {
-			return nil, err
+		if err := c.apiCall(ctx, httpx.NoRetry, http.MethodPost, c.baseURL+"/images", "application/json", payload, &resp); err != nil {
+			return nil, httpx.Start(err)
 		}
 		media, err := c.mediaFromImages(ctx, resp)
 		if err != nil {
@@ -751,7 +752,7 @@ func (c *Client) routerPoll(ctx context.Context, job provider.Job) (*provider.Re
 			media = append(media, provider.Media{Mime: "video/mp4", Data: data})
 		}
 		return &provider.Result{Media: media, CostUSD: st.Usage.Cost, JobID: job.ID}, nil
-	case "failed", "cancelled", "error", "expired":
+	case "failed", "cancelled", "error":
 		fmt.Fprintln(os.Stderr)
 		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
