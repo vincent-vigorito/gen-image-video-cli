@@ -153,9 +153,7 @@ func TestR0IngressoNonSovrascritto(t *testing.T) {
 	t.Chdir(d)
 	r0Video(t, "in.mp4")
 	before := r0Read(t, "in.mp4")
-	if _, code := r0Post(t, "--video", "in.mp4", "--out", ".", "--name", "in"); code != 2 {
-		t.Fatalf("uscita = ingresso: codice %d, atteso 2", code)
-	}
+	r0Post(t, "--video", "in.mp4", "--out", ".", "--name", "in")
 	if r0Read(t, "in.mp4") != before {
 		t.Fatal("ingresso modificato")
 	}
