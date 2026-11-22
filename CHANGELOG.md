@@ -55,6 +55,32 @@ versioning [SemVer](https://semver.org/lang/it/).
   avvisa per logo senza trasparenza, font non leggibile, troppi riferimenti per i modelli
   video, descrizione lunga, `velocita` con Gemini. Esempio in `examples/kit/` (segnaposto
   e font libero DejaVu Sans Bold con la sua licenza).
+- **Kit e voce dai testi nello storyboard** (`giv story check|run|cut`): campo `kit` (file
+  relativo allo storyboard, anche fuori dalla sua cartella, mai URL) o `--kit <kit.json>`
+  su `check`, `run` e `cut` (vince sul campo; vuoto: codice 2); il kit si usa solo se
+  indicato. I valori si fondono campo per campo: vince la scena, poi lo storyboard, poi il
+  kit. Logo, cartello finale, musica e stile dei testi del kit compaiono da soli nel
+  montaggio (`colori.primario` è lo sfondo del cartello e il bordo dei testi,
+  `colori.testo` il colore dei testi; `sotto_voce` solo se c'è una voce); ogni personaggio
+  diventa un insieme di riferimenti da usare in `usa` (uno con lo stesso nome nello
+  storyboard vince), con la descrizione davanti al prompt e la sua tutela. Campo `testo`
+  della scena (al più 2000 byte) e blocco `parlato` (`provider`, `modello`, `voce`,
+  `lingua`, `velocita`, `stile`, `pronuncia`; predefiniti dal kit, poi xai, `eve`, `it`):
+  `giv story run` genera la voce **prima dei video** in `voce/<id>-v<N>.wav` (con
+  `.tempi.json` dove il provider li dà), mai sovrascritta, e `giv story cut` la monta come
+  la `voce` della scena. `--voices` genera solo le voci, senza toccare i video; `--scene
+  <id> --new-voice` rifà a pagamento la voce di una scena. Ogni voce passa dalla stessa
+  riserva e dallo stesso tetto delle altre richieste a pagamento (spesa registrata più le
+  stime di voci e video ancora da fare, sul valore non arrotondato): con un tetto una voce
+  non stimabile esce con codice 2 senza avvii; una voce dall'esito incerto resta contata e
+  non si rilancia da sola (codice 2 finché `--scene <id> --new-voice`), un rifiuto
+  immediato (4xx) toglie la riserva. Una voce fatta non si rifà da sola quando testo o
+  impostazioni cambiano: `check` e `run` lo dicono. `giv story check` riporta per scena
+  `text_chars`, `voice_status` (`da_generare`, `fatto`, `cambiata`, `incerto`),
+  `voice_cost_est_usd` e `voice_duration_est_s`, il totale `voice_cost_est_usd` e, col
+  kit, `kit` con `file` e `inherited`; `giv story run` riporta `voices` e per scena `voice`
+  e `voice_this_run`. Ogni voce entra in `giv log` con `command` `story voice`. Esempio in
+  `examples/spot/storyboard-kit.json`.
 - **`giv qc <file|storyboard.json>`**: controllo tecnico in locale con `ffprobe` e
   `ffmpeg`, gratuito, senza scrivere file. Controlli `duration`, `size`, `fps`, `audio`,
   `black`, `freeze` (esclusi i tratti neri), `silence`, `loudness`, `peak` (picco vero
@@ -71,6 +97,11 @@ versioning [SemVer](https://semver.org/lang/it/).
 
 ### Modificato
 
+- **Stato di `giv story run`** (`<nome>.stato.json`): per le voci dai testi scrive nella
+  scena `voice`, `voice_key` (impronta di testo e impostazioni), `voice_status` e
+  `voice_error`, addebiti e riprese precedenti di tipo `voce`; i file del kit non vi
+  entrano. **Un giv più vecchio rifiuta uno stato scritto con le voci.** Gli storyboard e
+  gli stati della 0.11.0 si leggono come prima.
 - **Picco audio entro -1 dBTP** nei file di `giv post mix`, `giv export` e `giv story cut`:
   la normalizzazione chiede -1,5 dBTP e lascia il margine alla codifica AAC, che alzava il
   picco oltre -1 (sullo spot di prova della 0.11.0: da -0,8 a -1,3 dBTP, volume integrato
@@ -101,6 +132,10 @@ versioning [SemVer](https://semver.org/lang/it/).
   prima di qualsiasi richiesta («usa xai o togli il tetto»), e `giv story check` rifiuta
   allo stesso modo uno storyboard con tetto e voce Gemini. Senza tetto parte, con un avviso
   su stderr. La voce xAI (prezzo per carattere, stima esatta) non cambia.
+- **Durata di una voce non ancora generata**: `giv story check` la stima dai caratteri
+  (circa 15 al secondo) e l'avviso lo dice; per le durate vere `giv story run --voices`
+  (centesimi), poi di nuovo `check`. Un kit cambiato dopo la generazione non rigenera
+  niente: cambia solo il montaggio e le generazioni successive.
 - **`giv qc`, scene quasi ferme**: con la soglia predefinita (`--freeze-noise -60`) una
   ripresa quasi ferma ma non immobile può non risultare ferma; -50 la trova più spesso, a
   costo di qualche falso allarme. Soglie da tarare sulle clip vere.

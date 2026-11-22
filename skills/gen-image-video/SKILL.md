@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI con frazioni di centesimo e dizionario delle pronunce, o Gemini), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON, anche con la voce generata dai testi e il kit di marca (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI con frazioni di centesimo e dizionario delle pronunce, o Gemini), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -85,10 +85,12 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
                                                 # controllo tecnico in locale (neri, fermi, muti, volume, canali), gratis
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
-giv story check <storyboard.json>               # valida uno storyboard e ne stima il costo, gratis
-giv story run [--scene <id> [--new-keyframe | --new-job]] <storyboard.json>
-                                                # genera le scene video e avatar, a pagamento; riprende da dove si era fermato
-giv story cut [--formato <r>] [--export <canali>] <storyboard.json>
+giv story check [--kit <kit.json>] <storyboard.json>
+                                                # valida uno storyboard e ne stima il costo (voci comprese), gratis
+giv story run [--scene <id> [--new-keyframe | --new-job | --new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
+                                                # genera le voci dai testi, poi le scene video e avatar, a pagamento;
+                                                # riprende da dove si era fermato; --voices solo le voci
+giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
                                                 # monta con ffmpeg le scene pronte, un file per formato
                                                 # di montaggio.formati, gratis; --export come giv export --for
 giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
@@ -494,6 +496,24 @@ costa meno di un centesimo):
    ricavano da `voce/s1.tempi.json` (tempi per carattere), a partire dall'inizio della
    scena: `giv story cut` sposta da solo le righe del `ritardo_voce`.
 
+**Voce dai testi nello storyboard** (al posto dei file di voce fatti a mano; esempio in
+`examples/spot/storyboard-kit.json`):
+
+1. Sulla scena `"testo": "Ogni mattina, un gesto semplice."` invece di `"voce"`; le
+   impostazioni nel blocco `parlato` (`voce`, `lingua`, `velocita`, `pronuncia`…) o dal
+   kit (`"kit": "../kit/kit.json"`); senza, xai, `eve`, `it`. `ritardo_voce` vale anche
+   col testo.
+2. `giv story check storyboard.json`: per scena `voice_cost_est_usd`, `voice_status` e
+   `voice_duration_est_s` (stimata dai caratteri finché la voce non c'è).
+3. `giv story run --voices storyboard.json`: solo le voci (centesimi), in
+   `voce/<id>-v<N>.wav`; ascoltarle, poi `giv story check` usa le durate vere e avvisa
+   delle sovrapposizioni.
+4. `giv story run storyboard.json` per i video, poi `giv story cut`. Una voce fatta non si
+   rifà da sola: dopo aver cambiato il testo, `giv story run --scene s2 --new-voice
+   storyboard.json` (a pagamento). Codice 2 per una voce incerta: controllare sul provider
+   prima di `--new-voice`.
+5. Con `tetto_costo_usd` la voce deve essere xai: Gemini con un tetto esce con codice 2.
+
 **Rifinire uno spot in locale** (gratis, nessuna chiamata; ogni passo scrive un file nuovo
 in `--out` e ne dà il percorso in `files[0].path` del JSON):
 
@@ -541,7 +561,12 @@ e non rigenera):
 
 **Kit di marca e personaggi**: prima di usarlo `./bin/giv kit check kit.json` (gratis):
 file con le misure, avvisi su logo senza trasparenza, font, riferimenti e descrizione;
-codice 2 con un problema per riga se qualcosa non va. Esempio in `examples/kit/`.
+codice 2 con un problema per riga se qualcosa non va. Esempio in `examples/kit/`. Nello
+storyboard: campo `"kit": "../kit/kit.json"` (o `--kit` su `story check`, `run` e `cut`);
+logo, cartello finale, musica e stile dei testi del kit arrivano da soli nel montaggio, i
+personaggi si usano per nome in `usa` (descrizione davanti al prompt, tutela del
+personaggio), la voce e le pronunce del kit fanno da predefiniti del blocco `parlato`.
+Vince la scena, poi lo storyboard, poi il kit.
 
 ## Costi
 

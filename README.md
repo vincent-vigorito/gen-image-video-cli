@@ -854,7 +854,9 @@ errori vanno su stderr. `giv story help` (o `giv story --help`) e `giv story <so
 Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost_total_usd`
 1,5 (il `taglio` di s3 cambia solo il montaggio, non la durata chiesta al modello). I file in
 `examples/spot/img/`, `voce/` e `musica/` sono segnaposto (tinte piatte e silenzio):
-sostituirli con la foto del prodotto, il logo, la voce e la musica vere.
+sostituirli con la foto del prodotto, il logo, la voce e la musica vere. Lo stesso spot col
+kit di `examples/kit/` e la voce dai testi è in `examples/spot/storyboard-kit.json` (vedi
+[Kit e voce dai testi](#kit-e-voce-dai-testi)).
 
 | Campo | Cosa contiene |
 |---|---|
@@ -1329,7 +1331,7 @@ internal/speech/          voce: richiesta comune ai provider, tempi per caratter
 internal/montage/         ffmpeg e ffprobe: montaggio di giv story cut, operazioni locali (giv post…, sheet, frame, gif, export), controllo di giv qc e sottotitoli dai testi
 internal/output/          salvataggio media + manifest JSON
 skills/gen-image-video/   skill agent-native
-examples/spot/            storyboard d'esempio con file segnaposto
+examples/spot/            storyboard d'esempio con file segnaposto (storyboard-kit.json: col kit e la voce dai testi)
 examples/kit/             kit di marca e personaggi d'esempio con file segnaposto
 ```
 
