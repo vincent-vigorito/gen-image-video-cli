@@ -52,31 +52,15 @@ func New(name, baseURL, apiKey string, opts Options) *Client {
 }
 
 // checkRedirect lascia l'Authorization solo ai salti sull'origine dell'API
-// (schema, host e porta): fuori origine la chiave viene tolta. Le GET di attesa
-// dei job (contesto di pollOnly) fuori origine non si seguono: la loro risposta
-// decide se il job è finito male, e deve venire dal provider.
+// (schema, host e porta): fuori origine la chiave viene tolta.
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("%s: troppi redirect", c.name)
 	}
-	if req.Context().Value(noRedirectKey{}) != nil {
-		return http.ErrUseLastResponse // POST dei comandi sulle clip: mai reinviati, nemmeno sull'origine
-	}
 	if !c.apiOrigin(req.URL) {
-		if req.Context().Value(pollKey{}) != nil {
-			return http.ErrUseLastResponse // il 3xx diventa un errore HTTP: il job resta
-		}
 		req.Header.Del("Authorization")
 	}
 	return nil
-}
-
-type pollKey struct{}
-
-// pollOnly segna le richieste di attesa di un job: redirect solo sull'origine
-// dell'API (i download dei risultati restano liberi, senza chiave).
-func pollOnly(ctx context.Context) context.Context {
-	return context.WithValue(ctx, pollKey{}, true)
 }
 
 func (c *Client) Name() string { return c.name }
@@ -700,7 +684,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		Error json.RawMessage `json:"error"`
 		Usage json.RawMessage `json:"usage"` // letto solo dai comandi sulle clip
 	}
-	if err := c.doJSONWith(pollOnly(ctx), httpx.RetryPoll, http.MethodGet, job.PollingURL, nil, &st); err != nil {
+	if err := c.apiCall(ctx, httpx.RetryPoll, http.MethodGet, job.PollingURL, "", nil, &st); err != nil {
 		return nil, err
 	}
 	switch st.Status {
@@ -709,8 +693,8 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 		if st.Video.URL == "" {
 			return nil, fmt.Errorf("%s: job completato ma nessun video nella risposta", c.name)
 		}
-		// il video sta su una CDN: scaricato senza chiave
-		data, err := c.download(ctx, st.Video.URL)
+		// il video sta su una CDN: scaricato senza chiave (fetchResult)
+		data, err := c.fetchResult(ctx, st.Video.URL)
 		if err != nil {
 			return nil, err
 		}
@@ -718,11 +702,7 @@ func (c *Client) grokPoll(ctx context.Context, job provider.Job) (*provider.Resu
 			CostUSD: grokClipCost(ctx, st.Usage)}, nil
 	case "failed", "error", "expired":
 		fmt.Fprintln(os.Stderr)
-		detail := string(st.Error)
-		if ci := clipFrom(ctx); ci != nil {
-			detail = ci.jobError(st.Error)
-		}
-		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, detail))
+		return nil, provider.JobFailed(fmt.Errorf("%s: job %s: %s", c.name, st.Status, jobErrorText(ctx, st.Error)))
 	}
 	return nil, nil
 }
@@ -830,29 +810,6 @@ func jobTimeout(d time.Duration) time.Duration {
 }
 
 // --- helper ---
-
-func (c *Client) download(ctx context.Context, url string) ([]byte, error) {
-	return c.get(ctx, url, false)
-}
-
-func (c *Client) get(ctx context.Context, url string, auth bool) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if auth {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: download HTTP %d", c.name, resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
-}
 
 func addFilePart(w *multipart.Writer, field, path string) error {
 	h := textproto.MIMEHeader{}
