@@ -203,14 +203,19 @@ type GeminiUsage struct {
 	Thought     int64 // ragionamento
 }
 
-// GeminiUsageCost è il costo dei token riportati × listino; ok false se non
-// ci sono token o i numeri non sono validi. L'uscita non suddivisa per
-// modalità va passata come video (tariffa più alta).
+// geminiMinVideoTokens è il minimo di token video di un video consegnato: la
+// durata più breve alla risoluzione più bassa.
+const geminiMinVideoTokens = 3 * 1931
+
+// GeminiUsageCost è il costo dei token riportati × listino; ok false (vale la
+// riserva) se i numeri non sono validi o non sono quelli di un video
+// consegnato: ingresso nullo o uscita video sotto il minimo di un video.
+// L'uscita non suddivisa per modalità va passata come video (tariffa più alta).
 func GeminiUsageCost(u GeminiUsage) (usd float64, source string, ok bool) {
 	if u.Input < 0 || u.OutputVideo < 0 || u.OutputOther < 0 || u.Thought < 0 {
 		return 0, "", false
 	}
-	if u.Input+u.OutputVideo+u.OutputOther+u.Thought == 0 {
+	if u.Input == 0 || u.OutputVideo < geminiMinVideoTokens {
 		return 0, "", false
 	}
 	usd = (float64(u.OutputVideo)*geminiVideoOutPerM + float64(u.OutputOther+u.Thought)*geminiTextOutPerM +
