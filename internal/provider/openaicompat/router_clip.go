@@ -25,7 +25,7 @@ import (
 
 // dataURIHint accompagna un rifiuto quando la clip è andata come data URI.
 const dataURIHint = "la clip locale è andata a openrouter come data URI, che OpenRouter non documenta: " +
-	"se il rifiuto dipende da questo, pubblica il video e passa --video con un URL https"
+	"se il rifiuto dipende da questo, pubblica il video e passa --video con un URL https, oppure usa --provider fal"
 
 // creativity di flux-video-upscale per --mode
 var routerCreativity = map[string]int{"precise": 0, "creative": 1}
