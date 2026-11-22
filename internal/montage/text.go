@@ -268,30 +268,39 @@ func ASS(w, h int, m Margins, texts []Text) ([]byte, error) {
 // diventino un a capo o uno spazio.
 const wordJoiner = "⁠"
 
-// EscapeASS rende s alla lettera nel testo di una riga Dialogue: { e }
-// diventano \{ e \} (graffe visibili, nessun blocco di override), una \
-// davanti a N, n o h è seguita da un carattere invisibile, ogni a capo
-// (\n, \r\n, \r, U+0085, U+2028, U+2029) diventa \N, la tabulazione uno
-// spazio; gli altri caratteri di controllo si tolgono.
+// EscapeASS rende s alla lettera nel testo di una riga Dialogue. Prima si
+// normalizza: ogni a capo (\n, \r\n, \r, U+0085, U+2028, U+2029) diventa
+// un solo a capo, la tabulazione uno spazio, gli altri caratteri di
+// controllo si tolgono. Poi, sul testo normalizzato: { e } diventano \{ e \}
+// (graffe visibili, nessun blocco di override), una \ davanti a N, n o h è
+// seguita da un carattere invisibile, l'a capo diventa \N.
 func EscapeASS(s string) string {
-	var b strings.Builder
-	rs := []rune(strings.ReplaceAll(s, "\r\n", "\n"))
-	for i, r := range rs {
+	var rs []rune
+	for _, r := range strings.ReplaceAll(s, "\r\n", "\n") {
 		switch {
-		case r == '{':
+		case r == '\n' || r == '\r' || r == 0x85 || r == 0x2028 || r == 0x2029:
+			rs = append(rs, '\n')
+		case r == '\t':
+			rs = append(rs, ' ')
+		case r < 0x20 || r == 0x7f || r >= 0x80 && r < 0xa0:
+		default:
+			rs = append(rs, r)
+		}
+	}
+	var b strings.Builder
+	for i, r := range rs {
+		switch r {
+		case '{':
 			b.WriteString(`\{`)
-		case r == '}':
+		case '}':
 			b.WriteString(`\}`)
-		case r == '\\':
+		case '\\':
 			b.WriteByte('\\')
 			if i+1 < len(rs) && strings.ContainsRune("Nnh", rs[i+1]) {
 				b.WriteString(wordJoiner)
 			}
-		case r == '\n' || r == '\r' || r == 0x85 || r == 0x2028 || r == 0x2029:
+		case '\n':
 			b.WriteString(`\N`)
-		case r == '\t':
-			b.WriteByte(' ')
-		case r < 0x20 || r == 0x7f || r >= 0x80 && r < 0xa0:
 		default:
 			b.WriteRune(r)
 		}
@@ -457,8 +466,14 @@ func fontFamily(data []byte) (string, error) {
 	return "", errors.New("tabella dei nomi assente")
 }
 
+// maxFamilyBytes è il tetto di un nome di famiglia letto (UTF-16): i record
+// più lunghi si saltano.
+const maxFamilyBytes = 512
+
 // nameFamily cerca nella tabella name il nome di famiglia (ID 1) della
-// piattaforma Windows (3), codifica Unicode, preferendo l'inglese (0x409).
+// piattaforma Windows (3), codifica Unicode: il primo valido in inglese
+// (0x409), altrimenti il primo valido. Si decodificano solo i record che
+// migliorerebbero la scelta, ognuno di al più maxFamilyBytes.
 func nameFamily(t []byte) (string, error) {
 	if len(t) < 6 {
 		return "", errFont
@@ -477,7 +492,14 @@ func nameFamily(t []byte) (string, error) {
 		id := binary.BigEndian.Uint16(t[r+6:])
 		ln := int(binary.BigEndian.Uint16(t[r+8:]))
 		o := int(binary.BigEndian.Uint16(t[r+10:]))
-		if plat != 3 || id != 1 || enc != 0 && enc != 1 && enc != 10 || ln%2 != 0 {
+		if plat != 3 || id != 1 || enc != 0 && enc != 1 && enc != 10 || ln%2 != 0 || ln > maxFamilyBytes {
+			continue
+		}
+		rank := 1
+		if lang == 0x409 {
+			rank = 2
+		}
+		if rank <= bestRank {
 			continue
 		}
 		s := strOff + o
@@ -489,12 +511,12 @@ func nameFamily(t []byte) (string, error) {
 			u[j] = binary.BigEndian.Uint16(t[s+2*j:])
 		}
 		name := strings.TrimSpace(string(utf16.Decode(u)))
-		rank := 1
-		if lang == 0x409 {
-			rank = 2
+		if name == "" {
+			continue
 		}
-		if name != "" && rank > bestRank {
-			best, bestRank = name, rank
+		best, bestRank = name, rank
+		if rank == 2 {
+			break
 		}
 	}
 	if best == "" {

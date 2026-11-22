@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -294,10 +296,46 @@ func execLocal(lf *localFlags, op localOp) (*localManifest, error) {
 		}
 	}
 	entry := localLogEntry{Ts: time.Now().Format(time.RFC3339), localManifest: *man}
-	if err := output.AppendLog(logFile, entry); err != nil {
+	if err := appendLocalLog(entry, paths); err != nil {
 		fmt.Fprintf(os.Stderr, "avviso: registro %s non aggiornato: %v\n", logFile, err)
 	}
 	return man, nil
+}
+
+// appendLocalLog accoda la riga al registro giv-log.jsonl della cartella
+// corrente senza seguire link: il nome deve essere un file normale (o
+// mancare, e allora si crea), aperto dentro la cartella (os.Root) e,
+// controllato sul descrittore, diverso da ogni ingresso (anche tramite un
+// link fisso).
+func appendLocalLog(entry any, inputs []string) error {
+	r, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	if st, err := r.Lstat(logFile); err == nil && !st.Mode().IsRegular() {
+		return errors.New("non è un file normale (link o cartella): non lo seguo")
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := r.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !st.Mode().IsRegular() {
+		return errors.New("non è un file normale")
+	}
+	for _, in := range inputs {
+		if ist, err := os.Stat(in); err == nil && os.SameFile(st, ist) {
+			return fmt.Errorf("è lo stesso file dell'ingresso %s: non lo modifico", in)
+		}
+	}
+	return json.NewEncoder(f).Encode(entry)
 }
 
 // postOp è un'operazione di giv post; ognuna si registra dal suo file con
