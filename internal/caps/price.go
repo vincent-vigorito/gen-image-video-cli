@@ -92,6 +92,9 @@ func isResolution(s string) bool {
 // Estimate stima il costo di req dal listino del modello; se non si può,
 // restituisce nil e il motivo.
 func (m *Model) Estimate(req provider.VideoRequest) (*Estimate, string) {
+	if m.estimate != nil {
+		return m.estimate(m, req)
+	}
 	dur := req.Duration
 	if dur <= 0 {
 		dur = m.DefaultDuration

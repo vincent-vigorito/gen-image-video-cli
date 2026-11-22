@@ -20,6 +20,7 @@ import (
 	"gen-image-video-cli/internal/output"
 	"gen-image-video-cli/internal/presets"
 	"gen-image-video-cli/internal/provider"
+	"gen-image-video-cli/internal/provider/fal"
 	"gen-image-video-cli/internal/provider/gemini"
 	"gen-image-video-cli/internal/provider/openaicompat"
 )
@@ -106,6 +107,7 @@ var defaultVideoModels = map[string]string{
 	"gemini":     caps.GeminiVideoModel,
 	"xai":        "grok-imagine-video-1.5",
 	"openrouter": "google/gemini-omni-1.2-flash",
+	"fal":        "kling-v3-pro",
 }
 
 // manifest è l'uscita di image e video e la riga del registro. I campi oltre
@@ -128,6 +130,8 @@ type manifest struct {
 	CostEstUSD  float64           `json:"cost_est_usd,omitempty"` // stimato da listino, se il provider non lo riporta
 	CostSource  string            `json:"cost_source,omitempty"`
 	Warnings    []string          `json:"warnings,omitempty"`
+
+	usageEstUSD float64 // stima dai consumi riportati, non arrotondata (conto del tetto di story run)
 }
 
 func main() {
@@ -171,7 +175,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `giv — generazione immagini e video multi-provider (gemini, openai, xai, openrouter)
+	fmt.Fprintf(os.Stderr, `giv — generazione immagini e video multi-provider (gemini, openai, xai, openrouter, fal)
 
 Uso:
   giv models [--all] [--json]      elenca i modelli image/video disponibili
@@ -190,7 +194,7 @@ Uso:
   giv version                      stampa la versione
 
 Flag comuni:
-  --provider <p>     gemini | openai | xai | openrouter (default: GIV_PROVIDER, altrimenti gemini)
+  --provider <p>     gemini | openai | xai | openrouter | fal (default: GIV_PROVIDER, altrimenti gemini)
   --model <nome>     modello; senza --model il default del provider:
 %s  --out <dir>        directory di output (default: out)
   --name <slug>      base dei nomi file (default: derivato dal prompt)
@@ -220,6 +224,7 @@ giv video:
   --strict           anche i controlli di rifinitura non supportati (--negative, --seed...) sono errori
   Prima di generare giv controlla capacità e prezzi del modello (openrouter: /videos/models,
   xai e gemini: tabella interna): un controllo strutturale non supportato esce con codice 2.
+  Senza --provider né GIV_PROVIDER giv video esce con codice 2: il default gemini vale solo per le immagini.
   gemini (gemini-omni-1.2-flash, a pagamento): audio sempre presente, durata 3-15 s (default 10),
   360p-4k (default 720p), 16:9 o 9:16; la durata e la risoluzione sono sempre inviate.
   --preset <nome>    preset di camera o effetto, ripetibile: al massimo uno di camera e uno
@@ -234,7 +239,7 @@ giv presets:
   I file ./giv-presets.json e ~/.config/giv/presets.json aggiungono o sostituiscono
   preset (vince il primo)
 
-Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY e GIV_PROVIDER
+Credenziali: GEMINI_API_KEY / OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY / FAL_KEY e GIV_PROVIDER
              da env di processo, ./credentials.env, ./.env o ~/.config/giv/credentials.env
              (in quest'ordine: vince il primo che la definisce)
 Output: file salvati in --out, manifest JSON su stdout (i log vanno su stderr)
@@ -298,20 +303,31 @@ var envKeys = map[string]string{
 	"openai":     "OPENAI_API_KEY",
 	"xai":        "XAI_API_KEY",
 	"openrouter": "OPENROUTER_API_KEY",
+	"fal":        "FAL_KEY",
 }
 
 // defaultProvider è il provider usato senza --provider: GIV_PROVIDER (env o file
 // di configurazione, come le chiavi), altrimenti gemini.
 func defaultProvider() string {
-	if p := strings.TrimSpace(config.Get("GIV_PROVIDER")); p != "" {
+	if p := envProvider(); p != "" {
 		return p
 	}
 	return "gemini"
 }
 
+func envProvider() string { return strings.TrimSpace(config.Get("GIV_PROVIDER")) }
+
+// errNoVideoProvider: un video (a pagamento) non parte col solo default gemini,
+// serve un provider scelto (--provider, storyboard o GIV_PROVIDER); senza,
+// codice 2 come nella 0.9.1, quando gemini non aveva video.
+func errNoVideoProvider(how string) error {
+	return usageError("nessun provider scelto per il video: %s openrouter (default %s), xai (default %s), gemini (default %s) o fal (default %s), oppure imposta GIV_PROVIDER",
+		how, defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"], defaultVideoModels["fal"])
+}
+
 func checkProvider(name string) error {
 	if _, ok := envKeys[name]; !ok {
-		return usageError("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter)", name)
+		return usageError("provider sconosciuto: %s (validi: gemini, openai, xai, openrouter, fal)", name)
 	}
 	return nil
 }
@@ -324,6 +340,10 @@ var baseURLs = map[string]string{
 	"xai":        "https://api.x.ai/v1",
 	"openrouter": "https://openrouter.ai/api/v1",
 }
+
+// falConfig sono le origini di fal (coda e storage); i test le puntano a un
+// server finto.
+var falConfig = fal.Config{Queue: fal.QueueURL, REST: fal.RESTURL}
 
 func newProvider(name string) (provider.Provider, error) {
 	if err := checkProvider(name); err != nil {
@@ -340,6 +360,8 @@ func newProvider(name string) (provider.Provider, error) {
 		c := gemini.New(key)
 		c.Base = baseURLs["gemini"]
 		return c, nil
+	case "fal":
+		return fal.New(key, falConfig)
 	case "openai":
 		return openaicompat.New("openai", baseURLs["openai"], key,
 			openaicompat.Options{UseSize: true}), nil
@@ -365,9 +387,13 @@ func resolveModel(flagValue, providerName string, defaults map[string]string) (s
 // resolveVideoModel è resolveModel per i video, col caso senza video spiegato:
 // openai non ha un'API video, anche con --model.
 func resolveVideoModel(flagValue, providerName string) (string, error) {
-	if providerName == "openai" {
+	switch {
+	case providerName == "openai":
 		return "", usageError("openai non ha un'API video: usa --provider openrouter (default %s), --provider xai (default %s) o --provider gemini (default %s)",
 			defaultVideoModels["openrouter"], defaultVideoModels["xai"], defaultVideoModels["gemini"])
+	case providerName == "fal" && flagValue != "" && !fal.HasCard(flagValue):
+		// niente endpoint liberi: senza scheda il prezzo non sarebbe noto
+		return "", usageError("fal: scheda %q sconosciuta (schede: %s)", flagValue, strings.Join(fal.Cards(), ", "))
 	}
 	return resolveModel(flagValue, providerName, defaultVideoModels)
 }
@@ -566,11 +592,18 @@ func cmdVideo(args []string) error {
 	}
 	// --max-cost: tetto solo se il flag c'è (anche 0)
 	var costCap *float64
+	chosen := envProvider() != ""
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "max-cost" {
+		switch f.Name {
+		case "max-cost":
 			costCap = maxCost
+		case "provider":
+			chosen = true
 		}
 	})
+	if !chosen {
+		return errNoVideoProvider("usa --provider")
+	}
 	job, err := prepareVideo(videoOptions{
 		Provider: *prov, Model: *model, Prompt: prompt,
 		Aspect: *aspect, Resolution: *resolution, Negative: *negative,

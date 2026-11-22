@@ -32,10 +32,10 @@ type Model struct {
 	Pricing         map[string]float64 `json:"pricing,omitempty"` // sku -> valore, unità nel nome
 	Source          string             `json:"source"`
 
-	// Prepare, se c'è, fa i controlli propri del modello (rifiuto = codice 2) e
-	// completa req coi valori che giv invia sempre (la stima vale per quelli);
-	// restituisce gli avvisi.
-	Prepare func(req *provider.VideoRequest) ([]string, error) `json:"-"`
+	// schede con regole o prezzi propri (fal): nil = solo i controlli e la
+	// stima generici
+	check    func(req *provider.VideoRequest) error
+	estimate func(m *Model, req provider.VideoRequest) (*Estimate, string)
 }
 
 // Find cerca il modello per id; nil se non c'è.
@@ -175,13 +175,6 @@ func Check(prov string, m *Model, catalog []Model, req *provider.VideoRequest, s
 		}
 		return "modelli di " + prov + " che lo supportano: " + strings.Join(ids, ", ")
 	}
-	if m.Prepare != nil {
-		w, err := m.Prepare(req)
-		if err != nil {
-			return nil, err
-		}
-		warns = append(warns, w...)
-	}
 
 	// strutturali: cambiano cosa viene generato
 	if req.Image != "" && !slices.Contains(m.Frames, "first_frame") {
@@ -253,6 +246,11 @@ func Check(prov string, m *Model, catalog []Model, req *provider.VideoRequest, s
 				allowed = strings.Join(m.Passthrough, ", ")
 			}
 			return nil, reject("--param %s non ammesso da %s (ammessi: %s)", k, m.ID, allowed)
+		}
+	}
+	if m.check != nil {
+		if err := m.check(req); err != nil {
+			return nil, err
 		}
 	}
 
