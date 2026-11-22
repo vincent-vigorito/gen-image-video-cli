@@ -228,7 +228,7 @@ Uso:
   giv frame --video <file> --at <s>|--last [--width <px>]  un fotogramma PNG (con --width la miniatura), in locale (gratuito)
   giv gif --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]  GIF animata in locale (default 480 px, 12 fps; gratuita)
   giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito
-  giv voice "<testo>"|--text-file <f> [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--style "<t>"] [--pronuncia <file.json>] [--voices]  voce fuori campo WAV con i tempi (xai, a pagamento; aiuto: giv voice help)
+  giv voice "<testo>"|--text-file <f> [--provider xai|gemini] [--voice <nome>] [--lang it] [--speed 0.7-1.5] [--style "<t>"] [--kit <kit.json>] [--pronuncia <file.json>] [--voices]  voce fuori campo WAV, coi tempi su xai (a pagamento; aiuto: giv voice help)
   giv qc <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>] [--expect-audio on|off] [--for <canali>] [--strict]  controllo tecnico (durata, misure, neri, fermi, muti, volume, canali), in locale, gratuito
   giv version                      stampa la versione
 
