@@ -955,7 +955,9 @@ montaggio resta quello di prima):
 - **`titoli`**: elenco (al più 50) di `{"testo": …}` con `scena` (id: i tempi contano
   dall'inizio di quella scena; senza, dall'inizio del montato), `da` (secondi, default 0),
   `durata` (default 3), `posizione` (default `basso`) e `stile` (al posto di
-  `stile_testi`), con una dissolvenza di 0,3 s.
+  `stile_testi`), con una dissolvenza di 0,3 s. Un titolo in alto con il logo in alto
+  (anche di default) nei formati verticali (9:16, 4:5) può finire sotto il logo:
+  `giv story check` e `giv story cut` lo avvisano (nessuno spostamento).
 - **`cartello_finale`**: accodato dopo l'ultima scena a taglio netto, senza audio suo (la
   musica continua): `durata` (default 3, al più 60), `sfondo` (`#RRGGBB`, default nero),
   `logo` (immagine al centro), `testo` e `sottotesto` (in basso; nei 9:16 subito sotto il

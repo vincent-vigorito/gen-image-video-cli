@@ -48,8 +48,11 @@ versioning [SemVer](https://semver.org/lang/it/).
   `titoli` (tempi relativi a una scena), `cartello_finale`, `stile_testi`, `volume` (LUFS),
   `musica.sotto_voce` e `musica.sfuma_fine`; per scena `fuoco`, `taglio` e `velocita`;
   `foglio_contatto`. `giv story cut --formato <r>` monta un solo formato, `--export
-  <canali>` esporta per canale dal montato. `giv story run` e `giv story cut` riscrivono
-  `foglio-contatto.jpg` accanto allo storyboard. `examples/spot` usa i campi nuovi (con un
+  <canali>` esporta per canale dal montato. Con i formati un `.srt` sta nei margini sicuri
+  del formato; nei verticali un titolo in alto col logo in alto dà un avviso; nel 9:16 il
+  sottotesto del cartello va subito sotto il testo (anche in `giv post overlay`).
+  `giv story run` e `giv story cut` riscrivono `foglio-contatto.jpg` accanto allo
+  storyboard. `examples/spot` usa i campi nuovi (con un
   segnaposto in `musica/`).
 - **`giv export --video <file> --for <canali>`**: un file per canale (`instagram`,
   `tiktok`, `youtube`, `linkedin`, ognuno con `:<formato>` facoltativo; predefiniti 9:16
