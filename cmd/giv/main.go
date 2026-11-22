@@ -176,6 +176,8 @@ func main() {
 		err = cmdGIF(os.Args[2:])
 	case "export":
 		err = cmdExport(os.Args[2:])
+	case "qc":
+		err = cmdQC(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("giv " + version)
 	case "help", "-h", "--help":
@@ -221,6 +223,7 @@ Uso:
   giv frame --video <file> --at <s>|--last [--width <px>]  un fotogramma PNG (con --width la miniatura), in locale (gratuito)
   giv gif --video <file> [--start <s>] [--end <s>] [--width <px>] [--fps <n>]  GIF animata in locale (default 480 px, 12 fps; gratuita)
   giv export --video <file> --for instagram,tiktok,youtube,linkedin[:<formato>] [--fit crop|pad|blur] [--focus <x>[,<y>]] [--loudness <lufs>|off]  un file per canale, in locale con ffmpeg, gratuito
+  giv qc <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>] [--expect-fps <n>] [--expect-audio on|off] [--for <canali>] [--strict]  controllo tecnico (durata, misure, neri, fermi, muti, volume, canali), in locale, gratuito
   giv version                      stampa la versione
 
 Flag comuni:
