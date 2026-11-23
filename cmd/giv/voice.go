@@ -63,7 +63,8 @@ per milione di token di testo e 9 $ (flash-lite 6 $) per milione di token audio,
 secondo, il doppio dal 01/01/2027. Gemini non ha un massimo garantito: con --max-cost esce
 con codice 2 (usa xai o togli il tetto); senza tetto parte con un avviso e una stima
 probabile sul limite di token della richiesta (circa 0,15 $, 0,30 $ dal 2027); il costo
-viene dai token riportati o dalla durata. Uscita: il WAV, i tempi per carattere se il provider li dà
+della chiamata (cost_usage_usd) viene dai token riportati o dalla durata, con xai è
+calcolato da giv su caratteri e listino. Uscita: il WAV, i tempi per carattere se il provider li dà
 (xai), e su stdout il JSON con file, durata misurata, caratteri e costo.
 `
 
@@ -427,6 +428,7 @@ func (j *voiceJob) run(ctx context.Context) (manifest, error) {
 		man.CostEstUSD, man.CostSource = j.est.USD, j.est.Source
 	}
 	fmt.Fprintf(os.Stderr, "giv voice con %s (voce %s, %d caratteri)…\n", j.req.Provider, j.req.Voice, len([]rune(j.req.Text)))
+	at := time.Now()
 	res, err := c.Synthesize(ctx, j.req)
 	if err != nil {
 		var se *httpx.StartError
@@ -458,6 +460,11 @@ func (j *voiceJob) run(ctx context.Context) (manifest, error) {
 	if res.UsageUSD > 0 {
 		man.CostUsageUSD, man.CostUsageSource = math.Round(res.UsageUSD*1e6)/1e6, res.UsageSource
 		man.usageEstUSD = res.UsageUSD
+	} else if usd, src, ok := speech.CharsCost(j.req, at); ok && usd > 0 {
+		// provider a caratteri (xai): costo della chiamata fatta, calcolato
+		// da giv sul testo inviato e sul listino (il provider non lo riporta)
+		man.CostUsageUSD, man.CostUsageSource = math.Round(usd*1e6)/1e6, src
+		man.usageEstUSD = usd
 	}
 	return man, nil
 }

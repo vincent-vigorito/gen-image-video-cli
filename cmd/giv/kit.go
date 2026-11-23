@@ -63,6 +63,7 @@ type kitCheckOut struct {
 	Characters     []kitCharacter `json:"characters,omitempty"`
 	Voice          *kit.Voce      `json:"voice,omitempty"`
 	Pronunciations int            `json:"pronunciations,omitempty"` // parole del dizionario
+	Names          int            `json:"names,omitempty"`          // nomi propri per la trascrizione
 	Warnings       []string       `json:"warnings,omitempty"`
 }
 
@@ -130,7 +131,7 @@ func loadKit(path string) (*kit.Kit, error) {
 // senza audio) è un rifiuto di codice 2; il resto sono avvisi. Legge soltanto:
 // nessuna scrittura, nessuna rete.
 func checkKit(k *kit.Kit, path string) (*kitCheckOut, error) {
-	out := &kitCheckOut{Kit: path, Files: []kitFile{}, Voice: k.Voce, Pronunciations: len(k.Pronuncia)}
+	out := &kitCheckOut{Kit: path, Files: []kitFile{}, Voice: k.Voce, Pronunciations: len(k.Pronuncia), Names: len(k.Nomi)}
 	var problems []string
 	problem := func(f kit.File, format string, a ...any) {
 		problems = append(problems, fmt.Sprintf("%s: %s: %s", f.Campo, f.File, fmt.Sprintf(format, a...)))
