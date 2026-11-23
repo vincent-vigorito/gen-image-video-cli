@@ -114,6 +114,9 @@ type QCOptions struct {
 	// Still: il file è fermo per natura (scena immagine): niente controllo
 	// dei tratti fermi. Un'immagine (.png, .jpg…) lo è sempre.
 	Still bool
+	// StillTailS sono gli ultimi secondi fermi per natura (il cartello finale
+	// di giv story cut): i tratti fermi lì dentro non contano, quelli prima sì.
+	StillTailS float64
 	// Profiles sono i canali con cui confrontare il file (ParseChannels):
 	// un QCChannel ciascuno.
 	Profiles   []Profile
@@ -130,6 +133,9 @@ func (o QCOptions) Check() error {
 	}
 	if !finite(o.ExpectFPS) || o.ExpectFPS < 0 || o.ExpectFPS > maxFPS*2 {
 		return invalid("fps attesi %v: più di 0 e al più %d", o.ExpectFPS, maxFPS*2)
+	}
+	if !finite(o.StillTailS) || o.StillTailS < 0 || o.StillTailS > qcMaxSeconds {
+		return invalid("coda ferma %v: secondi, da 0 a %s", o.StillTailS, num(qcMaxSeconds))
 	}
 	if o.ExpectLoudness != nil {
 		if err := CheckLoudness(*o.ExpectLoudness); err != nil {
@@ -733,7 +739,22 @@ func (q qcFile) freeze() QCCheck {
 	case q.still:
 		return skipped("freeze", "immagine: ferma per natura")
 	}
-	return q.spans("freeze", "fermo", qcSubtract(q.a.Freeze, q.a.Black, q.th.FreezeMinS), q.th.FreezeMinS)
+	iv := qcSubtract(q.a.Freeze, q.a.Black, q.th.FreezeMinS)
+	tail := q.o.StillTailS
+	if tail > 0 {
+		// la coda ferma voluta (cartello finale) va fino in fondo al file
+		iv = qcSubtract(iv, []QCInterval{{Start: math.Max(0, q.info.Duration-tail), End: math.Inf(1)}}, q.th.FreezeMinS)
+	}
+	c := q.spans("freeze", "fermo", iv, q.th.FreezeMinS)
+	if tail > 0 {
+		note := fmt.Sprintf("esclusi gli ultimi %s s (cartello finale)", num(tail))
+		if c.Message == "" {
+			c.Message = note
+		} else {
+			c.Message += "; " + note
+		}
+	}
+	return c
 }
 
 func (q qcFile) silence() QCCheck {
@@ -803,7 +824,8 @@ func (q qcFile) peak() QCCheck {
 }
 
 // qcStreamCheck segnala le tracce in più: un'altra traccia video o audio
-// (si usa la prima), sottotitoli, dati, copertina.
+// (si usa la prima), sottotitoli, dati. La copertina allegata (attached_pic,
+// come nelle clip di xAI) si conta in value ma non è un avviso.
 func qcStreamCheck(n qcStreams) QCCheck {
 	c := QCCheck{Name: "streams", Result: QCOK,
 		Value: map[string]int{"video": n.Video, "audio": n.Audio, "subtitle": n.Subtitle, "other": n.Other, "cover": n.Cover}}
@@ -819,9 +841,6 @@ func qcStreamCheck(n qcStreams) QCCheck {
 	}
 	if n.Other > 0 {
 		extra = append(extra, fmt.Sprintf("%d di dati o allegati", n.Other))
-	}
-	if n.Cover > 0 {
-		extra = append(extra, "copertina")
 	}
 	if len(extra) > 0 {
 		c.Result, c.Message = QCWarning, "tracce in più: "+strings.Join(extra, ", ")
