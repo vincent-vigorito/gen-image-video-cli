@@ -123,8 +123,8 @@ type Predefiniti struct {
 	// provider, modello e risoluzione economici; assente: niente bozze.
 	Bozza *Bozza `json:"bozza,omitempty"`
 	// Parallelo sono le scene tenute aperte insieme da giv story run, da 1 a
-	// 4; 0 (assente): 1. --parallel prevale.
-	Parallelo int `json:"parallelo,omitempty"`
+	// 4; assente: 1, scritto 0: errore. --parallel prevale.
+	Parallelo *int `json:"parallelo,omitempty"`
 }
 
 // Bozza è il blocco default.bozza: come si genera la bozza video di una
@@ -139,7 +139,12 @@ type Bozza struct {
 const MaxParallelo = 4
 
 // Parallelo è default.parallelo: 0 se assente.
-func (s *Storyboard) Parallelo() int { return s.Default.Parallelo }
+func (s *Storyboard) Parallelo() int {
+	if p := s.Default.Parallelo; p != nil {
+		return *p
+	}
+	return 0
+}
 
 // Scene è una scena dello storyboard.
 type Scene struct {
@@ -477,8 +482,8 @@ func (s *Storyboard) Validate() error {
 	if s.Formato != nil && s.Formato.FPS < 0 {
 		fail("formato.fps deve essere positivo")
 	}
-	if p := s.Default.Parallelo; p < 0 || p > MaxParallelo {
-		fail("default.parallelo deve essere un intero da 1 a %d", MaxParallelo)
+	if p := s.Default.Parallelo; p != nil && (*p < 1 || *p > MaxParallelo) {
+		fail("default.parallelo deve essere un intero da 1 a %d (assente vale 1)", MaxParallelo)
 	}
 	if b := s.Default.Bozza; b != nil && strings.TrimSpace(b.Modello) == "" {
 		fail("default.bozza: modello mancante (il modello economico delle bozze)")
