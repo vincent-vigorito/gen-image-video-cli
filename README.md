@@ -147,10 +147,14 @@ giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                               # scarica un job video già partito, senza nuovo avvio
 giv story check [--kit <kit.json>] <storyboard.json>
                                               # valida uno storyboard a più scene e ne stima il costo
-giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
-                                              # genera le voci dai testi e le scene video (a pagamento), riprende da dove si era fermato
-giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
-                                              # monta con ffmpeg le scene già pronte, un file per formato
+giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--keyframes | --bozza]
+              [--parallel <n>] [--kit <kit.json>] <storyboard.json>
+                                              # genera le voci dai testi e le scene video (a pagamento), riprende da dove si era fermato;
+                                              # --keyframes solo i fotogrammi chiave, --bozza le bozze economiche, --parallel fino a 4 scene aperte
+giv story approve [--all] [--kit <kit.json>] <storyboard.json> [<scena>…]
+                                              # approva la bozza o il fotogramma chiave visti: il definitivo parte solo per quelle (locale, gratuito)
+giv story cut [--bozza] [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
+                                              # monta con ffmpeg le scene già pronte, un file per formato; --bozza le bozze con la scritta BOZZA
 giv story help                                # aiuto di giv story; giv story <sottocomando> --help per il sottocomando
 giv kit check <kit.json>                      # controlla il kit di marca e personaggi ed elenca i file con le misure (gratuito)
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro locale delle generazioni
@@ -183,6 +187,9 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
 giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <file.json>] [--kit <kit.json>]
             [--nome <nome>]... [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
                                               # controllo della voce: trascrizione confrontata col testo (xai, a pagamento)
+giv qc      <video> --judge --prompt "<richiesta>" | --prompt-file <f> [--ref <immagine>] [--model <m>]
+            [--max-cost <usd>] [--dry-run] [--strict]
+                                              # giudizio di aderenza: 4 fotogrammi e la richiesta a gemini (a pagamento, solo con --judge)
 giv version
 ```
 
@@ -200,9 +207,10 @@ prima o dopo.
 | `upscale` | `--video <url\|file>` obbligatorio (con openrouter solo URL `https` pubblico: un file locale esce con codice 2; con fal anche file locale) · `--factor` (default 2; openrouter 1,5-3, fal 1-4) · `--mode precise\|creative` (default `precise`) e prompt facoltativo, solo openrouter · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `openrouter` (default) o `fal` |
 | `avatar` | `--image <file\|url>` e `--audio <wav\|mp3>` obbligatori · `--model standard\|pro` (default `standard`) · prompt facoltativo · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `fal` |
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
-| `story check` | `--kit <file>` (kit di marca e personaggi al posto del campo `kit`); il file dello storyboard è l'unico argomento |
-| `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; `--new-voice` (solo con `--scene`) rigenera anche la voce dal testo della scena; `--voices` genera solo le voci dai testi, nessun video; `--kit <file>` come in `story check`; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
-| `story cut` | `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS; `--kit <file>` come in `story check` |
+| `story check` | `--kit <file>` (kit di marca e personaggi al posto del campo `kit`); il file dello storyboard è l'unico argomento; dalla 0.13.0 dice anche scene da preparare, da approvare e pronte, e la spesa ancora prevista per bozze e definitivi |
+| `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; `--new-voice` (solo con `--scene`) rigenera anche la voce dal testo della scena; `--voices` genera solo le voci dai testi, nessun video; dalla 0.13.0 `--keyframes` genera solo i fotogrammi chiave (nessun video), `--bozza` solo le bozze video col profilo `default.bozza` in `clip/bozza/` (i due flag non vanno insieme, né con le voci) e `--parallel <n>` tiene aperte fino a n scene insieme, da 1 a 4 (di partenza 1, o `default.parallelo`); `--kit <file>` come in `story check`; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
+| `story approve` | le scene da approvare dopo il file dello storyboard, oppure `--all` (ogni scena video con materiale da vedere; le altre in `skipped`); `--kit <file>` come in `story check`; locale e gratuito: vedi [Approvare prima del definitivo](#approvare-prima-del-definitivo-giv-story-approve) |
+| `story cut` | `--bozza` monta le bozze in `<nome>.bozza.mp4` con la scritta BOZZA (niente `--export`); `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS; `--kit <file>` come in `story check` |
 | `kit check` | nessun flag: il file del kit è l'unico argomento; `giv kit help` (o `giv kit --help`) stampa l'aiuto |
 | `post <operazione>` | `--video <file>` obbligatorio · flag dell'operazione · `--out` · `--name` · `--dry-run`: vedi [Rifinitura in locale](#rifinitura-in-locale-giv-post) |
 | `sheet` | file, cartella o storyboard come argomento (o `--video`) · `--every <s>` oppure `--frames <n>` · `--cols <n>` (default 4) · `--labels` · `--out` · `--name` · `--dry-run`: vedi [Foglio di contatto, fotogramma e GIF](#foglio-di-contatto-fotogramma-e-gif-giv-sheet-giv-frame-giv-gif) |
@@ -212,6 +220,7 @@ prima o dopo.
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 | `qc` | file o storyboard come argomento · `--expect-duration <s>` · `--expect-size <LxA>` · `--expect-fps <n>` · `--expect-audio on\|off` · `--expect-loudness <lufs>` (attese, solo per un file) · `--for <canali>` (come `giv export`) · `--strict` (un difetto = codice 1) · soglie `--black-min <s>` (default 0.5) · `--freeze-min <s>` (2) · `--freeze-noise <dB>` (-60) · `--silence-min <s>` (2) · `--silence-noise <dB>` (-50): vedi [Controllo tecnico](#controllo-tecnico-giv-qc) |
 | `qc --voice` | `--voice <file audio>` · `--script "<testo>"` oppure `--script-file <file>` · `--pronuncia <file.json>` · `--kit <kit.json>` · `--nome <nome>` (ripetibile) · `--lang <codice>` (default `it`) · `--provider xai` · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Controllo della voce](#controllo-della-voce-giv-qc---voice) |
+| `qc --judge` | `--judge` (senza, nessun invio) · il video come argomento o `--video <file>` · `--prompt "<richiesta>"` oppure `--prompt-file <file>` (al più 4000 caratteri) · `--ref <immagine>` (facoltativo, `.png`, `.jpg` o `.webp`) · `--model <m>` (default `gemini-3.5-flash-lite`) · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Giudizio di aderenza](#giudizio-di-aderenza-giv-qc---judge) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -853,6 +862,55 @@ giv qc --voice out/s1-voce.wav --script-file testi/s1.txt --kit kit/argo.json --
   codice 5 e una riga `failed`, senza rilancio; un caricamento che non arriva fino in fondo
   è un errore senza addebito (codice 5, «nessuna trascrizione partita»).
 
+### Giudizio di aderenza: `giv qc --judge`
+
+```bash
+giv qc clip.mp4 --judge --prompt "Anja mostra il vasetto ARGO alla camera" --ref anja.png --dry-run
+giv qc clip.mp4 --judge --prompt-file richieste/s2.txt --ref anja.png --max-cost 0.01
+```
+
+Il giudizio dice se un video fa quello che chiedeva la richiesta della scena. Lo dà un
+modello visivo di Gemini, **a pagamento** e **solo su richiesta esplicita con `--judge`**:
+senza il flag `giv qc` non invia niente, e `--judge=false` esce con codice 2 senza invio.
+
+- **Cosa parte e verso chi.** Prima i controlli tecnici del file, come sopra (gratuiti, in
+  locale), poi **una sola richiesta** a Gemini diretto (`generativelanguage.googleapis.com`,
+  chiave `GEMINI_API_KEY`, mandata solo lì): quattro fotogrammi del video (al centro di
+  quattro parti uguali della durata), la richiesta della scena e, se c'è, il riferimento
+  `--ref` (personaggio o prodotto). Le immagini partono ricodificate in JPEG, lato lungo al
+  più 768 px, senza metadati; nient'altro del file o della cartella. La richiesta non segue
+  reindirizzamenti e non si ripete.
+- **Prima dell'invio**, su stderr: destinatario, immagini (istante, misure, byte),
+  caratteri della richiesta e stima. `--dry-run` fa i controlli tecnici e mette tutto nel
+  JSON, senza inviare: `request` con `destination`, `endpoint`, `images`, `prompt_chars`,
+  `max_output_tokens` e, solo nel dry-run, il corpo della richiesta in `body`.
+- **Costo.** Stima per eccesso dal listino di giv (`gemini-3.5-flash-lite`: 0,30 $ per
+  milione di token d'ingresso, 2,50 $ d'uscita, ragionamento compreso): ingresso al massimo
+  (testo un token per byte, immagini 258 token per riquadro e almeno 1120 per immagine) e
+  uscita al limite della richiesta (2048 token). Per una clip 9:16 con un riferimento la
+  stima è circa 0,008 $. `--max-cost` rifiuta con
+  codice 2, senza invio, se la stima supera il tetto o non si può fare (un modello senza
+  tariffa nel listino). L'addebito (`cost_usage_usd`) viene dai token riportati da Gemini;
+  se mancano vale la stima.
+- **Rapporto.** `judgment` con `verdict` (`aderente`, `non aderente` o `incerto`),
+  `recognizable` (si riconosce il riferimento: `sì`, `no`, `non valutabile`), `action`
+  (l'azione richiesta: `rispettata`, `non rispettata`, `non valutabile`), `reasons`,
+  `defects` (i difetti visti), `not_assessable` (ciò che i fotogrammi non permettono di
+  valutare) e `message`. In coda a `checks` il controllo `adherence`: aderente `ok`, non
+  aderente o incerto `avviso`. Una risposta illeggibile o contraddittoria vale `incerto`
+  (codice 0). La risposta del modello è trattata come dati: non ne viene nessun comando,
+  file o azione.
+- **Avvisa e basta**: nessun video si rigenera. L'autore guarda e decide se rifare la scena
+  (`giv story run --scene <id>`, a pagamento).
+- Il JSON ha `mode` `judge`, `provider`, `model`, `prompt`, `judgment`, `judged_at`,
+  `request`, `params`, `cost_est_usd` e `cost_source`, `cost_usage_usd` e
+  `cost_usage_source`, più le misure e i controlli tecnici del file. Ogni giudizio inviato
+  lascia una riga in `giv-log.jsonl`; uno rifiutato da Gemini con un errore 4xx (per
+  esempio un modello non disponibile) lascia una riga `error` a costo zero. Un esito incerto (reindirizzamento, errore del
+  server, rete dopo l'invio) esce con codice 5 e una riga `failed`, senza rilancio: può
+  essere stato addebitato. Con `--strict` un difetto dei controlli tecnici esce con 1 (il
+  giudizio dà al più un avviso); `--judge` insieme a `--voice` esce con codice 2.
+
 ## Storyboard: video a più scene
 
 Uno storyboard è un file JSON con le scene di un video da montare. `giv story check` lo
@@ -907,12 +965,17 @@ Stima dell'esempio: 3 scene da 5 s a 720p su `alibaba/wan-3.0` (0,10 $/s), `cost
 sostituirli con la foto del prodotto, il logo, la voce e la musica vere. Lo stesso spot col
 kit di `examples/kit/`, la voce dai testi, i sottotitoli dai testi e il controllo dei file
 è in `examples/spot/storyboard-kit.json` (vedi [Kit e voce dai testi](#kit-e-voce-dai-testi)).
+Lo stesso spot con le novità della 0.13.0 (bozze a 480p in `default.bozza`, tre scene in
+parallelo, `approvazione` e `controllo.aderenza`) è in
+`examples/spot/storyboard-approvazione.json` (vedi [Approvare prima del
+definitivo](#approvare-prima-del-definitivo-giv-story-approve)).
 
 | Campo | Cosa contiene |
 |---|---|
 | `titolo` | facoltativo |
 | `formato` | `aspect`, `risoluzione` e `fps` del video: valgono per le scene video che non li indicano |
-| `default` | `provider`, `modello`, `risoluzione`, `aspect`, `audio` (`on`/`off`), `seed`, `tutela`, `param` (oggetto, come `--param`) per tutte le scene video; senza `modello` vale il default di `giv video` per quel provider; senza `provider` (qui o nella scena) vale `GIV_PROVIDER`, altrimenti codice 2 |
+| `default` | `provider`, `modello`, `risoluzione`, `aspect`, `audio` (`on`/`off`), `seed`, `tutela`, `param` (oggetto, come `--param`) per tutte le scene video; senza `modello` vale il default di `giv video` per quel provider; senza `provider` (qui o nella scena) vale `GIV_PROVIDER`, altrimenti codice 2; dalla 0.13.0, solo qui, `bozza` (`provider`, vuoto: quello del definitivo; `modello`, obbligatorio; `risoluzione`): il profilo economico delle bozze video di `giv story run --bozza`, con la stessa richiesta, durata e riferimenti del definitivo; e `parallelo` (da 1 a 4, assente: 1): le scene che `giv story run` tiene aperte insieme, `--parallel` prevale |
+| `approvazione` | `true` (dalla 0.13.0): il definitivo di ogni scena video parte solo dopo `giv story approve` sulla sua bozza o sul suo fotogramma chiave; assente: come prima. Vedi [Approvare prima del definitivo](#approvare-prima-del-definitivo-giv-story-approve) |
 | `tetto_costo_usd` | tetto in dollari: un totale oltre il tetto, o una generazione senza stima né costo dichiarato, esce con codice 2 |
 | `strict` | come `--strict` di `giv video`: anche i controlli di rifinitura sono errori |
 | `riferimenti` | insiemi di immagini per nome (`"prodotto": ["img/prodotto.png"]`), richiamati dalle scene con `usa` |
@@ -922,7 +985,7 @@ kit di `examples/kit/`, la voce dai testi, i sottotitoli dai testi e il controll
 | `foglio_contatto` | `false` perché `giv story run` e `giv story cut` non scrivano `foglio-contatto.jpg` accanto allo storyboard (default: lo scrivono) |
 | `kit` | il file del kit di marca e personaggi (`"../marca/kit.json"`, relativo alla cartella dello storyboard, anche fuori): vedi [Kit e voce dai testi](#kit-e-voce-dai-testi) |
 | `parlato` | voce delle scene con `testo`: `provider` (`xai`, default), `modello`, `voce`, `lingua`, `velocita`, `stile`, `pronuncia` (oggetto `{"parola": "come dirla"}`); i predefiniti vengono dal kit |
-| `controllo` | `{"tecnico": true}`: `giv story run` (a fine giro) e `giv story cut` (dopo il montaggio) controllano clip, voci e montati come `giv qc`, con il risultato in `<nome>.controllo.json`: vedi [Controllo dei file](#controllo-dei-file-nello-storyboard); `{"voce": true}`: `giv story run` trascrive ogni voce generata e la confronta col testo (xai, a pagamento, nel tetto) |
+| `controllo` | `{"tecnico": true}`: `giv story run` (a fine giro) e `giv story cut` (dopo il montaggio) controllano clip, voci e montati come `giv qc`, con il risultato in `<nome>.controllo.json`: vedi [Controllo dei file](#controllo-dei-file-nello-storyboard); `{"voce": true}`: `giv story run` trascrive ogni voce generata e la confronta col testo (xai, a pagamento, nel tetto); `{"aderenza": true}` (dalla 0.13.0, spento se assente): `giv story run` giudica ogni ripresa video nuova come `giv qc --judge` (gemini, a pagamento, nel tetto) |
 
 Ogni scena ha un `id` (lettere, cifre, `_` e `-`, al massimo 64 caratteri), un `tipo`, una
 `durata` in secondi e, facoltativa, la `voce`: un file audio fuori campo, messo al
@@ -1024,6 +1087,19 @@ dopo l'inizio della scena; senza vale 0.
   story run adesso: stima N $ (storyboard intero M $)», o «niente da generare»; con scene
   incerte o file mancanti un avviso che `giv story run` si ferma prima di ogni avvio
   finché non si rifanno con `--scene`.
+- **bozze e approvazioni** (dalla 0.13.0). Con `default.bozza`, per ogni scena video
+  `draft`: `provider`, `model`, `resolution`, `status` (come `run_status`: `da_generare`,
+  `fatto`, `partito`, `incerto`, `fallito`, `mancante`), `file`, `cost_est_usd` e
+  `cost_source`; in cima `drafts_cost_est_usd` e `drafts_not_estimated`, le bozze ancora da
+  fare. Con `"approvazione": true`, per ogni scena video `approval`: `da_preparare` (niente
+  da vedere: prima `giv story run --bozza` o `--keyframes`), `da_approvare` (il materiale
+  c'è, l'approvazione manca o non vale più), `pronta` (approvata: `giv story run` ne
+  avvierebbe il definitivo), `in_corso` (bozza o definitivo partiti, da recuperare) o
+  `fatta` (definitivo fatto), col motivo in `approval_note`. Un definitivo che aspetta
+  l'approvazione ha `run_status` `da_approvare` e non conta in `run_cost_est_usd`, che
+  resta la spesa che `giv story run` farebbe adesso; in cima `finals_cost_est_usd`, i
+  definitivi ancora da fare, approvati o no. Su stderr «bozze ancora da fare: stima N $» e
+  «definitivi ancora da fare (approvati o no): stima N $».
 
 Il JSON su stdout ha `storyboard`, `titolo`, le `scenes` (per scena il piano come `giv
 video --dry-run`), i costi qui sopra e `cap_usd`; col kit, `kit` con `file` e `inherited`
@@ -1148,6 +1224,27 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
   con parole diverse non si rigenera; con `strict` un difetto (meno di metà delle parole
   sentite uguali) fa uscire con 1. `controllo.voce` senza `controllo.tecnico` controlla
   solo le voci.
+- Con `controllo.aderenza` (dalla 0.13.0; **spento se assente**: nessuno storyboard di
+  prima comincia a inviare) `giv story run`, a fine giro e in ordine di storyboard, giudica
+  come [`giv qc --judge`](#giudizio-di-aderenza-giv-qc---judge) la ripresa in uso di ogni
+  scena `video` appena generata o recuperata e mai giudicata: il definitivo, o la bozza con
+  `--bozza`; con `--keyframes` nessun giudizio, e le scene avatar non si giudicano. A
+  Gemini vanno quattro fotogrammi della clip, la richiesta della scena come è andata al
+  video (descrizione dei personaggi del kit compresa; per le `inquadrature` una riga per
+  inquadratura, con la durata) e come riferimento la prima immagine locale fra quelle di
+  `usa`, il fotogramma chiave e `immagine`. Serve `GEMINI_API_KEY`. Ogni giudizio è **a
+  pagamento**: la stima entra nel piano e nel tetto prima del primo avvio (con
+  `tetto_costo_usd` un giudizio non stimabile esce con codice 2 prima di ogni avvio),
+  passa dalla stessa riserva di ogni richiesta ed è registrato nello stato con un addebito
+  di tipo `giudizio`. Il giudizio resta legato alla ripresa giudicata (`judgements` della
+  ripresa nello stato: `status` `fatto` o `incerto`, `provider`, `model`, `key`, `result`,
+  `message`, `at`): le esecuzioni dopo e `giv story cut` lo rileggono dallo stato **senza
+  reinviarlo**, e una ripresa già giudicata con la stessa richiesta non si giudica di
+  nuovo. Un giudizio dall'esito incerto resta contato e non si rilancia. Nel JSON di `giv
+  story run` il rapporto in `scenes[].judgement` e il conto in `judgements`; nel controllo,
+  il controllo `adherence` sulla riga della scena (aderente `ok`, non aderente o incerto
+  `avviso`, non ancora giudicata `skipped`). Avvisa e basta: **nessun giudizio rigenera una
+  scena** e un giudizio che non riesce è un avviso, non ferma l'esecuzione.
 
 ### Generazione: `giv story run`
 
@@ -1156,6 +1253,10 @@ giv story run examples/spot/storyboard.json              # genera le scene video
 giv story run --scene s2 examples/spot/storyboard.json   # rifà solo la scena s2
 giv story run --scene s2 --new-keyframe examples/spot/storyboard.json
                                                          # rifà s2 con un fotogramma chiave nuovo
+giv story run --keyframes spot.json                      # solo i fotogrammi chiave, nessun video
+giv story run --bozza examples/spot/storyboard-approvazione.json
+                                                         # le bozze economiche (default.bozza)
+giv story run --parallel 3 spot.json                     # fino a tre scene aperte insieme
 ```
 
 `giv story run` genera **a pagamento** le scene `video` e `avatar` dello storyboard, in
@@ -1221,8 +1322,43 @@ anche le scene non più nello storyboard: conta nel tetto, ma è mostrata a part
 stderr, `removed_scenes` e `removed_spent_usd`, e nel messaggio di rifiuto del tetto).
 **Cancellando il file di stato il conto riparte da zero** e le scene tornano da generare.
 
+**Solo i fotogrammi chiave (`--keyframes`, dalla 0.13.0).** `giv story run --keyframes`
+genera, a pagamento, solo i `fotogramma_chiave` che mancano (quelli già pronti si
+riusano), nessun video né voce, poi riscrive `foglio-contatto.jpg` e
+`foglio-approvazione.jpg` accanto allo storyboard. È il primo gradino: guardare le
+immagini prima di pagare un video. Per rifare una sola immagine venuta male, `--keyframes
+--scene s2 --new-keyframe`: anche con un tetto conta solo il costo di quell'immagine,
+stimato o dichiarato (`costo_dichiarato_usd` del fotogramma). Con `--scene` la scena deve
+essere video con `fotogramma_chiave` (altrimenti codice 2); `--keyframes` non va con
+`--bozza`, `--voices`, `--new-voice` né `--new-job`.
+
+**Bozze (`--bozza`, dalla 0.13.0).** Con `default.bozza` nello storyboard, `giv story run
+--bozza` genera **a pagamento** le bozze delle scene video col profilo della bozza
+(provider, modello e risoluzione economici; stessa richiesta, durata e riferimenti del
+definitivo) in `clip/bozza/` (`<id>-b<N>`…), con stato (`draft` della scena) e spesa
+propri (addebiti di tipo `bozza`), la stessa riserva e lo stesso tetto di ogni richiesta;
+i job di bozza già partiti si recuperano senza nuovo avvio. Il fotogramma chiave è lo
+stesso per bozza e definitivo: se manca si genera prima, col profilo del definitivo.
+`continua_da` parte dalla bozza della scena prima. Le scene avatar non hanno bozza. Poi
+`foglio-approvazione.jpg`, `giv story approve` e `giv story cut --bozza`. Senza
+`default.bozza`, `--bozza` esce con codice 2. Un modello diverso può dare anche un
+movimento diverso: la bozza mostra inquadratura, azione e tempi, non il risultato
+definitivo.
+
+**Scene in parallelo (`--parallel <n>`, dalla 0.13.0).** `--parallel 3` (o
+`default.parallelo`, da 1 a 4; il flag prevale; di partenza 1, come prima) tiene aperte
+fino a tre scene insieme. Gli avvii restano **uno alla volta e in ordine di storyboard**:
+si sovrappongono solo l'attesa dei job e lo scaricamento, e un solo coordinatore scrive lo
+stato. Prima di ogni avvio il tetto conta la spesa registrata, le riserve ancora aperte
+delle altre scene e la stima della nuova richiesta, sul valore non arrotondato. Una scena
+con `continua_da` aspetta il file completo della scena prima, nella stessa versione (bozza
+o definitivo). Con un errore di salvataggio dello stato non partono altri avvii; il JSON
+riporta le scene nell'ordine dello storyboard.
+
 Il JSON su stdout ha `state`, le `scenes` (per scena `status`, `file`, `keyframe`, `takes`:
-le riprese video, `this_run`: generata, recuperata, già fatta o fallita, `voice` e
+le riprese video, `this_run`: generata, recuperata, già fatta, fallita o, dalla 0.13.0, da
+approvare; `judgement`, il rapporto del giudizio di aderenza fatto in questa esecuzione;
+`voice` e
 `voice_this_run` per la voce dal testo, `cost_est_usd`, `cost_usd`), `jobs_started`,
 `jobs_recovered`, `keyframes`, `voices` (voci generate), `voice_checks` (voci trascritte,
 con `controllo.voce`) e i totali `cost_est_usd`
@@ -1231,7 +1367,75 @@ con `controllo.voce`) e i totali `cost_est_usd`
 `run_spent_usd` (stime e spesa contata delle sole richieste partite in questa esecuzione:
 fotogrammi chiave, video, voci e trascrizioni; i job recuperati restano dell'esecuzione
 che li ha avviati; assenti se non è partito niente), `removed_scenes` e
-`removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`.
+`removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`. Dalla 0.13.0, quando
+servono: `mode` (`keyframes` o `bozza`; assente per il definitivo: con `bozza` stato, file
+e riprese delle scene sono quelli delle bozze), `parallel` (le scene aperte insieme, se più
+di una), `awaiting_approval` (le scene il cui definitivo aspetta `giv story approve`) e
+`judgements` (i giudizi di aderenza con esito in questa esecuzione).
+
+### Approvare prima del definitivo: `giv story approve`
+
+```bash
+giv story run --bozza spot.json          # tre bozze economiche (a pagamento, poco)
+giv story cut --bozza spot.json          # spot.bozza.mp4 con la scritta BOZZA (gratuito)
+giv story approve spot.json s2           # approva la bozza vista di s2 (gratuito)
+giv story run spot.json                  # un solo definitivo: s2; s1 e s3 restano da approvare
+```
+
+Con `"approvazione": true` nello storyboard il definitivo di una scena video parte solo
+dopo che se ne è approvato il materiale: la **bozza** in uso se c'è `default.bozza`,
+altrimenti il **fotogramma chiave** in uso. `giv story approve spot.json s2 s4` (o `--all`)
+è locale e gratuito: nessuna rete, nessuna spesa. Registra nello stato, sotto lo stesso
+blocco di `giv story run` (con un `giv story run` in corso esce con codice 2), il file
+visto col suo `sha256` e la ricetta del definitivo: richiesta, modelli, durata, formato,
+riferimenti, file del kit col loro contenuto e `continua_da`. Una nuova bozza, un altro
+fotogramma chiave o un cambio della ricetta chiedono una nuova approvazione; un cambio in
+un'altra scena indipendente no.
+
+- Con le scene indicate è **tutto o niente**: una scena che non si può approvare (senza
+  materiale da vedere, avatar, non video, sconosciuta) esce con codice 2 e lo stato non
+  cambia. `--all` approva ogni scena video con materiale da vedere e mette le altre in
+  `skipped`, col motivo.
+- Una scena senza materiale da vedere resta **da preparare**: prima `giv story run --bozza`
+  o `--keyframes`. Le scene avatar non si approvano e partono come prima. Senza
+  `"approvazione": true` l'approvazione si registra con un avviso: `giv story run` non la
+  aspetta.
+- Il JSON ha `command`, `storyboard`, `state`, `material` (`bozza` o `fotogramma`),
+  `approved` (per scena `id`, `take`, `file`, `sha256`, `keyframe`, e `already` se era già
+  approvata così) e `skipped` (`id`, `reason`). Nello stato la scena ha `approval` (`take`,
+  `file`, `sha256`, `keyframe`, `keyframe_sha256`, `source` per `continua_da`, `recipe`,
+  `at`).
+- `giv story run` senza flag avvia allora il definitivo **solo delle scene approvate** con
+  la ricetta di adesso: per le altre niente fotogramma chiave né video, una riga su stderr
+  col comando per approvarle e l'id in `awaiting_approval`; con `--scene` una scena da
+  approvare esce con codice 2. Una scena con `continua_da` da una scena che aspetta
+  l'approvazione aspetta con lei. Riprese già fatte e job già partiti restano.
+  L'approvazione si ricontrolla subito prima di ogni video definitivo: un fotogramma
+  chiave rigenerato (`--scene <id> --new-keyframe`) o un file approvato cambiato nel
+  frattempo la rendono vecchia, il video non parte e la scena torna da approvare.
+- `foglio-approvazione.jpg`, accanto allo storyboard, mostra per ogni scena video il
+  fotogramma chiave e la bozza in uso, con id, materiale e «approvata» nelle etichette;
+  lo riscrivono `giv story run --keyframes`, `giv story run --bozza` e `giv story cut
+  --bozza` (salvo `"foglio_contatto": false`).
+- `giv story check` dice per ogni scena se è da preparare, da approvare, pronta, in corso
+  o fatta, e quanto costano i definitivi e le bozze ancora da fare (vedi sopra).
+
+**Cosa è a pagamento.** A pagamento, sempre dentro il tetto: `giv story run` (voci, fotogrammi
+chiave, video), `giv story run --keyframes` (solo i fotogrammi chiave), `giv story run
+--bozza` (le bozze), la trascrizione di `controllo.voce` e il giudizio di
+`controllo.aderenza`. Gratuiti e senza rete: `giv story check` (legge solo il catalogo del
+provider), `giv story approve`, `giv story cut` e `giv story cut --bozza`. Il giudizio manda
+fotogrammi e richiesta a Gemini **solo su richiesta esplicita**: `giv qc --judge` o
+`"controllo": {"aderenza": true}` nello storyboard.
+
+**Compatibilità con la 0.12.x.** Storyboard, kit e stati della 0.12.x restano validi.
+Senza le opzioni nuove (`--keyframes`, `--bozza`, `--parallel`, `approvazione`,
+`default.bozza`, `default.parallelo`, `controllo.aderenza`) tutto si comporta come nella
+0.12.1: generazione una scena alla volta, stessi file, richieste, risultati e comandi. Le
+riprese già fatte valgono come definitive, con la loro spesa e i job da recuperare;
+attivare `approvazione` governa solo gli avvii futuri. `giv story check` e `giv story cut`
+leggono i vecchi stati senza riscriverli. Nessun aggiornamento attiva da solo un giudizio a
+pagamento.
 
 ### Montaggio: `giv story cut`
 
@@ -1240,6 +1444,8 @@ giv story cut examples/spot/storyboard.json       # JSON su stdout: file scritti
 giv story cut --formato 9:16 examples/spot/storyboard.json          # solo spot-9x16.mp4
 giv story cut --export instagram,youtube examples/spot/storyboard.json
                                                   # in più un file per canale dal montato
+giv story cut --bozza examples/spot/storyboard-approvazione.json
+                                                  # le bozze, con la scritta BOZZA
 ```
 
 `giv story cut` monta in un video le scene già pronte, con `ffmpeg` e `ffprobe` (da
@@ -1285,6 +1491,13 @@ Come monta:
 - **foglio di contatto**: dopo il montaggio riscrive `foglio-contatto.jpg` accanto allo
   storyboard (una riga per scena con id e ripresa, come `giv sheet`), salvo
   `"foglio_contatto": false`.
+
+**Montato delle bozze (`--bozza`, dalla 0.13.0).** `giv story cut --bozza` monta le bozze
+in uso (`clip/bozza/`; una scena senza bozza usa il suo definitivo) in `<nome>.bozza.mp4`
+(con `formati`, `<nome>.bozza-<WxH>.mp4`), con la scritta **BOZZA** su tutto il montato, e
+riscrive solo `foglio-approvazione.jpg`: il montato definitivo, il foglio di contatto e
+`<nome>.controllo.json` restano come sono. Niente `--export`. Nel JSON `draft` è `true`.
+Gratuito, come ogni `giv story cut`.
 
 Dalla 0.11.0 il blocco `montaggio` ha anche questi campi, tutti facoltativi (senza, il
 montaggio resta quello di prima):
