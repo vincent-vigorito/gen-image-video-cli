@@ -758,6 +758,9 @@ func (t Tool) prepareExtended(w *Work, p *Plan, starts, voiceLen []float64, tota
 		x.End = min(x.End, outTotal)
 		texts = append(texts, x)
 	}
+	if p.Watermark != "" {
+		texts = append(texts, p.watermarkText(outTotal))
+	}
 	m := SafeMargins(p.Width, p.Height)
 	if p.Margins != nil {
 		m = *p.Margins

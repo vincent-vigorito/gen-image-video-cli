@@ -97,6 +97,11 @@ type Plan struct {
 	Captions     []ClipCaption
 	CaptionStyle TextStyle
 
+	// Watermark è una scritta su tutto il montato, cartello compreso (BOZZA
+	// di giv story cut --bozza, 0.13.0): resa alla lettera nel file .ass dei
+	// testi, in alto a sinistra con lo stile di default; vuota: nessuna.
+	Watermark string
+
 	// preparati da Montage: file .ass dei testi, cartella dei font, misura
 	// della prima passata del volume
 	texts, fontsDir string
@@ -123,7 +128,14 @@ type ClipCaption struct {
 // extended dice se il piano usa sovrimpressioni o audio della 0.11.0, o i
 // sottotitoli dai testi della 0.12.0.
 func (p Plan) extended() bool {
-	return p.Logo != nil || len(p.Titles) > 0 || p.EndCard != nil || p.Duck || p.MusicFade != 0 || p.Loudness != 0 || len(p.Captions) > 0
+	return p.Logo != nil || len(p.Titles) > 0 || p.EndCard != nil || p.Duck || p.MusicFade != 0 || p.Loudness != 0 || len(p.Captions) > 0 ||
+		p.Watermark != ""
+}
+
+// watermarkText è la scritta Watermark come testo del file .ass, da 0 alla
+// fine del montato (end, cartello compreso).
+func (p Plan) watermarkText(end float64) Text {
+	return Text{Text: p.Watermark, Start: 0, End: end, Pos: TopLeft, Style: DefaultTextStyle(p.Height)}
 }
 
 // captionTexts sono i sottotitoli di p.Captions come testi del file .ass, coi
@@ -157,6 +169,12 @@ func (p Plan) captionTexts(starts, voiceLen []float64, total float64, m Margins)
 // checkExtended controlla i valori delle sovrimpressioni e dell'audio che non
 // dipendono dai file (le misure del logo e i tempi li controlla Montage).
 func (p Plan) checkExtended() error {
+	if err := checkText("scritta", p.Watermark); err != nil {
+		return err
+	}
+	if !utf8.ValidString(p.Watermark) {
+		return invalid("scritta: testo non UTF-8")
+	}
 	if p.Logo != nil {
 		if err := checkPath(p.Logo.Path); err != nil {
 			return invalid("logo: %v", err)
@@ -640,7 +658,7 @@ func buildArgs(p Plan, analyze bool) ([]string, error) {
 	if p.EndCard != nil {
 		total += p.EndCard.Duration
 	}
-	if len(p.Titles) > 0 || len(p.Captions) > 0 || (p.EndCard != nil && (p.EndCard.Text != "" || p.EndCard.Subtext != "")) {
+	if len(p.Titles) > 0 || len(p.Captions) > 0 || p.Watermark != "" || (p.EndCard != nil && (p.EndCard.Text != "" || p.EndCard.Subtext != "")) {
 		if p.texts == "" {
 			return nil, invalid("titoli, sottotitoli e testi del cartello senza il file .ass (li prepara Montage)")
 		}
