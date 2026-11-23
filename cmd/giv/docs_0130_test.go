@@ -86,7 +86,7 @@ func TestPR13ChangelogEVersione(t *testing.T) {
 		t.Error("CHANGELOG senza la voce 0.13.0")
 	}
 	so, _, code, _ := runGiv(t, nil, "--version")
-	if code != 0 || strings.TrimSpace(so) != "giv 0.13.0" {
+	if code != 0 || strings.TrimSpace(so) != "giv 0.13.1" {
 		t.Errorf("giv --version: code=%d out=%q", code, so)
 	}
 }
