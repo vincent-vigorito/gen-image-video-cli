@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.13.0] - non rilasciata
+## [0.13.0] - 2026-11-23
 
 > **Guardare e approvare una scena prima di pagarne il definitivo.** Prima i soli
 > fotogrammi chiave (`giv story run --keyframes`), poi bozze video economiche (`--bozza`,
