@@ -63,12 +63,12 @@ versioning [SemVer](https://semver.org/lang/it/).
 - **Giudizio di aderenza: `giv qc <video> --judge`.** Quattro fotogrammi del video (JPEG,
   lato lungo al più 768 px, senza metadati), la richiesta della scena (`--prompt` o
   `--prompt-file`, al più 4000 caratteri) e il riferimento facoltativo `--ref` vanno in una
-  sola richiesta a Gemini diretto (`gemini-2.5-flash-lite` di default, `--model`), **a
+  sola richiesta a Gemini diretto (`gemini-3.5-flash-lite` di default, `--model`), **a
   pagamento** e **solo con `--judge`**: senza il flag nessun invio. Prima dell'invio su
   stderr destinatario, immagini, caratteri e stima; `--dry-run` mostra tutto senza
   inviare; `--max-cost` è il tetto (stima oltre il tetto o non stimabile: codice 2, nessun
-  invio). Stima per eccesso dal listino (0,10 $ e 0,40 $ per milione di token d'ingresso e
-  d'uscita; circa 0,002 $ a giudizio), addebito dai token riportati. Il rapporto
+  invio). Stima per eccesso dal listino (0,30 $ e 2,50 $ per milione di token d'ingresso e
+  d'uscita; circa 0,008 $ a giudizio), addebito dai token riportati. Il rapporto
   `judgment` ha `verdict` (`aderente`, `non aderente`, `incerto`), `recognizable`,
   `action`, `reasons`, `defects`, `not_assessable`, `message`; il controllo `adherence` in
   `checks`; poi `judged_at`, `request`, `cost_est_usd`, `cost_source`, `cost_usage_usd`,
