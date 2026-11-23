@@ -152,7 +152,7 @@ func TestPA1CopertinaStoryRunECut(t *testing.T) {
 			}
 		}
 		for _, o := range c.Outputs {
-			if o.QCReport == nil { // montato non ancora fatto
+			if when == "run" { // montato non ancora fatto
 				continue
 			}
 			if got := pa1Check(t, o, "streams").Result; got != "ok" {
