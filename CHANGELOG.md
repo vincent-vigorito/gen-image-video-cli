@@ -18,10 +18,11 @@ versioning [SemVer](https://semver.org/lang/it/).
 ### Aggiunto
 
 - **Tetto del singolo giro: `giv story run --max-cost <usd>`.** Vale in aggiunta a
-  `tetto_costo_usd` dello storyboard: si controllano entrambi prima di ogni richiesta a
-  pagamento, sul valore non arrotondato, e il giro si ferma al primo dei due (vince il più
-  stretto). Il tetto del giro conta tutto ciò che il giro riserva e addebita: fotogrammi
-  chiave, bozze, definitivi, voci, trascrizioni e giudizi. Oltre il tetto, o con una
+  `tetto_costo_usd` dello storyboard: si controllano entrambi, sul valore non arrotondato,
+  e il giro si ferma al primo dei due (vince il più stretto). Il tetto del giro conta tutto
+  ciò che il giro riserva e addebita: fotogrammi chiave, bozze, definitivi, voci,
+  trascrizioni e giudizi; prima del primo avvio la stima del giro deve starci, poi prima di
+  ogni richiesta a pagamento riserve e addebiti del giro più le stime ancora da fare. Oltre il tetto, o con una
   richiesta senza stima né costo dichiarato, codice 2 senza nuovi avvii; un valore non
   valido (non numerico, zero o negativo, non finito) è codice 2 prima di tutto. Non si
   scrive né nello storyboard né nello stato: vale solo per il giro in cui lo si indica.

@@ -1344,10 +1344,12 @@ stderr, `removed_scenes` e `removed_spent_usd`, e nel messaggio di rifiuto del t
 
 **Tetto del singolo giro (`--max-cost <usd>`, dalla 0.13.1).** `giv story run --max-cost
 2.50 spot.json` aggiunge un tetto alla sola esecuzione di adesso, in aggiunta a
-`tetto_costo_usd`: prima di ogni richiesta a pagamento valgono entrambi, sul valore non
-arrotondato, e il giro si ferma al primo dei due (vince il più stretto). Il tetto del giro
-conta tutto ciò che questo giro riserva e addebita: fotogrammi chiave, bozze, definitivi,
-voci, trascrizioni e giudizi di aderenza. Oltre il tetto codice 2 senza nuovi avvii; con
+`tetto_costo_usd`: valgono entrambi, sul valore non arrotondato, e il primo dei due
+superato ferma gli avvii (vince il più stretto). Il tetto del giro conta tutto ciò che
+questo giro riserva e addebita: fotogrammi chiave, bozze, definitivi, voci, trascrizioni e
+giudizi di aderenza. Prima del primo avvio la stima di ciò che il giro lancerebbe deve
+starci; poi, prima di ogni richiesta a pagamento, riserve e addebiti di questo giro più le
+stime ancora da fare. Oltre il tetto codice 2 senza nuovi avvii; con
 `--max-cost` una richiesta senza stima né costo dichiarato è codice 2 prima di ogni avvio,
 come con `tetto_costo_usd`. Un valore non valido (non numerico, zero o negativo, non
 finito) è codice 2 prima di tutto. Il tetto del giro non si scrive né nello storyboard né
