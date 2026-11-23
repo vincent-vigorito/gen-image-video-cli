@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // CLI-1015 (giv 0.13.0): integrazione in story run, contro un OpenRouter
@@ -272,5 +273,28 @@ func TestIntegrazioneNonStimabileConTetto(t *testing.T) {
 	_, se, code := e.rawRun(t)
 	if code != 2 || e.posts != 0 || e.judges != 0 {
 		t.Fatalf("code=%d posts=%d giudizi=%d\n%s", code, e.posts, e.judges, se)
+	}
+}
+
+// approvazione valida, --scene S --new-keyframe: solo il fotogramma, nessun
+// POST video, la scena torna «da approvare», uscita 0.
+func TestIntegrazioneNuovoFotogrammaRevocaEnonAvviaVideo(t *testing.T) {
+	e := newParEnv(t, ib("", `,"approvazione":true`, ps("s1", keyfr)), false)
+	if _, se, code := e.rawRun(t, "--keyframes"); code != 0 || e.images != 1 {
+		t.Fatalf("keyframes: code=%d images=%d\n%s", code, e.images, se)
+	}
+	so, se := grabFile(&os.Stdout), grabFile(&os.Stderr)
+	err := cmdStory([]string{"approve", e.board, "s1"})
+	so()
+	if es := se(); err != nil {
+		t.Fatalf("approve: %v %s", err, es)
+	}
+	time.Sleep(1100 * time.Millisecond) // i nomi dei file hanno la marca al secondo
+	out, se2, code := e.rawRun(t, "--scene", "s1", "--new-keyframe")
+	if code != 0 || e.images != 2 || e.posts != 0 {
+		t.Fatalf("code=%d images=%d posts=%d\n%s\n%s", code, e.images, e.posts, out, se2)
+	}
+	if !strings.Contains(out, "da approvare") || !strings.Contains(out, "awaiting_approval") {
+		t.Errorf("scena non elencata da approvare: %s", out)
 	}
 }
