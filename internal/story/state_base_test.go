@@ -95,3 +95,83 @@ func TestBaseStato0121ConservaJobESpesaPerScena(t *testing.T) {
 		t.Fatal("spesa per scena diversa dall'attesa")
 	}
 }
+
+// Le riprese esistenti (stati 0.12) risultano definitive: stessa clip, job,
+// spesa; nessuna bozza né approvazione inventate.
+func TestBaseRiprese012SonoDefinitive(t *testing.T) {
+	st, err := LoadState(scriviStato(t, stato0121))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uno, due := st.Scenes["uno"], st.Scenes["due"]
+	if got := uno.TrackOf(TakeFinal); got.Status != Fatto || got.Clip == nil || got.Clip.File != "clip/uno.mp4" {
+		t.Fatalf("definitivo di uno: %+v", got)
+	}
+	if uno.Current(TakeFinal) == nil || uno.Current(TakeFinal).JobID != "job-1" {
+		t.Fatal("clip definitiva senza il suo job")
+	}
+	if got := due.TrackOf(TakeFinal); got.Status != Partito || got.Job == nil || got.Job.ID != "job-2" {
+		t.Fatalf("job da recuperare di due: %+v", got)
+	}
+	if uno.Draft != nil || uno.Approval != nil || uno.Current(TakeDraft) != nil {
+		t.Fatal("una scena 0.12 non ha bozza né approvazione")
+	}
+	if !close2(uno.SpentOn(ChargeClip), 1.75) || !close2(uno.SpentOn(ChargeKeyframe), 0.25) {
+		t.Fatal("spesa per tipo diversa")
+	}
+}
+
+// Addebito che sostituisce la riserva, riserve aperte, scene tolte: somma
+// esatta, una voce per richiesta, nessun arrotondamento.
+func TestBaseLedgerSommaEsatta(t *testing.T) {
+	st := newState(filepath.Join(t.TempDir(), "x.stato.json"))
+	a := st.Scene("a")
+	k := a.Reserve(Charge{Kind: ChargeClip, CostEstUSD: ptr(1.5)})
+	if l := a.Ledger(); !close2(l.TotalUSD, 1.5) || !close2(l.ReservedUSD, 1.5) {
+		t.Fatalf("riserva aperta: %+v", l)
+	}
+	a.Settle(k, 1.75) // l'addebito prende il posto della stima
+	if l := a.Ledger(); !close2(l.TotalUSD, 1.75) || !close2(l.ChargedUSD, 1.75) || l.ReservedUSD != 0 || len(a.Charges) != 1 {
+		t.Fatalf("addebito al posto della riserva: %+v", l)
+	}
+	b := st.Scene("b")
+	b.Reserve(Charge{Kind: ChargeDraft, CostEstUSD: ptr(0.1)})
+	k2 := b.Reserve(Charge{Kind: ChargeKeyframe, CostEstUSD: ptr(0.07)})
+	b.MarkUncertain(k2) // incerta: resta contata
+	k3 := b.Reserve(Charge{Kind: ChargeClip, CostEstUSD: ptr(9)})
+	b.Release(k3)                                                           // mai partita: non conta
+	st.Scene("tolta").Charges = []Charge{{Kind: ChargeClip, CostUSD: 0.33}} // scena non più nello storyboard
+	l := st.Ledger()
+	want := 1.75 + 0.1 + 0.07 + 0.33
+	if !close2(l.TotalUSD, want) || !close2(st.Spent(), want) {
+		t.Fatalf("totale %v, atteso %v", l.TotalUSD, want)
+	}
+	if !close2(l.ReservedUSD, 0.17) || !close2(l.ChargedUSD, 2.08) || !close2(l.ChargedUSD+l.EstimatedUSD+l.ReservedUSD, l.TotalUSD) {
+		t.Fatalf("parti del conto: %+v", l)
+	}
+}
+
+func ptr(v float64) *float64 { return &v }
+
+// Campi nuovi fuori dominio: lo stato è rifiutato (nessun avvio).
+func TestBaseStatoFuoriDominioRifiutato(t *testing.T) {
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	casi := map[string]string{
+		"tipo di ripresa ignoto (previous della bozza)": `{"version":1,"scenes":{"s":{"status":"fatto","clip":{"file":"c.mp4","done":"2026-11-01T10:00:00Z"},
+			"draft":{"status":"fatto","clip":{"file":"b.mp4","done":"2026-11-01T10:00:00Z"},"previous":[{"kind":"fotogramma","file":"k.png","done":"2026-11-01T10:00:00Z"}]}}}}`,
+		"stato della bozza ignoto":             `{"version":1,"scenes":{"s":{"status":"da_fare","draft":{"status":"boh"}}}}`,
+		"riserva negativa":                     `{"version":1,"scenes":{"s":{"status":"da_fare","charges":[{"kind":"clip","status":"aperta","cost_est_usd":-1,"at":"2026-11-01T10:00:00Z"}]}}}`,
+		"stato della riserva ignoto":           `{"version":1,"scenes":{"s":{"status":"da_fare","charges":[{"kind":"clip","status":"mezza","cost_est_usd":1,"at":"2026-11-01T10:00:00Z"}]}}}`,
+		"giudizio senza ripresa":               `{"version":1,"scenes":{"s":{"status":"fatto","clip":{"done":"2026-11-01T10:00:00Z","judgements":[{"status":"fatto","provider":"gemini","result":"ok","at":"2026-11-01T10:00:00Z"}]}}}}`,
+		"giudizio con esito ignoto":            `{"version":1,"scenes":{"s":{"status":"fatto","clip":{"file":"c.mp4","done":"2026-11-01T10:00:00Z","judgements":[{"status":"fatto","provider":"gemini","result":"forse","at":"2026-11-01T10:00:00Z"}]}}}}`,
+		"approvazione con file fuori cartella": `{"version":1,"scenes":{"s":{"status":"da_fare","approval":{"take":"bozza","file":"../x.mp4","sha256":"` + sha + `","recipe":"` + sha + `","at":"2026-11-01T10:00:00Z"}}}}`,
+		"approvazione di un tipo ignoto":       `{"version":1,"scenes":{"s":{"status":"da_fare","approval":{"take":"definitivo","file":"x.mp4","sha256":"` + sha + `","recipe":"` + sha + `","at":"2026-11-01T10:00:00Z"}}}}`,
+	}
+	for nome, js := range casi {
+		t.Run(nome, func(t *testing.T) {
+			if _, err := LoadState(scriviStato(t, js)); err == nil {
+				t.Fatal("stato fuori dominio accettato")
+			}
+		})
+	}
+}
