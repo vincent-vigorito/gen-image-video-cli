@@ -17,7 +17,7 @@ func nuovoStoryboard(t *testing.T) (*Storyboard, string) {
 		}
 	}
 	sb := `{"titolo":"t","formato":{"aspect":"16:9","risoluzione":"720p","fps":24},
-	 "default":{"provider":"xai","modello":"m","audio":"off"},
+	 "default":{"provider":"xai","modello":"m","audio":"off","bozza":{"modello":"mb"}},
 	 "scene":[
 	  {"id":"s1","tipo":"video","durata":5,"immagine":"a.png","prompt":"uno"},
 	  {"id":"s2","tipo":"video","durata":5,"continua_da":"s1","prompt":"due"},
@@ -171,4 +171,47 @@ func replaceOnce(s, old, new string) string {
 		}
 	}
 	return s
+}
+
+// Fotogramma approvato poi default.bozza (e il contrario): non vale più; un
+// fotogramma riscritto nello stesso file: non vale più.
+func TestBaseApprovazioneMaterialeCambiato(t *testing.T) {
+	s, path := nuovoStoryboard(t) // con default.bozza
+	st := newState(StatePath(path))
+	st.Scene("s3").Keyframe = &Take{File: "c.png"}
+	r, _ := s.RecipeKey("s3", "")
+	if _, err := st.Approve(s, "s3", TakeKeyframe, r); err == nil {
+		t.Fatal("fotogramma approvato con default.bozza")
+	}
+	data, _ := os.ReadFile(path)
+	senza := replaceOnce(string(data), `,"bozza":{"modello":"mb"}`, ``)
+	if senza == string(data) {
+		t.Fatal("fixture non modificata")
+	}
+	os.WriteFile(path, []byte(senza), 0o644)
+	sk, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ = sk.RecipeKey("s3", "")
+	if _, err := st.Approve(sk, "s3", TakeKeyframe, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CheckApproval(sk, "s3", r); err != nil {
+		t.Fatal(err)
+	}
+	// stesso file, contenuto riscritto: stale
+	os.WriteFile(filepath.Join(filepath.Dir(path), "c.png"), []byte("riscritto"), 0o644)
+	r2, _ := sk.RecipeKey("s3", "")
+	if err := st.CheckApproval(sk, "s3", r2); !errors.Is(err, ErrStaleApproval) {
+		t.Fatalf("fotogramma riscritto: %v", err)
+	}
+	// ripristino il contenuto; poi torna default.bozza: la sua approvazione cade
+	os.WriteFile(filepath.Join(filepath.Dir(path), "c.png"), []byte("dati c.png"), 0o644)
+	os.WriteFile(path, data, 0o644)
+	sb, _ := Load(path)
+	r3, _ := sb.RecipeKey("s3", "")
+	if err := st.CheckApproval(sb, "s3", r3); !errors.Is(err, ErrStaleApproval) {
+		t.Fatalf("fotogramma approvato, poi default.bozza: %v", err)
+	}
 }
