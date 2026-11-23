@@ -161,7 +161,7 @@ func approvalSheet(s *story.Storyboard, path string) {
 			continue
 		}
 		mark := ""
-		if recipe, err := s.RecipeKey(sc.ID, prov); err == nil && st.CheckApproval(s, sc.ID, recipe) == nil {
+		if recipe, err := s.RecipeKey(sc.ID, prov); err == nil && checkApproval(s, st, sc.ID, recipe) == nil {
 			mark = " · approvata"
 		}
 		newRow, used := true, 0
