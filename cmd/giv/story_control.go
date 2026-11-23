@@ -19,8 +19,8 @@ import (
 // montati, con il risultato in <nome>.controllo.json e nel JSON del comando;
 // con controllo.voce le righe delle voci generate portano anche la
 // trascrizione confrontata col testo (story_voicecheck.go); con
-// controllo.aderenza le righe delle scene video e avatar portano il giudizio
-// di aderenza della clip in uso registrato nello stato (story_judge.go). Il controllo
+// controllo.aderenza le righe delle scene video portano il giudizio di
+// aderenza della clip in uso registrato nello stato (story_judge.go). Il controllo
 // avvisa e basta (K6): non rigenera, non scarta e non spende oltre la
 // trascrizione; con strict nello storyboard un difetto fa uscire giv story
 // run con 1.
@@ -101,14 +101,14 @@ func controlStory(s *story.Storyboard, path, command string, checks map[string]*
 }
 
 // judgeRows aggiunge il controllo adherence (controllo.aderenza) alle righe
-// delle scene video e avatar: il giudizio della clip in uso registrato nello
-// stato, senza reinvio. Senza controllo.tecnico le righe delle scene portano
-// solo il giudizio.
+// delle scene video: il giudizio della clip in uso registrato nello stato,
+// senza reinvio. Senza controllo.tecnico le righe delle scene video portano
+// solo il giudizio; le scene avatar non si giudicano (storyJudged).
 func judgeRows(ctl *storyControl, s *story.Storyboard, st *story.State) {
 	if !controlOn(s) {
 		for i := range s.Scene {
 			sc := &s.Scene[i]
-			if sc.Tipo != story.Video && sc.Tipo != story.Avatar {
+			if !storyJudged(sc) {
 				continue
 			}
 			row := qcRow{ID: sc.ID, Tipo: sc.Tipo}
@@ -128,7 +128,7 @@ func judgeRows(ctl *storyControl, s *story.Storyboard, st *story.State) {
 	}
 	for i := range ctl.Scenes {
 		row := &ctl.Scenes[i]
-		if row.QCReport == nil || (row.Tipo != story.Video && row.Tipo != story.Avatar) {
+		if row.QCReport == nil || row.Tipo != story.Video {
 			continue
 		}
 		var take *story.Take
