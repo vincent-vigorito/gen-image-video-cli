@@ -78,8 +78,11 @@ Controlla lo storyboard senza generare niente: forma, file, riferimenti fra scen
 sul catalogo letto adesso, capacità, preset e tutela, voci dai testi. Somma stime da
 listino (voci comprese) e costi dichiarati e, con tetto_costo_usd, li confronta col tetto
 insieme alla spesa già registrata nello stato (<nome>.stato.json) per scene non più nello
-storyboard (removed_scenes). Col kit (campo kit o --kit) mostra i valori che ne vengono.
-Ogni problema trovato esce con codice 2, uno per riga.
+storyboard (removed_scenes). Dallo stato dice per scena cosa è già fatto e cosa partirebbe
+adesso (run_status: fatto, da_generare, partito, incerto, fallito, mancante) e la stima di
+ciò che giv story run lancerebbe adesso (run_cost_est_usd, run_not_estimated). Col kit
+(campo kit o --kit) mostra i valori che ne vengono. Ogni problema trovato esce con codice
+2, uno per riga.
 
 Flag (anche dopo il file):
   --kit <file>   kit di marca e personaggi al posto del campo kit dello storyboard

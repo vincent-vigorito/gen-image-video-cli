@@ -323,7 +323,12 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 		params["pronunce"] = len(dict)
 	}
 	if len(names) > 0 {
-		params["nomi"] = len(names)
+		// nomi senza doppioni, con la stessa chiave di CheckTranscribe
+		uniq := map[string]bool{}
+		for _, n := range names {
+			uniq[strings.ToLower(strings.TrimSpace(n))] = true
+		}
+		params["nomi"] = len(uniq)
 	}
 	for _, f := range []struct{ k, v string }{{"script_file", o.ScriptFile}, {"pronuncia_file", o.Pronuncia}, {"kit", o.Kit}} {
 		if f.v != "" {
