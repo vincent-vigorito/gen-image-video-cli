@@ -32,16 +32,15 @@ type Approval struct {
 }
 
 // ApprovalSource è la clip di partenza di continua_da (il definitivo della
-// scena Scene) quando si è approvato: la clip in uso (File, SHA256), se
-// c'era, e quante clip quella scena aveva generato (Takes). Dopo
-// l'approvazione un'altra clip in uso, o una seconda clip generata se allora
-// non ce n'era, rende vecchia l'approvazione; la prima clip di una scena non
-// ancora generata no: è quella della sua ricetta, compresa in RecipeKey.
+// scena Scene) attesa dall'approvazione: la clip in uso quando si è approvato
+// (File, SHA256) oppure, se allora la scena di partenza non l'aveva ancora,
+// la sua prima clip definitiva, fissata quando giv story run la registra
+// (PinSource). Un'altra clip in uso, un file sostituito nello stesso percorso
+// o una clip comparsa senza essere fissata rendono vecchia l'approvazione.
 type ApprovalSource struct {
 	Scene  string `json:"scene"`
 	File   string `json:"file,omitempty"`
 	SHA256 string `json:"sha256,omitempty"`
-	Takes  int    `json:"takes"`
 }
 
 // ApprovalTake è il materiale che si approva nello storyboard: la bozza
@@ -96,9 +95,6 @@ func (a *Approval) check() error {
 			}
 		} else if src.SHA256 != "" {
 			errs = append(errs, errors.New("source: sha256 senza file"))
-		}
-		if src.Takes < 0 {
-			errs = append(errs, errors.New("source: takes negativo"))
 		}
 	}
 	if !sha256Re.MatchString(a.SHA256) {
@@ -166,17 +162,49 @@ func (st *State) approvalSource(s *Storyboard, id string) (*ApprovalSource, erro
 		return nil, nil
 	}
 	src := &ApprovalSource{Scene: c}
-	if ps := st.Scenes[c]; ps != nil {
-		src.Takes = ps.ClipTakes()
-		if ps.Clip != nil {
-			sum, err := s.FileSHA256(ps.Clip.File)
-			if err != nil {
-				return nil, fmt.Errorf("scena %s: continua_da %s: la clip di partenza non si legge: %w", id, c, err)
-			}
-			src.File, src.SHA256 = ps.Clip.File, sum
+	if ps := st.Scenes[c]; ps != nil && ps.Clip != nil {
+		sum, err := s.FileSHA256(ps.Clip.File)
+		if err != nil {
+			return nil, fmt.Errorf("scena %s: continua_da %s: la clip di partenza non si legge: %w", id, c, err)
 		}
+		src.File, src.SHA256 = ps.Clip.File, sum
 	}
 	return src, nil
+}
+
+// PinSource fissa la clip definitiva in uso della scena id (percorso e
+// contenuto) come clip di partenza attesa dalle scene con continua_da id
+// approvate quando id non aveva ancora una clip. Va chiamata da giv story run
+// subito dopo aver registrato la clip definitiva di id, prima di salvare lo
+// stato, e solo lì: chiamata più tardi fisserebbe un file sostituito nel
+// frattempo. Non cambia una clip di partenza già fissata: se id è stata
+// rigenerata, quelle approvazioni restano vecchie. Se il file non si legge
+// non fissa niente (le approvazioni restano vecchie) e lo dice.
+func (st *State) PinSource(s *Storyboard, id string) error {
+	ps := st.Scenes[id]
+	if ps == nil || ps.Clip == nil {
+		return nil
+	}
+	var sum string
+	for i := range s.Scene {
+		b := &s.Scene[i]
+		ss := st.Scenes[b.ID]
+		if b.ContinuaDa != id || ss == nil || ss.Approval == nil {
+			continue
+		}
+		src := ss.Approval.Source
+		if src == nil || src.Scene != id || src.File != "" {
+			continue
+		}
+		if sum == "" {
+			var err error
+			if sum, err = s.FileSHA256(ps.Clip.File); err != nil {
+				return fmt.Errorf("scena %s: clip di partenza non fissata per continua_da: %w", id, err)
+			}
+		}
+		src.File, src.SHA256 = ps.Clip.File, sum
+	}
+	return nil
 }
 
 // sourceStale è il motivo per cui la clip di partenza di continua_da della
@@ -196,10 +224,10 @@ func (st *State) sourceStale(s *Storyboard, id string, a *Approval) string {
 	}
 	ps := st.Scenes[c]
 	if src.File == "" {
-		if ps != nil && ps.ClipTakes() > src.Takes+1 {
-			return "continua_da " + c + ": la scena di partenza è stata rigenerata dopo l'approvazione"
+		if ps != nil && ps.Clip != nil {
+			return "continua_da " + c + ": la clip di partenza non è stata fissata alla sua registrazione (riapprovare dopo averla vista)"
 		}
-		return ""
+		return "" // la scena di partenza non ha ancora la clip: il definitivo la aspetta
 	}
 	if ps == nil || ps.Clip == nil || ps.Clip.File != src.File {
 		return "continua_da " + c + ": la clip di partenza è cambiata"
