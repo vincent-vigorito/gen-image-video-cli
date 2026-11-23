@@ -54,7 +54,7 @@ func TestPR1FlagHelpNelReadme(t *testing.T) {
 // campi nuovi: story check (run_status, run_cost_est_usd), nomi propri nel kit.
 func TestPR1CampiNuoviNelReadme(t *testing.T) {
 	readme := pr1Readme(t)
-	for _, f := range []string{"run_status", "run_cost_est_usd"} {
+	for _, f := range []string{"run_status", "run_cost_est_usd", "run_not_estimated", "cost_usage_usd", "--nome", "comparison"} {
 		if !strings.Contains(readme, f) {
 			t.Errorf("campo di story check non documentato nel README: %s", f)
 		}
