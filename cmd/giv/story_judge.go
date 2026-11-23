@@ -301,6 +301,7 @@ func (j *storyJudge) Pending(at time.Time) story.Judgement {
 type storyJudgeResult struct {
 	Judgement story.Judgement // da mettere al posto di Pending
 	UsageUSD  float64         // addebito non arrotondato (Settle; 0 = non calcolabile)
+	FromUsage bool            // UsageUSD viene dai token riportati, non dalla stima per eccesso
 	Out       *qcJudgeOut     // rapporto completo, per l'uscita di giv story run
 }
 
@@ -317,7 +318,7 @@ func (j *storyJudge) Send(ctx context.Context) (*storyJudgeResult, error) {
 	return &storyJudgeResult{
 		Judgement: story.Judgement{Status: story.Fatto, Provider: judge.Provider, Model: out.Model, Key: j.Key,
 			Result: ch.Result, Message: judgeSummary(out.Judgment), At: out.JudgedAt},
-		UsageUSD: out.usageUSD, Out: out,
+		UsageUSD: out.usageUSD, FromUsage: out.usageFromTokens, Out: out,
 	}, nil
 }
 

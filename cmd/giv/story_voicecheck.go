@@ -95,8 +95,8 @@ func (r *storyRunner) voiceCheckPreflight() ([]error, error) {
 		secs := voiceDuration(storyVoiceRequest(r.s, scene))
 		if est, why := speech.EstimateTranscribe(voiceCheckProvider, secs, time.Now()); est != nil {
 			r.checkEst[scene.ID] = est.Exact
-		} else if r.s.TettoCostoUSD != nil {
-			rejects = append(rejects, fmt.Errorf("scena %s: controllo della voce non stimabile (%s): con tetto_costo_usd non parte", scene.ID, why))
+		} else if r.capped() {
+			rejects = append(rejects, fmt.Errorf("scena %s: controllo della voce non stimabile (%s): con %s non parte", scene.ID, why, r.capName()))
 			continue
 		} else {
 			fmt.Fprintf(os.Stderr, "avviso: scena %s: controllo della voce senza stima del costo: %s\n", scene.ID, why)
@@ -235,7 +235,10 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 	if k := r.s.KitData; k != nil {
 		o.Nomi = k.Nomi // nomi propri del kit come termini da riconoscere
 	}
-	cap := r.s.TettoCostoUSD
+	cap, capName := r.s.TettoCostoUSD, "tetto_costo_usd"
+	if cap == nil {
+		cap, capName = r.runCap, "--max-cost" // solo il tetto del giro
+	}
 	if cap != nil {
 		// con un tetto la durata va misurata sui campioni e la stima c'è
 		o.MaxCost = cap
@@ -243,7 +246,7 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 	fmt.Fprintf(os.Stderr, "scena %s: controllo della voce %s…\n", id, ss.Voice.File)
 	vc, err := prepareVoiceCheck(o)
 	if err != nil {
-		skip("non fatto: %s", strings.ReplaceAll(err.Error(), "--max-cost", "tetto_costo_usd"))
+		skip("non fatto: %s", strings.ReplaceAll(err.Error(), "--max-cost", capName))
 		return
 	}
 	ch := story.Charge{Kind: story.ChargeTranscribe}
@@ -253,9 +256,9 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 	}
 	if cap != nil {
 		r.checkEst[id] = *ch.CostEstUSD // misurata sul file: al posto di quella dai caratteri
-		if spent, next, over := r.capOver(); over {
-			skip("non fatto: spesa già fatta %.4f $ più generazioni da fare %.4f $ (trascrizione di %.6f $ compresa) oltre tetto_costo_usd %.4f $",
-				round4(spent), round4(next), vc.est.USD, *cap)
+		if b := r.overCap(); b != nil {
+			skip("non fatto: %s %.4f $ più generazioni da fare %.4f $ (trascrizione di %.6f $ compresa) oltre %s %.4f $",
+				b.what, round4(b.spent), round4(b.next), vc.est.USD, b.name, b.cap)
 			return
 		}
 	}

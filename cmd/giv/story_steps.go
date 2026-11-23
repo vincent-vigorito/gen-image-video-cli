@@ -321,12 +321,17 @@ func (r *storyRunner) await(id, what, why string) {
 	fmt.Fprintf(os.Stderr, "scena %s: da approvare, %s (%s): giv story approve %s %s\n", id, what, why, r.path, id)
 }
 
-// draftsAwaiting elenca in awaiting_approval, a fine giro --bozza, le scene
+// takesAwaiting elenca in awaiting_approval, a fine giro --bozza, le scene
 // del giro la cui bozza ora aspetta giv story approve (approvalStatus da
 // approvare: mai approvata o approvazione non più valida), come le elenca
-// giv story check. Locale: nessuna richiesta.
-func (r *storyRunner) draftsAwaiting() {
-	if r.mode != modeDraft {
+// giv story check; a fine giro --keyframes, se si approva il fotogramma
+// chiave (storyboard senza default.bozza), quelle il cui fotogramma la
+// aspetta. Locale: nessuna richiesta.
+func (r *storyRunner) takesAwaiting() {
+	switch {
+	case r.mode == modeDraft:
+	case r.mode == modeKeyframes && approvalTake(r.s) == story.TakeKeyframe:
+	default:
 		return
 	}
 	for _, scene := range r.order {
@@ -510,9 +515,9 @@ func (r *storyRunner) judgePlan() error {
 	if len(missing) == 0 {
 		return nil
 	}
-	if r.s.TettoCostoUSD != nil {
-		return usageError("%s: con tetto_costo_usd ogni giudizio di aderenza vuole una stima; non stimabile: %s (togli il tetto o controllo.aderenza)",
-			r.path, strings.Join(missing, "; "))
+	if r.capped() {
+		return usageError("%s: con %s ogni giudizio di aderenza vuole una stima; non stimabile: %s (togli il tetto o controllo.aderenza)",
+			r.path, r.capName(), strings.Join(missing, "; "))
 	}
 	fmt.Fprintf(os.Stderr, "avviso: giudizio di aderenza senza stima del costo (non contato nel totale): %s\n", strings.Join(missing, "; "))
 	return nil
@@ -566,8 +571,8 @@ func (r *storyRunner) judgeScene(ctx context.Context, scene *story.Scene) error 
 	if est, ok := j.EstimateUSD(); ok {
 		ch.CostEstUSD = &est
 		r.judgeEst[scene.ID] = est // il tetto conta la stima di questa richiesta
-	} else if r.s.TettoCostoUSD != nil {
-		return usageError("non stimabile con tetto_costo_usd: nessun giudizio inviato")
+	} else if r.capped() {
+		return usageError("non stimabile con %s: nessun giudizio inviato", r.capName())
 	}
 	k, err := r.reserveCharge(ss, ch, func() func() {
 		t := ss.TakeByFile(j.File)
@@ -603,7 +608,7 @@ func (r *storyRunner) judgeScene(ctx context.Context, scene *story.Scene) error 
 		r.save()
 		return err
 	}
-	settleJudge(ss, k, res.UsageUSD)
+	settleJudge(ss, k, res.UsageUSD, res.FromUsage)
 	if i >= 0 {
 		t.Judgements[i] = res.Judgement
 	}
