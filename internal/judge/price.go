@@ -132,3 +132,30 @@ func priceAt(model string, at time.Time) (Price, bool) {
 	}
 	return best, found
 }
+
+// Misure delle immagini nella stima preventiva, prima che il video esista:
+// lato lungo JudgeMaxSide e proporzioni 21:9, le più strette fra quelle dei
+// video (più riquadri); la stima alla richiesta usa le misure vere.
+const (
+	planLong  = 768
+	planShort = 328
+)
+
+// PlanEstimate è la stima preventiva di un giudizio con frames fotogrammi,
+// la richiesta prompt e un riferimento se ref: per il piano di giv story
+// prima che la ripresa esista. nil col motivo se il modello non ha tariffa.
+func PlanEstimate(model, prompt string, frames int, ref bool, at time.Time) (*Estimate, string) {
+	im := Image{Width: planLong, Height: planShort, Data: []byte{0}}
+	r := Request{Model: model, Prompt: prompt}
+	for i := 0; i < frames; i++ {
+		f := im
+		f.Role, f.TimeS = RoleFrame, float64(i)
+		r.Frames = append(r.Frames, f)
+	}
+	if ref {
+		rf := im
+		rf.Role = RoleRef
+		r.Ref = &rf
+	}
+	return EstimateCost(r, at)
+}

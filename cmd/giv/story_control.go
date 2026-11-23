@@ -18,7 +18,9 @@ import (
 // montaggio, controllano come giv qc le clip e i file in uso, le voci e i
 // montati, con il risultato in <nome>.controllo.json e nel JSON del comando;
 // con controllo.voce le righe delle voci generate portano anche la
-// trascrizione confrontata col testo (story_voicecheck.go). Il controllo
+// trascrizione confrontata col testo (story_voicecheck.go); con
+// controllo.aderenza le righe delle scene video e avatar portano il giudizio
+// di aderenza della clip in uso registrato nello stato (story_judge.go). Il controllo
 // avvisa e basta (K6): non rigenera, non scarta e non spende oltre la
 // trascrizione; con strict nello storyboard un difetto fa uscire giv story
 // run con 1.
@@ -98,6 +100,51 @@ func controlStory(s *story.Storyboard, path, command string, checks map[string]*
 	return ctl
 }
 
+// judgeRows aggiunge il controllo adherence (controllo.aderenza) alle righe
+// delle scene video e avatar: il giudizio della clip in uso registrato nello
+// stato, senza reinvio. Senza controllo.tecnico le righe delle scene portano
+// solo il giudizio.
+func judgeRows(ctl *storyControl, s *story.Storyboard, st *story.State) {
+	if !controlOn(s) {
+		for i := range s.Scene {
+			sc := &s.Scene[i]
+			if sc.Tipo != story.Video && sc.Tipo != story.Avatar {
+				continue
+			}
+			row := qcRow{ID: sc.ID, Tipo: sc.Tipo}
+			clip, err := st.ClipFile(s, sc.ID)
+			if err != nil {
+				msg := err.Error()
+				if errors.Is(err, story.ErrNotDone) {
+					msg = "clip non ancora generata (giv story run)"
+				}
+				row.absent("", msg)
+			} else {
+				row.Take = st.Scenes[sc.ID].ClipTakes()
+				row.QCReport = &montage.QCReport{File: clip, Result: montage.QCOK, Checks: []montage.QCCheck{}}
+			}
+			ctl.Scenes = append(ctl.Scenes, row)
+		}
+	}
+	for i := range ctl.Scenes {
+		row := &ctl.Scenes[i]
+		if row.QCReport == nil || (row.Tipo != story.Video && row.Tipo != story.Avatar) {
+			continue
+		}
+		var take *story.Take
+		if ss := st.Scenes[row.ID]; ss != nil {
+			take = ss.Clip
+		}
+		n := len(row.Checks)
+		judgeRowCheck(row, take)
+		for _, c := range row.Checks[n:] {
+			if !c.Skipped {
+				ctl.Counts[c.Result]++
+			}
+		}
+	}
+}
+
 // controlRows sono le righe del controllo: con controllo.tecnico scene e
 // montati come giv qc sullo storyboard (qcStory), più le voci in uso (file
 // della scena o voce generata da giv story run), tutte nella cartella dello
@@ -116,6 +163,9 @@ func controlRows(s *story.Storyboard, path, command string, checks map[string]*s
 	st, err := story.LoadState(story.StatePath(path))
 	if err != nil {
 		return nil, err
+	}
+	if judgeControlOn(s) {
+		judgeRows(ctl, s, st)
 	}
 	on := true
 	for i := range s.Scene {

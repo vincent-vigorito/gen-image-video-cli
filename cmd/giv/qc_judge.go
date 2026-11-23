@@ -57,9 +57,9 @@ const qcJudgeHelp = `Giudizio di aderenza (a pagamento: gemini diretto, solo su 
   Prima dell'invio, su stderr: destinatario, immagini (istante, misure, byte), caratteri della
   richiesta e stima. Stima per eccesso dal listino: ingresso al massimo (testo un token per
   byte, immagini 258 token per riquadro) e uscita al limite della richiesta (maxOutputTokens
-  2048); l'addebito viene dai token riportati. Risposta illeggibile: giudizio incerto, codice 0.
-  Esito incerto (redirect, errore del server, rete): codice 5 e riga failed in giv-log.jsonl,
-  senza rilancio (può essere stato addebitato).
+  2048); l'addebito viene dai token riportati. Ogni giudizio inviato lascia una riga in
+  giv-log.jsonl. Risposta illeggibile: giudizio incerto, codice 0. Esito incerto (redirect,
+  errore del server, rete): codice 5 e riga failed, senza rilancio (può essere stato addebitato).
 `
 
 func init() {
