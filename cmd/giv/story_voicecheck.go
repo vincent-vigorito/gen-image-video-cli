@@ -49,6 +49,9 @@ type storyVoiceCheck struct {
 // mai controllata (o controllata su un altro file); con --scene solo quella.
 // Una trascrizione incerta della voce in uso non si rilancia: avviso.
 func (r *storyRunner) voiceChecksToDo() []*story.Scene {
+	if r.mode != modeFinal {
+		return nil // --keyframes e --bozza: nessuna voce da controllare
+	}
 	var out []*story.Scene
 	for i := range r.s.Scene {
 		scene := &r.s.Scene[i]

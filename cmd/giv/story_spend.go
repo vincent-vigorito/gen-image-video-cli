@@ -47,17 +47,24 @@ func (r *storyRunner) checkCap() error {
 }
 
 // capNext è la stima non arrotondata delle generazioni ancora da chiedere:
-// voci, trascrizioni (controllo.voce) e scene video la cui clip non è ancora
-// riservata in questa esecuzione (sent), col fotogramma chiave da fare. Una
-// scena già riservata conta solo con la sua riserva nello stato, mai due volte.
+// voci, trascrizioni (controllo.voce), scene video la cui clip (o bozza) non è
+// ancora riservata in questa esecuzione (sent), col fotogramma chiave da fare
+// (con --keyframes solo questo), e giudizi di aderenza non ancora riservati.
+// Una richiesta già riservata conta solo con la sua riserva nello stato, mai
+// due volte.
 func (r *storyRunner) capNext() float64 {
 	next := r.voiceNext() + r.voiceCheckNext()
 	for _, scene := range r.order {
 		if !r.sent[scene.ID] && r.toLaunch(scene) {
-			next += r.est[scene.ID]
+			if r.mode != modeKeyframes {
+				next += r.est[scene.ID]
+			}
 			if r.needKeyframe(scene) {
 				next += *scene.FotogrammaChiave.CostoDichiaratoUSD
 			}
+		}
+		if est, ok := r.judgeEst[scene.ID]; ok && !r.judgeSent[scene.ID] {
+			next += est
 		}
 	}
 	return next
@@ -109,7 +116,7 @@ func releaseCharge(ss *story.SceneState, k int) {
 func settle(ss *story.SceneState, k int, costUSD, usageUSD float64) {
 	ss.Settle(k, costUSD)
 	c := &ss.Charges[k]
-	if costUSD > 0 || usageUSD <= 0 || (c.CostEstUSD == nil && c.Kind == story.ChargeClip) {
+	if costUSD > 0 || usageUSD <= 0 || (c.CostEstUSD == nil && (c.Kind == story.ChargeClip || c.Kind == story.ChargeDraft)) {
 		return
 	}
 	if c.CostEstUSD == nil || usageUSD > *c.CostEstUSD {
@@ -118,9 +125,10 @@ func settle(ss *story.SceneState, k int, costUSD, usageUSD float64) {
 	}
 }
 
-// jobCharge è l'indice della generazione della clip del job id, -1 se non c'è.
-func jobCharge(ss *story.SceneState, id string) int {
-	return slices.IndexFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == story.ChargeClip && ch.JobID != "" && ch.JobID == id })
+// jobCharge è l'indice della generazione di tipo kind (clip o bozza) del job
+// id, -1 se non c'è.
+func jobCharge(ss *story.SceneState, kind, id string) int {
+	return slices.IndexFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == kind && ch.JobID != "" && ch.JobID == id })
 }
 
 // saveState scrive lo stato; dopo un errore nessuna nuova richiesta parte in

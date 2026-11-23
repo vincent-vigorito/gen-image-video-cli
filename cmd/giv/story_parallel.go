@@ -173,8 +173,9 @@ func (r *storyRunner) workStarted(w *sceneWork, s *jobStart) {
 	w.started = true
 	r.man.Started++
 	ss := w.ss
-	ss.Status, ss.Error = story.Partito, ""
-	ss.Job = &story.Job{Provider: s.provider, ID: s.job.ID, PollingURL: s.job.PollingURL, Model: s.req.Model, Started: time.Now()}
+	tr := r.trackW(w.scene.ID, ss)
+	tr.Status, tr.Error = story.Partito, ""
+	tr.Job = &story.Job{Provider: s.provider, ID: s.job.ID, PollingURL: s.job.PollingURL, Model: s.req.Model, Started: time.Now()}
 	ss.Charges[w.k].JobID = s.job.ID
 	r.save()
 }
@@ -186,14 +187,15 @@ func (r *storyRunner) workStarted(w *sceneWork, s *jobStart) {
 // compreso) la riserva si toglie e la scena resta da fare.
 func (r *storyRunner) clipDone(w *sceneWork, man manifest, err error) error {
 	ss := w.ss
+	tr := r.trackW(w.scene.ID, ss)
 	if err != nil {
 		var se *httpx.StartError
 		switch {
 		case w.started && errors.Is(err, provider.ErrJobFailed):
-			ss.Status, ss.Job = story.Fallito, nil // la spesa resta contata, si rifà solo con --scene
+			tr.Status, tr.Job = story.Fallito, nil // la spesa resta contata, si rifà solo con --scene
 			settle(ss, w.k, 0, 0)
 		case w.started:
-			ss.Status = story.Partito // il job resta: la prossima esecuzione lo recupera, non lo rilancia
+			tr.Status = story.Partito // il job resta: la prossima esecuzione lo recupera, non lo rilancia
 		case errors.As(err, &se):
 			// avvio senza esito: forse addebitato, resta riservato, si rifà solo con --scene
 			ss.MarkUncertain(w.k)
@@ -201,7 +203,7 @@ func (r *storyRunner) clipDone(w *sceneWork, man manifest, err error) error {
 			// avvio rifiutato (4xx) o mai partito: nessun job, niente addebito,
 			// la scena resta da fare e la prossima esecuzione la riprova
 			releaseCharge(ss, w.k)
-			ss.Status = idle(ss)
+			tr.Status = idle(tr)
 		}
 		return w.fail(err)
 	}
@@ -284,28 +286,32 @@ func (r *storyRunner) recoverAll(ctx context.Context) error {
 // avvio: l'addebito del job entra nel conto prima dell'attesa.
 func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 	ss := r.st.Scenes[scene.ID]
-	j := ss.Job
+	j := r.track(scene.ID).Job
 	c, err := r.sc.client(j.Provider)
 	if err != nil {
 		return err
 	}
 	f := c.Provider.(provider.JobFetcher) // controllato in preflight
-	if !slices.ContainsFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == story.ChargeClip && ch.JobID == j.ID }) {
+	if jobCharge(ss, r.chargeKind(scene.ID), j.ID) < 0 {
 		// ogni job recuperato conta nella spesa
-		ss.Charges = append(ss.Charges, story.Charge{Kind: story.ChargeClip, JobID: j.ID, CostDeclaredUSD: scene.CostoDichiaratoUSD, At: time.Now()})
+		ss.Charges = append(ss.Charges, r.jobChargeOf(scene, j.ID))
 		r.save()
 	}
 	fmt.Fprintf(os.Stderr, "scena %s: recupero del job %s (%s), senza nuovo avvio\n", scene.ID, j.ID, j.Provider)
-	job, slug := provider.Job{ID: j.ID, PollingURL: j.PollingURL}, fmt.Sprintf("%s-r%d", scene.ID, takeNumber(ss))
+	job, slug, dir := provider.Job{ID: j.ID, PollingURL: j.PollingURL}, r.slug(scene.ID, ss), r.clipDir(scene.ID)
 	man := manifest{Provider: c.Name(), Model: j.Model, Prompt: scene.Prompt}
-	w := &sceneWork{scene: scene, ss: ss, take: takeNumber(ss), recover: true, command: storyCommand(scene)}
+	command := storyCommand(scene)
+	if r.drafts(scene.ID) {
+		command = r.clipCommand()
+	}
+	w := &sceneWork{scene: scene, ss: ss, take: r.takeNumber(scene.ID, ss), recover: true, command: command}
 	w.run = func(ctx context.Context) (manifest, error) {
 		res, err := f.FetchVideo(ctx, job, storyTimeout)
 		if err != nil {
 			return manifest{}, err
 		}
 		w.fetched = true // letto dal coordinatore dopo l'evento di fine
-		files, err := r.saveFiles(slug, res.Media)
+		files, err := r.saveFiles(dir, slug, res.Media)
 		if err != nil {
 			return manifest{}, err
 		}
@@ -321,25 +327,26 @@ func (r *storyRunner) recover(ctx context.Context, scene *story.Scene) error {
 // recupera alla prossima esecuzione; scaricato ma non salvato = il job resta.
 func (r *storyRunner) recovered(w *sceneWork, man manifest, err error) error {
 	ss, scene := w.ss, w.scene
+	tr := r.trackW(scene.ID, ss)
 	if err != nil {
-		ss.Error = err.Error()
+		tr.Error = err.Error()
 		if w.fetched {
 			r.save()
 			return err
 		}
 		if errors.Is(err, provider.ErrJobFailed) {
-			if k := jobCharge(ss, ss.Job.ID); k >= 0 {
+			if k := jobCharge(ss, r.chargeKind(scene.ID), tr.Job.ID); k >= 0 {
 				settle(ss, k, 0, 0) // la spesa resta contata alla stima
 			}
-			ss.Status, ss.Job = story.Fallito, nil
+			tr.Status, tr.Job = story.Fallito, nil
 			r.save()
 			return err
 		}
-		ss.Status = story.Partito
+		tr.Status = story.Partito
 		r.save()
 		hint := ""
 		if sc := r.s.Scena(scene.ID); sc != nil && sc.Generata() {
-			hint = fmt.Sprintf("; se non si scarica più, per abbandonarlo e rifare la scena: giv story run --scene %s --new-job %s", scene.ID, r.path)
+			hint = fmt.Sprintf("; se non si scarica più, per abbandonarlo e rifare la scena: giv story run %s--scene %s --new-job %s", r.modeFlag(), scene.ID, r.path)
 		}
 		return fmt.Errorf("%w (il job resta: si recupera alla prossima esecuzione%s)", err, hint)
 	}
@@ -405,17 +412,17 @@ func (r *storyRunner) inOrder(id string) bool {
 // lavoro finito, o subito se la riserva non c'è.
 func (r *storyRunner) startClip(ctx context.Context, scene *story.Scene, ss *story.SceneState, est *float64,
 	run func(context.Context) (manifest, error), fail func(error) error, command string, cleanup func()) error {
-	ch := story.Charge{Kind: story.ChargeClip, CostEstUSD: est}
-	if ch.CostEstUSD == nil {
-		ch.CostDeclaredUSD = scene.CostoDichiaratoUSD
+	ch := story.Charge{Kind: r.chargeKind(scene.ID), CostEstUSD: est}
+	if ch.CostEstUSD == nil && !r.drafts(scene.ID) {
+		ch.CostDeclaredUSD = scene.CostoDichiaratoUSD // il costo dichiarato è del definitivo
 	}
-	k, err := r.reserve(ss, ch)
+	k, err := r.reserve(ss, ch, r.trackW(scene.ID, ss))
 	if err != nil {
 		cleanup()
 		return err
 	}
 	r.sent[scene.ID] = true // la riserva è nello stato: il tetto non la conta più fra le richieste da fare
-	w := &sceneWork{scene: scene, ss: ss, take: takeNumber(ss), k: k, command: command, fail: fail, cleanup: cleanup, run: run}
+	w := &sceneWork{scene: scene, ss: ss, take: r.takeNumber(scene.ID, ss), k: k, command: command, fail: fail, cleanup: cleanup, run: run}
 	r.starting.Store(w)
 	defer r.starting.Store(nil)
 	r.openWork(ctx, w)
