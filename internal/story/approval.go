@@ -226,10 +226,10 @@ func (st *State) sourceStale(s *Storyboard, id string, a *Approval) string {
 	}
 	ps := st.Scenes[c]
 	if src.File == "" {
-		if ps != nil && ps.Clip != nil {
-			return "continua_da " + c + ": la clip di partenza non è stata fissata alla sua registrazione (riapprovare dopo averla vista)"
+		if ps != nil && ps.ClipTakes() > 0 {
+			return "continua_da " + c + ": la scena di partenza ha già avuto una clip definitiva non fissata per questa approvazione (riapprovare dopo averla vista)"
 		}
-		return "" // la scena di partenza non ha ancora la clip: il definitivo la aspetta
+		return "" // la scena di partenza non ha mai avuto una clip: il definitivo la aspetta
 	}
 	if ps == nil || ps.Clip == nil || ps.Clip.File != src.File {
 		return "continua_da " + c + ": la clip di partenza è cambiata"
