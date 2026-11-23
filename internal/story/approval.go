@@ -17,15 +17,41 @@ import (
 // story approve): la ripresa vista (bozza o fotogramma chiave, col contenuto
 // del file) e la ricetta del definitivo approvata (RecipeKey). Vale finché
 // CheckApproval non dice il contrario: una nuova ripresa, un altro fotogramma
-// chiave o un cambio della ricetta la rendono vecchia, un cambio in un'altra
-// scena indipendente no.
+// chiave (anche nello stesso file), un cambio della ricetta, del materiale da
+// vedere (default.bozza aggiunto o tolto) o della clip di partenza di
+// continua_da la rendono vecchia; un cambio in un'altra scena indipendente no.
 type Approval struct {
-	Take     string    `json:"take"`               // ripresa vista: bozza o fotogramma
-	File     string    `json:"file"`               // suo file, relativo alla cartella dello storyboard
-	SHA256   string    `json:"sha256"`             // contenuto del file visto
-	Keyframe string    `json:"keyframe,omitempty"` // fotogramma chiave in uso quando si è approvato
-	Recipe   string    `json:"recipe"`             // RecipeKey del definitivo approvato
-	At       time.Time `json:"at"`
+	Take           string          `json:"take"`                      // ripresa vista: bozza o fotogramma
+	File           string          `json:"file"`                      // suo file, relativo alla cartella dello storyboard
+	SHA256         string          `json:"sha256"`                    // contenuto del file visto
+	Keyframe       string          `json:"keyframe,omitempty"`        // fotogramma chiave in uso quando si è approvato
+	KeyframeSHA256 string          `json:"keyframe_sha256,omitempty"` // suo contenuto: va al definitivo
+	Source         *ApprovalSource `json:"source,omitempty"`          // continua_da da una scena generata
+	Recipe         string          `json:"recipe"`                    // RecipeKey del definitivo approvato
+	At             time.Time       `json:"at"`
+}
+
+// ApprovalSource è la clip di partenza di continua_da (il definitivo della
+// scena Scene) quando si è approvato: la clip in uso (File, SHA256), se
+// c'era, e quante clip quella scena aveva generato (Takes). Dopo
+// l'approvazione un'altra clip in uso, o una seconda clip generata se allora
+// non ce n'era, rende vecchia l'approvazione; la prima clip di una scena non
+// ancora generata no: è quella della sua ricetta, compresa in RecipeKey.
+type ApprovalSource struct {
+	Scene  string `json:"scene"`
+	File   string `json:"file,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+	Takes  int    `json:"takes"`
+}
+
+// ApprovalTake è il materiale che si approva nello storyboard: la bozza
+// (TakeDraft) con default.bozza, altrimenti il fotogramma chiave
+// (TakeKeyframe). Un'approvazione di un altro materiale non vale.
+func (s *Storyboard) ApprovalTake() string {
+	if s.Default.Bozza != nil {
+		return TakeDraft
+	}
+	return TakeKeyframe
 }
 
 // Approvazioni.
@@ -51,6 +77,29 @@ func (a *Approval) check() error {
 		if err := localPath(a.Keyframe); err != nil {
 			errs = append(errs, fmt.Errorf("keyframe %q non valido", a.Keyframe))
 		}
+		if !sha256Re.MatchString(a.KeyframeSHA256) {
+			errs = append(errs, errors.New("keyframe_sha256 non valido"))
+		}
+	} else if a.KeyframeSHA256 != "" {
+		errs = append(errs, errors.New("keyframe_sha256 senza keyframe"))
+	}
+	if src := a.Source; src != nil {
+		if !idRe.MatchString(src.Scene) {
+			errs = append(errs, fmt.Errorf("source: scene %q non valida", src.Scene))
+		}
+		if src.File != "" {
+			if err := localPath(src.File); err != nil {
+				errs = append(errs, fmt.Errorf("source: file %q non valido", src.File))
+			}
+			if !sha256Re.MatchString(src.SHA256) {
+				errs = append(errs, errors.New("source: sha256 non valido"))
+			}
+		} else if src.SHA256 != "" {
+			errs = append(errs, errors.New("source: sha256 senza file"))
+		}
+		if src.Takes < 0 {
+			errs = append(errs, errors.New("source: takes negativo"))
+		}
 	}
 	if !sha256Re.MatchString(a.SHA256) {
 		errs = append(errs, errors.New("sha256 non valido"))
@@ -64,12 +113,16 @@ func (a *Approval) check() error {
 // Approve approva la ripresa in uso di tipo take (TakeDraft o TakeKeyframe)
 // della scena id con la ricetta del definitivo recipe (RecipeKey adesso): ne
 // legge il file per l'impronta e la registra nello stato, al posto di
-// un'approvazione precedente. Va salvata (Save), col blocco dello stato
-// (OpenLockedState). ErrNothingToApprove se la scena non ha una ripresa di
-// quel tipo.
+// un'approvazione precedente, insieme al contenuto del fotogramma chiave in
+// uso e alla clip di partenza di continua_da. Va salvata (Save), col blocco
+// dello stato (OpenLockedState). ErrNothingToApprove se la scena non ha una
+// ripresa di quel tipo; take deve essere s.ApprovalTake().
 func (st *State) Approve(s *Storyboard, id, take, recipe string) (*Approval, error) {
 	if take != TakeDraft && take != TakeKeyframe {
 		return nil, fmt.Errorf("scena %s: si approva una bozza o un fotogramma, non %q", id, take)
+	}
+	if want := s.ApprovalTake(); take != want {
+		return nil, fmt.Errorf("scena %s: lo storyboard chiede di approvare %s, non %s", id, want, take)
 	}
 	if !sha256Re.MatchString(recipe) {
 		return nil, fmt.Errorf("scena %s: ricetta non valida", id)
@@ -89,16 +142,85 @@ func (st *State) Approve(s *Storyboard, id, take, recipe string) (*Approval, err
 	a := &Approval{Take: take, File: t.File, SHA256: sum, Recipe: recipe, At: time.Now()}
 	if sc.Keyframe != nil {
 		a.Keyframe = sc.Keyframe.File
+		if a.KeyframeSHA256, err = s.FileSHA256(a.Keyframe); err != nil {
+			return nil, fmt.Errorf("scena %s: fotogramma chiave: %w", id, err)
+		}
+	}
+	if a.Source, err = st.approvalSource(s, id); err != nil {
+		return nil, err
 	}
 	sc.Approval = a
 	return a, nil
 }
 
+// approvalSource è la clip di partenza di continua_da della scena id adesso,
+// per Approve; nil se la scena non continua da una scena generata (il file
+// di una scena montata è già nella ricetta).
+func (st *State) approvalSource(s *Storyboard, id string) (*ApprovalSource, error) {
+	scene := s.Scena(id)
+	if scene == nil || scene.ContinuaDa == "" {
+		return nil, nil
+	}
+	c := scene.ContinuaDa
+	if prev := s.Scena(c); prev == nil || !prev.Generata() {
+		return nil, nil
+	}
+	src := &ApprovalSource{Scene: c}
+	if ps := st.Scenes[c]; ps != nil {
+		src.Takes = ps.ClipTakes()
+		if ps.Clip != nil {
+			sum, err := s.FileSHA256(ps.Clip.File)
+			if err != nil {
+				return nil, fmt.Errorf("scena %s: continua_da %s: la clip di partenza non si legge: %w", id, c, err)
+			}
+			src.File, src.SHA256 = ps.Clip.File, sum
+		}
+	}
+	return src, nil
+}
+
+// sourceStale è il motivo per cui la clip di partenza di continua_da della
+// scena id non è più quella dell'approvazione a; vuoto se lo è.
+func (st *State) sourceStale(s *Storyboard, id string, a *Approval) string {
+	scene := s.Scena(id)
+	if scene == nil || scene.ContinuaDa == "" {
+		return ""
+	}
+	c := scene.ContinuaDa
+	if prev := s.Scena(c); prev == nil || !prev.Generata() {
+		return ""
+	}
+	src := a.Source
+	if src == nil || src.Scene != c {
+		return "continua_da " + c + ": la clip di partenza non è quella approvata"
+	}
+	ps := st.Scenes[c]
+	if src.File == "" {
+		if ps != nil && ps.ClipTakes() > src.Takes+1 {
+			return "continua_da " + c + ": la scena di partenza è stata rigenerata dopo l'approvazione"
+		}
+		return ""
+	}
+	if ps == nil || ps.Clip == nil || ps.Clip.File != src.File {
+		return "continua_da " + c + ": la clip di partenza è cambiata"
+	}
+	sum, err := s.FileSHA256(src.File)
+	if err != nil {
+		return "continua_da " + c + ": la clip di partenza non si legge: " + err.Error()
+	}
+	if sum != src.SHA256 {
+		return "continua_da " + c + ": la clip di partenza è cambiata"
+	}
+	return ""
+}
+
 // CheckApproval dice se l'approvazione della scena id vale ancora per la
 // ricetta del definitivo recipe (RecipeKey adesso): nil se sì; altrimenti un
 // errore con ErrNotApproved (nessuna approvazione) o ErrStaleApproval (ricetta
-// cambiata, nuova ripresa o altro fotogramma chiave dopo l'approvazione, file
-// visto cambiato o non più leggibile), col motivo.
+// cambiata, materiale approvato diverso da s.ApprovalTake(), nuova ripresa o
+// altro fotogramma chiave dopo l'approvazione, file visto o fotogramma chiave
+// cambiato o non più leggibile, clip di partenza di continua_da cambiata o
+// rigenerata), col motivo. È la verifica del gate di giv story run.
 func (st *State) CheckApproval(s *Storyboard, id, recipe string) error {
 	sc := st.Scenes[id]
 	if sc == nil || sc.Approval == nil {
@@ -108,6 +230,9 @@ func (st *State) CheckApproval(s *Storyboard, id, recipe string) error {
 	stale := func(why string) error { return fmt.Errorf("scena %s: %w: %s", id, ErrStaleApproval, why) }
 	if a.Recipe != recipe {
 		return stale("la ricetta del definitivo è cambiata (richiesta, modelli, durata, riferimenti o kit)")
+	}
+	if want := s.ApprovalTake(); a.Take != want {
+		return stale("approvato il materiale " + a.Take + ", lo storyboard ora chiede " + want)
 	}
 	if t := sc.Current(a.Take); t == nil || t.File != a.File {
 		return stale("c'è una nuova ripresa (" + a.Take + ") da vedere")
@@ -125,6 +250,18 @@ func (st *State) CheckApproval(s *Storyboard, id, recipe string) error {
 	}
 	if sum != a.SHA256 {
 		return stale("il file approvato è cambiato")
+	}
+	if kf != "" {
+		ksum, err := s.FileSHA256(kf)
+		if err != nil {
+			return stale("il fotogramma chiave non si legge: " + err.Error())
+		}
+		if ksum != a.KeyframeSHA256 {
+			return stale("il fotogramma chiave è cambiato")
+		}
+	}
+	if why := st.sourceStale(s, id, a); why != "" {
+		return stale(why)
 	}
 	return nil
 }
