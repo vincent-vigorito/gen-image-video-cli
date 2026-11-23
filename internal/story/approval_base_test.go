@@ -265,3 +265,52 @@ func TestBaseApprovazioneClipDiPartenza(t *testing.T) {
 		}
 	})
 }
+
+// B approvata prima che A abbia la clip, poi B tolta dallo storyboard: PinSource
+// fissa comunque l'approvazione nello stato. Se A1 è già stata sostituita da A2
+// (A1 fra le precedenti), PinSource non fissa e B resta vecchia.
+func TestBasePinSourceSceneTolteESostituite(t *testing.T) {
+	prepara := func(t *testing.T) (*Storyboard, *State, string, string) {
+		s, path := nuovoStoryboard(t)
+		st := newState(StatePath(path))
+		approva(t, s, st, "s2", "bozza2.mp4")
+		return s, st, filepath.Dir(path), path
+	}
+	t.Run("B tolta dallo storyboard", func(t *testing.T) {
+		s, st, dir, path := prepara(t)
+		senza := `{"titolo":"t","formato":{"aspect":"16:9","risoluzione":"720p","fps":24},
+	 "default":{"provider":"xai","modello":"m","audio":"off","bozza":{"modello":"mb"}},
+	 "scene":[
+	  {"id":"s1","tipo":"video","durata":5,"immagine":"a.png","prompt":"uno"},
+	  {"id":"s3","tipo":"video","durata":5,"immagine":"c.png","prompt":"tre"}]}`
+		os.WriteFile(path, []byte(senza), 0o644)
+		s2, err := Load(path)
+		if err != nil {
+			t.Fatalf("storyboard senza s2: %v\n%s", err, senza)
+		}
+		os.WriteFile(filepath.Join(dir, "a1.mp4"), []byte("clip a"), 0o644)
+		st.Scene("s1").Clip = &Take{File: "a1.mp4"}
+		if err := st.PinSource(s2, "s1"); err != nil {
+			t.Fatal(err)
+		}
+		if src := st.Scenes["s2"].Approval.Source; src == nil || src.File != "a1.mp4" || src.SHA256 == "" {
+			t.Fatalf("sorgente non fissata: %+v", src)
+		}
+		_ = s
+	})
+	t.Run("A già sostituita", func(t *testing.T) {
+		s, st, dir, _ := prepara(t)
+		os.WriteFile(filepath.Join(dir, "a1.mp4"), []byte("clip a"), 0o644)
+		os.WriteFile(filepath.Join(dir, "a2.mp4"), []byte("clip a2"), 0o644)
+		a := st.Scene("s1")
+		a.Clip = &Take{File: "a2.mp4"}
+		a.Previous = []Take{{File: "a1.mp4"}}
+		st.PinSource(s, "s1")
+		if src := st.Scenes["s2"].Approval.Source; src != nil && src.File != "" {
+			t.Fatalf("fissata su una clip già sostituita: %+v", src)
+		}
+		if err := valida(t, s, st, "s2"); !errors.Is(err, ErrStaleApproval) {
+			t.Fatalf("B doveva essere vecchia: %v", err)
+		}
+	})
+}
