@@ -313,3 +313,43 @@ func execOut(t *testing.T, name string, args ...string) (string, error) {
 	b, err := exec.Command(name, args...).CombinedOutput()
 	return string(b), err
 }
+
+// Bozza approvata, poi default.bozza tolto: l'approvazione non vale più per il
+// materiale che lo storyboard chiede oggi; approve senza bozza: codice 2.
+func TestBApprovazioneBozzaPoiTolta(t *testing.T) {
+	dir, board := bEnv(t, "s1")
+	if _, se, code := bRun(t, "approve", board, "s1"); code != 0 {
+		t.Fatalf("%d %s", code, se)
+	}
+	data, _ := os.ReadFile(board)
+	senza := bytes.Replace(data, []byte(`,
+ "bozza":{"modello":"alibaba/wan-3.0","risoluzione":"480p"}`), nil, 1)
+	if bytes.Equal(senza, data) {
+		t.Fatal("storyboard di prova non modificato")
+	}
+	os.WriteFile(board, senza, 0o644)
+	cout, se, code := bRun(t, "check", board)
+	if code != 0 {
+		t.Fatalf("check %d %s", code, se)
+	}
+	var c struct {
+		Scenes []struct {
+			ID       string `json:"id"`
+			Approval string `json:"approval"`
+		} `json:"scenes"`
+	}
+	json.Unmarshal([]byte(cout), &c)
+	for _, s := range c.Scenes {
+		if s.ID == "s1" && s.Approval == "pronta" {
+			t.Errorf("approvazione della bozza ancora pronta senza default.bozza")
+		}
+	}
+	before, _ := os.ReadFile(filepath.Join(dir, "spot.stato.json"))
+	if _, _, code := bRun(t, "approve", board, "s1"); code != 2 {
+		t.Errorf("approve senza bozza né fotogramma: code=%d, atteso 2", code)
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, "spot.stato.json"))
+	if !bytes.Equal(before, after) {
+		t.Error("stato cambiato da un'approvazione rifiutata")
+	}
+}
