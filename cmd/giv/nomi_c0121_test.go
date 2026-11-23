@@ -259,3 +259,27 @@ func TestC0121VoiceXAICostoCalcolato(t *testing.T) {
 		t.Errorf("campi esistenti cambiati: %v", m)
 	}
 }
+
+// stato con confronto incoerente (ratio diverso da matched/words) = stato rifiutato.
+func TestC0121StatoConfrontoIncoerenteRifiutato(t *testing.T) {
+	e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+	if _, se, code := e.story(t, "run"); code != 0 {
+		t.Fatalf("run code=%d\n%s", code, se)
+	}
+	sp := filepath.Join(e.dir, "spot.stato.json")
+	var st map[string]any
+	sb, _ := os.ReadFile(sp)
+	json.Unmarshal(sb, &st)
+	vc := st["scenes"].(map[string]any)["s1"].(map[string]any)["voice_check"].(map[string]any)
+	vc["comparison"] = map[string]any{"words": 10, "matched": 0, "ratio": 1}
+	sb, _ = json.Marshal(st)
+	os.WriteFile(sp, sb, 0o600)
+	tts, stt := e.tts, e.stt
+	_, se, code := e.story(t, "run")
+	if code == 0 {
+		t.Errorf("stato incoerente accettato\n%s", se)
+	}
+	if e.tts != tts || e.stt != stt {
+		t.Errorf("richieste con stato rifiutato: tts %d->%d stt %d->%d", tts, e.tts, stt, e.stt)
+	}
+}
