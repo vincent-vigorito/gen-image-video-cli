@@ -165,12 +165,13 @@ func TestC0121StoryRunControlloVoceKeyterm(t *testing.T) {
 // controllo.json dopo story cut: la voce già controllata porta il confronto.
 func TestC0121CutControlloConfrontoVoci(t *testing.T) {
 	cutNeedFF(t)
-	e := newV7Env(t, v8VoceBoard(false, `{"voce":true}`))
+	e := newV7Env(t, v8VoceBoard(false, `{"tecnico":true,"voce":true}`))
 	e.sttMode = "altro"
 	if _, se, code := e.story(t, "run"); code != 0 {
 		t.Fatalf("run code=%d\n%s", code, se)
 	}
 	stt := e.stt
+	os.Remove(filepath.Join(e.dir, "spot.controllo.json")) // deve riscriverlo il cut
 	v8Cut(t, e)
 	if e.stt != stt || e.tts != 1 {
 		t.Errorf("il cut ha rifatto richieste: stt %d->%d tts=%d", stt, e.stt, e.tts)
@@ -218,6 +219,7 @@ func TestC0121CutControlloConfrontoVoci(t *testing.T) {
 	delete(vc, "comparison")
 	sb, _ = json.Marshal(st)
 	os.WriteFile(sp, sb, 0o600)
+	os.Remove(filepath.Join(e.dir, "spot.controllo.json"))
 	v8Cut(t, e)
 	voices, _ = read()["voices"].([]any)
 	if len(voices) != 1 {
