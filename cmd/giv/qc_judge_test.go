@@ -251,3 +251,37 @@ func TestJudgeNessunaGenerazione(t *testing.T) {
 		}
 	}
 }
+
+// --judge dato come valore o spento: codice 2, zero invii.
+func TestJudgeFlagMalformatoNonInvia(t *testing.T) {
+	for _, args := range [][]string{{"--judge=false", "--prompt", "x"}, {"--prompt", "--judge"}} {
+		e := newJudgeEnv(t, geminiText(judgeVerdict("aderente", "")))
+		_, se, code := judgeRun(t, append([]string{"--video", e.video}, args...)...)
+		if code != 2 || e.hits() != 0 {
+			t.Errorf("%v: code=%d hits=%d %s", args, code, e.hits(), se)
+		}
+	}
+}
+
+// uso dichiarato incompleto: il costo reale non scende sotto la stima.
+func TestJudgeUsoIncompletoNonAbbassaIlCosto(t *testing.T) {
+	e := newJudgeEnv(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates":    []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": judgeVerdict("aderente", "")}}}}},
+			"usageMetadata": map[string]any{"promptTokenCount": 10},
+		})
+	})
+	out, se, code := judgeRun(t, "--video", e.video, "--judge", "--prompt", "x")
+	if code != 0 {
+		t.Fatalf("code=%d %s", code, se)
+	}
+	var o struct {
+		Est   float64  `json:"cost_est_usd"`
+		Usage *float64 `json:"cost_usage_usd"`
+	}
+	json.Unmarshal([]byte(out), &o)
+	if o.Usage != nil && *o.Usage < o.Est*0.999 {
+		t.Errorf("costo reale %v sotto la stima %v con uso incompleto", *o.Usage, o.Est)
+	}
+}
