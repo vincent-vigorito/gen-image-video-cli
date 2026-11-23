@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -40,6 +41,12 @@ type parEnv struct {
 	onPost       func(n int32) // dopo aver letto il POST numero n
 	gate         chan struct{} // se != nil, il POST attende la chiusura del canale
 	srv          *httptest.Server
+
+	cost     float64 // usage.cost a fine job (0 = 0.5)
+	mp4      []byte  // contenuto del video scaricato (nil = MP4DATA)
+	images   int32   // POST /images
+	judges   int32   // POST generateContent (giudizio di aderenza)
+	judgeTxt string  // testo della risposta del giudice ("" = aderente)
 }
 
 func newParEnv(t *testing.T, boardJSON string, noPrice bool) *parEnv {
@@ -96,10 +103,36 @@ func newParEnv(t *testing.T, boardJSON string, noPrice bool) *parEnv {
 			d := e.delay[strings.TrimPrefix(r.URL.Path, "/videos/")]
 			e.mu.Unlock()
 			time.Sleep(d)
-			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":0.5}}`, e.srv.URL+"/content")
+			cost := e.cost
+			if cost == 0 {
+				cost = 0.5
+			}
+			fmt.Fprintf(w, `{"status":"completed","unsigned_urls":[%q],"usage":{"cost":%v}}`, e.srv.URL+"/content", cost)
+		case r.Method == http.MethodPost && r.URL.Path == "/images":
+			io.Copy(io.Discard, r.Body)
+			atomic.AddInt32(&e.images, 1)
+			var b bytes.Buffer
+			png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 8, 8)))
+			fmt.Fprintf(w, `{"data":[{"b64_json":%q,"media_type":"image/png"}],"usage":{"cost":0.14}}`, base64.StdEncoding.EncodeToString(b.Bytes()))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, ":generateContent"):
+			io.Copy(io.Discard, r.Body)
+			atomic.AddInt32(&e.judges, 1)
+			txt := e.judgeTxt
+			if txt == "" {
+				txt = `{"verdetto":"aderente","riconoscibile":"si","azione":"rispettata","motivi":["ok"],"difetti":[],"non_valutabile":[]}`
+			}
+			rep, _ := json.Marshal(map[string]any{
+				"candidates":    []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": txt}}}, "finishReason": "STOP"}},
+				"usageMetadata": map[string]any{"promptTokenCount": 1000, "candidatesTokenCount": 100},
+			})
+			w.Write(rep)
 		case r.URL.Path == "/content":
 			if c := atomic.LoadInt32(&e.contentCode); c != 0 {
 				http.Error(w, "no", int(c))
+				return
+			}
+			if e.mp4 != nil {
+				w.Write(e.mp4)
 				return
 			}
 			w.Write([]byte("MP4DATA"))
