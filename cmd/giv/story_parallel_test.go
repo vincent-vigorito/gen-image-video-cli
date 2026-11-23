@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -191,6 +192,8 @@ func (e *parEnv) state(t *testing.T) parState {
 	}
 	return st
 }
+
+var stamp = regexp.MustCompile(`-\d{8}-\d{6}`)
 
 func (e *parEnv) bodyOrder() string {
 	var ids []string
@@ -426,7 +429,7 @@ func TestParallelUnoEquivaleAlPredefinito(t *testing.T) {
 		filepath.Walk(e.dir, func(p string, i os.FileInfo, err error) error {
 			if err == nil && !i.IsDir() {
 				rel, _ := filepath.Rel(e.dir, p)
-				files = append(files, rel)
+				files = append(files, stamp.ReplaceAllString(rel, "-T"))
 			}
 			return nil
 		})
