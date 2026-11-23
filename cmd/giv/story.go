@@ -232,6 +232,11 @@ type storyCheck struct {
 	// trascrizioni delle voci (controllo.voce), già in cost_est_usd
 	VoiceCheckCostEstUSD float64        `json:"voice_check_cost_est_usd,omitempty"`
 	Kit                  *storyKitCheck `json:"kit,omitempty"`
+	// ciò che giv story run lancerebbe adesso (le parti da_generare di
+	// run_status delle scene): stime più costi dichiarati, e parti senza stima
+	// né costo dichiarato
+	RunCostEstUSD   float64  `json:"run_cost_est_usd"`
+	RunNotEstimated []string `json:"run_not_estimated,omitempty"`
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
@@ -319,6 +324,11 @@ type sceneCheck struct {
 	CostDeclaredUSD      *float64 `json:"cost_declared_usd,omitempty"`
 	Warnings             []string `json:"warnings,omitempty"`
 
+	// giv story run adesso, senza opzioni: stato di ogni parte che la scena
+	// genera (runParts) e stima di quelle che partirebbero
+	RunStatus     map[string]string `json:"run_status,omitempty"`
+	RunCostEstUSD *float64          `json:"run_cost_est_usd,omitempty"`
+
 	length          float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
 	voiceCheckExact float64 // VoiceCheckCostEstUSD non arrotondata
 }
@@ -390,7 +400,175 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 	} else if len(out.NotEstimated) > 0 {
 		fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(out.NotEstimated, ", "))
 	}
+	runParts(s, st, out)
 	return out, nil
+}
+
+// Parti di una scena in run_status, e i loro stati oltre a quelli del file di
+// stato (fatto, partito, incerto, fallito).
+const (
+	partKeyframe   = "fotogramma"
+	partVideo      = "video"
+	partVoice      = "voce"
+	partVoiceCheck = "trascrizione"
+
+	runToMake  = "da_generare" // giv story run la lancerebbe adesso, a pagamento
+	runMissing = "mancante"    // registrata, ma il file non c'è: non si rifà da sola
+)
+
+// runPartOrder è l'ordine delle parti nel testo su stderr.
+var runPartOrder = []string{partKeyframe, partVideo, partVoice, partVoiceCheck}
+
+// runLabels sono gli stati di run_status nel testo su stderr.
+var runLabels = []struct{ status, label string }{
+	{story.Fatto, "fatto"}, {runToMake, "da generare"}, {story.Partito, "job partito da recuperare"},
+	{story.Incerto, "incerto"}, {story.Fallito, "fallito sul provider"}, {runMissing, "file mancante"},
+}
+
+// runParts dice, per scena, che cosa è già fatto nello stato e che cosa giv
+// story run lancerebbe adesso senza opzioni, con le regole di toLaunch,
+// needKeyframe, voicesToMake e voiceChecksToDo, e somma le stime di ciò che
+// partirebbe come plan somma quelle dell'intero storyboard: senza stato i due
+// costi coincidono. Lo stato si legge e basta; tetto e non stimabile restano
+// quelli dell'intero storyboard (checkStory).
+func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
+	have := func(f string) bool {
+		_, err := s.CheckFile(f)
+		return err == nil
+	}
+	var est, decl float64
+	var making int
+	var stops []string // scene per cui giv story run si ferma prima di ogni avvio
+	for i := range out.Scenes {
+		c := &out.Scenes[i]
+		scene, ss := s.Scena(c.ID), st.Scenes[c.ID]
+		parts := map[string]string{}
+		if scene.Generata() {
+			video := runToMake
+			switch {
+			case ss == nil:
+			case ss.Job != nil:
+				video = story.Partito
+			case ss.Status == story.Incerto || ss.Status == story.Fallito:
+				video = ss.Status
+			case ss.Clip != nil && have(ss.Clip.File):
+				video = story.Fatto
+			}
+			parts[partVideo] = video
+			if c.Keyframe != nil {
+				switch {
+				case ss != nil && ss.Keyframe != nil && have(ss.Keyframe.File):
+					parts[partKeyframe] = story.Fatto
+				case ss != nil && ss.Keyframe != nil:
+					parts[partKeyframe] = runMissing
+				case video == runToMake:
+					parts[partKeyframe] = runToMake
+				}
+			}
+		}
+		if needsVoice(scene) {
+			switch {
+			case c.VoiceStatus == runToMake || c.VoiceStatus == story.Incerto:
+				parts[partVoice] = c.VoiceStatus
+			case ss != nil && ss.Voice != nil && have(ss.Voice.File):
+				parts[partVoice] = story.Fatto // anche cambiata: non si rifà da sola
+			default:
+				parts[partVoice] = runMissing
+			}
+			if voiceControlOn(s) {
+				switch {
+				case parts[partVoice] == runToMake:
+					parts[partVoiceCheck] = runToMake
+				case ss != nil && ss.Voice != nil && ss.VoiceCheck != nil && ss.VoiceCheck.File == ss.Voice.File:
+					parts[partVoiceCheck] = ss.VoiceCheck.Status
+				case parts[partVoice] == story.Fatto && ss.VoiceStatus == story.Fatto:
+					parts[partVoiceCheck] = runToMake
+				}
+			}
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		// stesse somme e stesso ordine di plan
+		var usd float64
+		notEst := func(what string) { out.RunNotEstimated = append(out.RunNotEstimated, what) }
+		if parts[partVideo] == runToMake {
+			switch {
+			case c.CostEstUSD != nil:
+				est += *c.CostEstUSD
+				usd += *c.CostEstUSD
+			case c.CostDeclaredUSD != nil:
+				decl += *c.CostDeclaredUSD
+				usd += *c.CostDeclaredUSD
+			default:
+				notEst(c.ID)
+			}
+		}
+		if parts[partKeyframe] == runToMake {
+			if v := c.Keyframe.CostDeclaredUSD; v != nil {
+				decl += *v
+				usd += *v
+			} else {
+				notEst(c.ID + " (fotogramma_chiave)")
+			}
+		}
+		if parts[partVoice] == runToMake {
+			if v := c.VoiceCostEstUSD; v != nil {
+				est += *v
+				usd += *v
+			} else {
+				notEst(c.ID + " (voce)")
+			}
+		}
+		if parts[partVoiceCheck] == runToMake {
+			if v := c.VoiceCheckCostEstUSD; v != nil {
+				est += *v
+				usd += *v
+			} else {
+				notEst(c.ID + " (controllo della voce)")
+			}
+		}
+		usd = round4(usd)
+		c.RunStatus, c.RunCostEstUSD = parts, &usd
+		if parts[partVideo] == story.Incerto || parts[partVoice] == story.Incerto || parts[partVoice] == runMissing ||
+			(parts[partKeyframe] == runMissing && parts[partVideo] == runToMake) {
+			stops = append(stops, c.ID)
+		}
+		var line []string
+		n := 0 // parti da generare
+		for _, l := range runLabels {
+			var names []string
+			for _, p := range runPartOrder {
+				if parts[p] == l.status {
+					names = append(names, p)
+				}
+			}
+			if len(names) > 0 {
+				line = append(line, l.label+" "+strings.Join(names, ", "))
+			}
+			if l.status == runToMake {
+				n = len(names)
+			}
+		}
+		making += n
+		cost := ""
+		if n > 0 {
+			cost = fmt.Sprintf(" (stima %.4f $)", usd)
+		}
+		fmt.Fprintf(os.Stderr, "scena %s: %s%s\n", c.ID, strings.Join(line, "; "), cost)
+	}
+	out.RunCostEstUSD = round4(round4(est) + round4(decl))
+	if making == 0 {
+		fmt.Fprintf(os.Stderr, "giv story run adesso: niente da generare (storyboard intero %.4f $)\n", out.CostTotalUSD)
+	} else {
+		fmt.Fprintf(os.Stderr, "giv story run adesso: stima %.4f $ (storyboard intero %.4f $)\n", out.RunCostEstUSD, out.CostTotalUSD)
+	}
+	if len(out.RunNotEstimated) > 0 {
+		fmt.Fprintf(os.Stderr, "avviso: giv story run adesso: senza stima del costo (non contate): %s\n", strings.Join(out.RunNotEstimated, ", "))
+	}
+	if len(stops) > 0 {
+		fmt.Fprintf(os.Stderr, "avviso: giv story run si ferma prima di ogni avvio finché non rifai con --scene le scene incerte o con file mancanti: %s\n", strings.Join(stops, ", "))
+	}
 }
 
 // kitWarnings porta in story check il kit usato e i campi che ne vengono; con
