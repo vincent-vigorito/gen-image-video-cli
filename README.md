@@ -1004,6 +1004,21 @@ dopo l'inizio della scena; senza vale 0.
   cambiate di tipo), è a parte in `removed_scenes` (`id`, `spent_usd`) e
   `removed_spent_usd`, con un avviso su stderr: non è fra le scene, ma col tetto conta
   insieme a `cost_total_usd`.
+- **cosa è fatto e cosa partirebbe adesso** (dalla 0.12.1), dallo stato di `giv story run`:
+  per scena `run_status`, lo stato di ogni parte che la scena ha (`fotogramma` per un video
+  con `fotogramma_chiave`, `video` per video e avatar, `voce` per un testo senza file
+  `voce`, `trascrizione` con `controllo.voce` e voce dal testo): `fatto`, `da_generare`
+  (`giv story run` la lancerebbe adesso, a pagamento), `partito` (job registrato nello
+  stato: si recupera senza nuovo avvio), `incerto`, `fallito` (sul provider), `mancante`
+  (registrata ma il file non c'è: non si rifà da sola); e `run_cost_est_usd`, stime e
+  costi dichiarati delle sole parti `da_generare` (0 se non parte niente). In cima
+  `run_cost_est_usd`, ciò che `giv story run` lancerebbe adesso (senza stato è uguale a
+  `cost_total_usd`, che resta il costo dell'intero storyboard), e `run_not_estimated`, le
+  parti da generare senza stima né costo dichiarato. Su stderr una riga per scena (fatto,
+  da generare, job da recuperare, incerto, fallito, file mancante) e il riepilogo «giv
+  story run adesso: stima N $ (storyboard intero M $)», o «niente da generare»; con scene
+  incerte o file mancanti un avviso che `giv story run` si ferma prima di ogni avvio
+  finché non si rifanno con `--scene`.
 
 Il JSON su stdout ha `storyboard`, `titolo`, le `scenes` (per scena il piano come `giv
 video --dry-run`), i costi qui sopra e `cap_usd`; col kit, `kit` con `file` e `inherited`

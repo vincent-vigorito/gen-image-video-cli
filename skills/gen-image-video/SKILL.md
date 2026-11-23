@@ -426,7 +426,11 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    stima: dare un `costo_dichiarato_usd`, per esempio ai modelli a token come Seedance e
    ai fotogrammi chiave), `removed_scenes`/`removed_spent_usd` (spesa già registrata nello
    stato per scene tolte dallo storyboard: conta nel tetto) e i `warnings` di ogni scena
-   in `scenes` (controlli che il modello ignora). Nessuna generazione, nessun costo.
+   in `scenes` (controlli che il modello ignora). Con lo stato di `giv story run`,
+   `run_cost_est_usd` è ciò che `story run` lancerebbe adesso (a pagamento) e per scena
+   `run_status` dice parte per parte (`fotogramma`, `video`, `voce`, `trascrizione`)
+   `fatto`, `da_generare`, `partito` (si recupera senza pagare), `incerto`, `fallito` o
+   `mancante` (da rifare con `--scene`). Nessuna generazione, nessun costo.
 4. Il modello va scelto fra quelli del catalogo letto in quel momento: un modello sparito
    viene rifiutato (`giv models --provider openrouter --kind video --caps`).
 5. Generazione: `giv story run storyboard.json`, a pagamento, solo dopo un check con 0 e

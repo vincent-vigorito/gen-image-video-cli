@@ -11,6 +11,18 @@ versioning [SemVer](https://semver.org/lang/it/).
 > pagamento nello sviluppo e nelle prove di questa versione. I comandi, gli storyboard, i
 > kit e gli stati della 0.12.0 danno lo stesso risultato; i campi JSON nuovi si aggiungono.
 
+### Aggiunto
+
+- **`giv story check` dice cosa è fatto e cosa partirebbe adesso**, dallo stato di `giv
+  story run`: per scena `run_status`, lo stato di ogni parte (`fotogramma`, `video`,
+  `voce`, `trascrizione`, solo quelle che la scena ha) fra `fatto`, `da_generare`,
+  `partito` (job registrato, si recupera senza nuovo avvio), `incerto`, `fallito` e
+  `mancante` (registrata ma file assente: non si rifà da sola), e `run_cost_est_usd`, la
+  stima delle parti da generare; in cima `run_cost_est_usd` (ciò che `giv story run`
+  lancerebbe adesso; senza stato è uguale a `cost_total_usd`) e `run_not_estimated`. Su
+  stderr una riga per scena e il riepilogo «giv story run adesso: stima N $ (storyboard
+  intero M $)». `cost_total_usd` resta il costo dell'intero storyboard.
+
 ### Corretto
 
 - **Controllo tecnico, cartello finale**: nei montati dello storyboard (`giv qc
@@ -220,9 +232,6 @@ versioning [SemVer](https://semver.org/lang/it/).
   --new-keyframe` rifà anche la clip, e con un tetto la stima di entrambi deve starci.
 - **`giv image` senza stima né tetto**: non ha `--dry-run` né `--max-cost`; il costo si
   vede solo dopo la chiamata (`cost_usd` dove il provider lo riporta).
-- **`giv story check` e le scene già fatte**: la stima del video di una scena compare anche
-  quando la scena è già generata; il tetto di `giv story run` conta invece la spesa
-  registrata più le stime di ciò che resta da fare.
 - **Trascrizione e nomi propri**: il riconoscimento sbaglia i nomi propri; nella prova un
   nome di marca a inizio frase è stato trascritto in altro modo, due volte su due, e il
   controllo della voce ha dato un avviso. Ascoltare prima di rifare la voce; al
