@@ -92,11 +92,15 @@ var storySubHelp = map[string]string{
 
 Controlla lo storyboard senza generare niente: forma, file, riferimenti fra scene, modelli
 sul catalogo letto adesso, capacità, preset e tutela, voci dai testi. Somma stime da
-listino (voci comprese) e costi dichiarati e, con tetto_costo_usd, li confronta col tetto
-insieme alla spesa già registrata nello stato (<nome>.stato.json) per scene non più nello
-storyboard (removed_scenes). Dallo stato dice per scena cosa è già fatto e cosa partirebbe
-adesso (run_status: fatto, da_generare, partito, incerto, fallito, mancante) e la stima di
-ciò che giv story run lancerebbe adesso (run_cost_est_usd, run_not_estimated). Con
+listino (voci comprese) e costi dichiarati dell'intero storyboard. Dallo stato
+(<nome>.stato.json) dice per scena cosa è già fatto e cosa partirebbe adesso (run_status:
+fatto, da_generare, partito, incerto, fallito, mancante) e la stima di ciò che giv story run
+lancerebbe adesso (run_cost_est_usd, run_not_estimated), con controllo.aderenza compresi i
+giudizi di aderenza che partirebbero (judge_cost_est_usd). Con tetto_costo_usd il verdetto
+è quello di giv story run prima del giro: spesa già registrata nello stato (anche per scene
+non più nello storyboard: removed_scenes) più la stima di ciò che partirebbe adesso, contro
+il tetto; se il giro ci sta ma l'intero storyboard (più la spesa delle scene tolte) no, un
+avviso e storyboard_over_cap. Con
 approvazione: true dice per scena video approval (da_preparare, da_approvare, pronta,
 in_corso, fatta, motivo in approval_note), run_status da_approvare per i definitivi non
 approvati (non contati in run_cost_est_usd) e finals_cost_est_usd, i definitivi ancora da
@@ -294,8 +298,8 @@ type storyCheck struct {
 	VoiceCheckCostEstUSD float64        `json:"voice_check_cost_est_usd,omitempty"`
 	Kit                  *storyKitCheck `json:"kit,omitempty"`
 	// ciò che giv story run lancerebbe adesso (le parti da_generare di
-	// run_status delle scene): stime più costi dichiarati, e parti senza stima
-	// né costo dichiarato
+	// run_status delle scene e i giudizi di aderenza): stime più costi
+	// dichiarati, e parti senza stima né costo dichiarato
 	RunCostEstUSD   float64  `json:"run_cost_est_usd"`
 	RunNotEstimated []string `json:"run_not_estimated,omitempty"`
 	// quanto resta da spendere: bozze ancora da fare (con default.bozza) e
@@ -303,9 +307,17 @@ type storyCheck struct {
 	DraftsCostEstUSD   *float64 `json:"drafts_cost_est_usd,omitempty"`
 	DraftsNotEstimated []string `json:"drafts_not_estimated,omitempty"`
 	FinalsCostEstUSD   *float64 `json:"finals_cost_est_usd,omitempty"`
+	// controllo.aderenza: giudizi di aderenza che giv story run farebbe
+	// adesso, già in run_cost_est_usd
+	JudgeCostEstUSD float64 `json:"judge_cost_est_usd,omitempty"`
+	// con tetto_costo_usd: giv story run adesso ci sta, l'intero storyboard
+	// (cost_total_usd più removed_spent_usd) no
+	StoryboardOverCap bool `json:"storyboard_over_cap,omitempty"`
 
-	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
-	removedExact float64 // RemovedSpentUSD non arrotondata
+	exactUSD     float64  // totale con le stime non arrotondate
+	removedExact float64  // RemovedSpentUSD non arrotondata
+	runExact     float64  // run_cost_est_usd non arrotondata: col già speso, è quella che conta per il tetto
+	judgeMissing []string // giudizi che partirebbero senza stima, col motivo
 }
 
 // storyKitCheck è il kit usato dallo storyboard e i valori che ne vengono.
@@ -394,6 +406,9 @@ type sceneCheck struct {
 	// genera (runParts) e stima di quelle che partirebbero
 	RunStatus     map[string]string `json:"run_status,omitempty"`
 	RunCostEstUSD *float64          `json:"run_cost_est_usd,omitempty"`
+	// controllo.aderenza: stima del giudizio che giv story run farebbe
+	// adesso, già in run_cost_est_usd
+	JudgeCostEstUSD *float64 `json:"judge_cost_est_usd,omitempty"`
 
 	// approvazione nello storyboard (scene video): da_preparare, da_approvare,
 	// pronta, in_corso, fatta, e il motivo
@@ -459,28 +474,63 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 	if len(out.RemovedScenes) > 0 {
 		fmt.Fprintf(os.Stderr, "spesa già registrata nello stato: %s; conta nel tetto\n", removedText(out.RemovedScenes, out.removedExact))
 	}
-	if cap := s.TettoCostoUSD; cap != nil {
-		if len(out.NotEstimated) > 0 {
-			return nil, usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
-				path, strings.Join(out.NotEstimated, ", "))
-		}
-		if out.exactUSD+out.removedExact > *cap {
-			if len(out.RemovedScenes) > 0 {
-				return nil, usageError("%s: costo previsto %.4f $ più spesa già registrata di %s oltre tetto_costo_usd %.4f $",
-					path, out.CostTotalUSD, removedText(out.RemovedScenes, out.removedExact), *cap)
-			}
-			return nil, usageError("%s: costo previsto %.4f $ oltre tetto_costo_usd %.4f $", path, out.CostTotalUSD, *cap)
-		}
-	} else if len(out.NotEstimated) > 0 {
+	cap := s.TettoCostoUSD
+	if cap != nil && len(out.NotEstimated) > 0 {
+		return nil, usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
+			path, strings.Join(out.NotEstimated, ", "))
+	}
+	if cap == nil && len(out.NotEstimated) > 0 {
 		fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(out.NotEstimated, ", "))
 	}
-	runParts(s, st, out)
+	runParts(chk, st, out)
+	if cap != nil {
+		if err := checkCapNow(st, path, out, *cap); err != nil {
+			return nil, err
+		}
+	}
 	if s.Default.Bozza != nil {
 		if err := chk.drafts(st, out); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+// checkCapNow è il verdetto del tetto di giv story check, lo stesso di giv
+// story run prima del giro (checkCap): spesa registrata nello stato
+// (addebiti e riserve, anche di scene non più nello storyboard) più la stima
+// non arrotondata di ciò che partirebbe adesso (runParts, giudizi compresi),
+// contro il tetto: oltre, codice 2; un giudizio che partirebbe senza stima,
+// codice 2 come in giv story run. Se il giro ci sta ma l'intero storyboard
+// (costo previsto più spesa delle scene tolte: il confronto di prima) no, un
+// avviso e storyboard_over_cap. Senza stato il giro è l'intero storyboard.
+func checkCapNow(st *story.State, path string, out *storyCheck, cap float64) error {
+	if len(out.judgeMissing) > 0 {
+		return usageError("%s: con tetto_costo_usd ogni giudizio di aderenza vuole una stima; non stimabile: %s (togli il tetto o controllo.aderenza)",
+			path, strings.Join(out.judgeMissing, "; "))
+	}
+	spent := st.Spent()
+	if spent+out.runExact > cap {
+		if spent == 0 {
+			return usageError("%s: costo previsto %.4f $ oltre tetto_costo_usd %.4f $", path, round4(out.runExact), cap)
+		}
+		removed := ""
+		if len(out.RemovedScenes) > 0 {
+			removed = " (di cui " + removedText(out.RemovedScenes, out.removedExact) + ")"
+		}
+		return usageError("%s: spesa già registrata nello stato %.4f $%s più stima di giv story run adesso %.4f $ oltre tetto_costo_usd %.4f $",
+			path, round4(spent), removed, round4(out.runExact), cap)
+	}
+	if out.exactUSD+out.removedExact > cap {
+		out.StoryboardOverCap = true
+		removed := ""
+		if len(out.RemovedScenes) > 0 {
+			removed = " più spesa già registrata di " + removedText(out.RemovedScenes, out.removedExact)
+		}
+		fmt.Fprintf(os.Stderr, "avviso: tetto_costo_usd %.4f $: giv story run adesso ci sta (spesa già registrata %.4f $ più stima %.4f $), l'intero storyboard no (costo previsto %.4f $%s): alza il tetto prima di generare il resto\n",
+			cap, round4(spent), round4(out.runExact), out.CostTotalUSD, removed)
+	}
+	return nil
 }
 
 // Parti di una scena in run_status, e i loro stati oltre a quelli del file di
@@ -509,14 +559,16 @@ var runLabels = []struct{ status, label string }{
 // story run lancerebbe adesso senza opzioni, con le regole di toLaunch,
 // needKeyframe, voicesToMake e voiceChecksToDo, e somma le stime di ciò che
 // partirebbe come plan somma quelle dell'intero storyboard: senza stato i due
-// costi coincidono. Lo stato si legge e basta; tetto e non stimabile restano
-// quelli dell'intero storyboard (checkStory).
-func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
+// costi coincidono. Con controllo.aderenza ci aggiunge i giudizi che giv story
+// run farebbe (judgePlan). La somma non arrotondata, col già speso, è quella
+// del tetto (checkCapNow). Lo stato si legge e basta.
+func runParts(chk *storyChecker, st *story.State, out *storyCheck) {
+	s := chk.s
 	have := func(f string) bool {
 		_, err := s.CheckFile(f)
 		return err == nil
 	}
-	var est, decl, finals float64
+	var est, decl, finals, judges float64
 	var making int
 	var stops []string // scene per cui giv story run si ferma prima di ogni avvio
 	for i := range out.Scenes {
@@ -584,9 +636,11 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 			case c.CostEstUSD != nil:
 				est += *c.CostEstUSD
 				usd += *c.CostEstUSD
+				out.runExact += chk.exactEstimate(*c)
 			case c.CostDeclaredUSD != nil:
 				decl += *c.CostDeclaredUSD
 				usd += *c.CostDeclaredUSD
+				out.runExact += *c.CostDeclaredUSD
 			default:
 				notEst(c.ID)
 			}
@@ -595,6 +649,7 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 			if v := c.Keyframe.CostDeclaredUSD; v != nil {
 				decl += *v
 				usd += *v
+				out.runExact += *v
 			} else {
 				notEst(c.ID + " (fotogramma_chiave)")
 			}
@@ -603,6 +658,11 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 			if v := c.VoiceCostEstUSD; v != nil {
 				est += *v
 				usd += *v
+				x := *v
+				if sv := chk.voices[c.ID]; sv != nil && sv.est != nil {
+					x = sv.est.Exact
+				}
+				out.runExact += x
 			} else {
 				notEst(c.ID + " (voce)")
 			}
@@ -611,8 +671,39 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 			if v := c.VoiceCheckCostEstUSD; v != nil {
 				est += *v
 				usd += *v
+				out.runExact += c.voiceCheckExact
 			} else {
 				notEst(c.ID + " (controllo della voce)")
+			}
+		}
+		// controllo.aderenza: il giudizio che giv story run farebbe a fine giro
+		// (judgePlan): definitivo da generare o da recuperare, o ripresa ancora
+		// da giudicare; mai per un definitivo che aspetta l'approvazione
+		judging := false
+		if judgeControlOn(s) && storyJudged(scene) {
+			switch parts[partVideo] {
+			case runToMake, story.Partito:
+				judging = true
+			case apprPending:
+			default:
+				due, _, err := storyJudgeDue(s, st, c.ID, story.TakeFinal)
+				judging = err == nil && due
+			}
+		}
+		if judging {
+			switch j, ok, why := storyJudgePlanUSD(s, st, scene); {
+			case !ok:
+				notEst(c.ID + " (giudizio di aderenza)")
+				out.judgeMissing = append(out.judgeMissing, "scena "+c.ID+": "+why)
+			case why != "":
+				judging = false // non giudicabile: nessun invio
+			default:
+				v := math.Round(j*1e6) / 1e6
+				c.JudgeCostEstUSD = &v
+				est += j
+				usd += j
+				judges += j
+				out.runExact += j
 			}
 		}
 		if parts[partVideo] == runToMake || parts[partVideo] == apprPending {
@@ -651,6 +742,10 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 				n = len(names)
 			}
 		}
+		if judging {
+			line = append(line, "giudizio di aderenza da fare")
+			n++
+		}
 		making += n
 		cost := ""
 		if n > 0 {
@@ -659,6 +754,10 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 		fmt.Fprintf(os.Stderr, "scena %s: %s%s\n", c.ID, strings.Join(line, "; "), cost)
 	}
 	out.RunCostEstUSD = round4(round4(est) + round4(decl))
+	if judges > 0 {
+		out.JudgeCostEstUSD = math.Round(judges*1e6) / 1e6
+		fmt.Fprintf(os.Stderr, "giudizi di aderenza che partirebbero: stima %.6f $ (in giv story run adesso)\n", out.JudgeCostEstUSD)
+	}
 	if s.Approvazione {
 		v := round4(finals)
 		out.FinalsCostEstUSD = &v
