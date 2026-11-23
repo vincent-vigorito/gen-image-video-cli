@@ -18,33 +18,45 @@ type Price struct {
 	Source              string
 }
 
-// Prices è il listino del giudizio. gemini-2.5-flash-lite: 0,10 $ per milione
-// di token in ingresso (testo, immagini, video) e 0,40 $ in uscita (pagina
-// prezzi di Gemini, verifiche di giv 0.11.0); da riverificare prima di ogni
-// prova a pagamento. Un modello senza tariffa con un tetto di spesa non parte.
+// priceSource è la fonte del listino del giudizio: va aggiornata a mano a
+// ogni release.
+const priceSource = "tabella giv 23/11/2026: aistudio.google.com/docs/pricing.md"
+
+// Prices è il listino del giudizio (piano a pagamento, Standard).
+// gemini-3.5-flash-lite: 0,30 $ per milione di token in ingresso (testo,
+// immagini, video, audio) e 2,50 $ in uscita, ragionamento compreso (pagina
+// prezzi della Gemini API letta il 23/11/2026; gemini-2.5-flash-lite non è più
+// disponibile ai nuovi utenti e la pagina non riporta gemini-3.5-flash); da
+// riverificare prima di ogni prova a pagamento. Un modello senza tariffa con
+// un tetto di spesa non parte.
 var Prices = []Price{
-	{Model: DefaultModel, USDPerMInputTokens: 0.10, USDPerMOutputTokens: 0.40, Source: "pagina prezzi della Gemini API, verifiche di giv 0.11.0"},
+	{Model: DefaultModel, USDPerMInputTokens: 0.30, USDPerMOutputTokens: 2.50, Source: priceSource},
 }
 
 // Token per riquadro d'immagine (Gemini: 258 per un'immagine entro 384×384,
-// oltre a riquadri da 258 ciascuno).
+// oltre a riquadri da 258 ciascuno). minImageTokens è il massimo di
+// un'immagine dei modelli Gemini 3 e 4 alla risoluzione predefinita (1120,
+// aistudio.google.com/docs/media-resolution.md letta il 23/11/2026): la stima
+// non scende sotto.
 const (
-	tokensPerTile = 258
-	smallSide     = 384
+	tokensPerTile  = 258
+	minImageTokens = 1120
+	smallSide      = 384
 	// promptMargin sono i token di contorno della richiesta oltre al testo.
 	promptMargin = 256
 )
 
 // ImageTokens è il massimo dei token di un'immagine w×h, per eccesso:
 // 258 entro 384×384, altrimenti 258 per riquadro, coi riquadri larghi due
-// terzi del lato corto (il taglio usato da Gemini per le immagini grandi).
+// terzi del lato corto (il taglio usato da Gemini per le immagini grandi), e
+// mai meno di minImageTokens.
 func ImageTokens(w, h int) int64 {
 	if w <= smallSide && h <= smallSide {
-		return tokensPerTile
+		return minImageTokens
 	}
 	unit := max(min(w, h)*2/3, 1)
 	tiles := int64((w+unit-1)/unit) * int64((h+unit-1)/unit)
-	return tokensPerTile * tiles
+	return max(tokensPerTile*tiles, minImageTokens)
 }
 
 // Estimate è la stima di un giudizio: per eccesso, sul massimo dei token in
