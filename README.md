@@ -1352,7 +1352,8 @@ starci; poi, prima di ogni richiesta a pagamento, riserve e addebiti di questo g
 stime ancora da fare. Oltre il tetto codice 2 senza nuovi avvii; con
 `--max-cost` una richiesta senza stima né costo dichiarato è codice 2 prima di ogni avvio,
 come con `tetto_costo_usd`. Un valore non valido (non numerico, zero o negativo, non
-finito) è codice 2 prima di tutto. Il tetto del giro non si scrive né nello storyboard né
+finito) è codice 2 prima di tutto. Vale per il definitivo, per `--bozza` e per
+`--keyframes`, anche con `--parallel`. Il tetto del giro non si scrive né nello storyboard né
 nello stato: al giro dopo vale solo se lo si indica di nuovo. Nel JSON `run_cap_usd` (solo
 con `--max-cost`) e `run_spent_usd`, la spesa contata del giro (con `--max-cost` presente
 anche a 0).

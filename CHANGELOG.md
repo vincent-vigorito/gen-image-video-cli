@@ -24,7 +24,8 @@ versioning [SemVer](https://semver.org/lang/it/).
   trascrizioni e giudizi; prima del primo avvio la stima del giro deve starci, poi prima di
   ogni richiesta a pagamento riserve e addebiti del giro più le stime ancora da fare. Oltre il tetto, o con una
   richiesta senza stima né costo dichiarato, codice 2 senza nuovi avvii; un valore non
-  valido (non numerico, zero o negativo, non finito) è codice 2 prima di tutto. Non si
+  valido (non numerico, zero o negativo, non finito) è codice 2 prima di tutto. Vale per
+  il definitivo, `--bozza` e `--keyframes`, anche con `--parallel`. Non si
   scrive né nello storyboard né nello stato: vale solo per il giro in cui lo si indica.
   Nel JSON `run_cap_usd` (il tetto del giro, solo con `--max-cost`) e `run_spent_usd`
   (con `--max-cost` presente anche a 0).
@@ -44,8 +45,8 @@ versioning [SemVer](https://semver.org/lang/it/).
   Il campo assente resta valido e vale 1.
 - **Addebito del giudizio di aderenza**: nello stato l'addebito di tipo `giudizio` ha
   `cost_from_usage: true` quando `cost_est_usd` è il costo dai consumi riportati da Gemini;
-  assente, è la stima (o un addebito scritto dalla 0.13.0). Totali, spesa e tetto non
-  cambiano.
+  assente, è la stima (o un addebito scritto dalla 0.13.0); un valore che non sia `true` o
+  `false` rende lo stato non valido. Totali, spesa e tetto non cambiano.
 
 ### Compatibilità
 
