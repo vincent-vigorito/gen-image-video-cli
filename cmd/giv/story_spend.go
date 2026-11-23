@@ -11,12 +11,13 @@ import (
 
 // La cassa di giv story run: un solo punto per ogni richiesta a pagamento
 // (fotogrammi chiave, clip, voci, trascrizioni). Il conto sta nello stato:
-// addebiti registrati e riserve aperte (richieste inviate senza addebito
-// noto) sono le Charge di ogni scena, anche delle scene tolte
-// (State.Spent); la cassa ci somma le stime di ciò che resta da chiedere in
-// questa esecuzione, nuova richiesta compresa, e confronta col tetto sui
-// valori non arrotondati. La usa solo il coordinatore, unico scrittore dello
-// stato: i lavoratori non toccano né lo stato né il conto.
+// addebiti registrati, riserve aperte (scritte prima dell'invio) e incerte
+// (invio senza esito) sono le Charge di ogni scena, anche delle scene tolte
+// (State.Spent, una voce per richiesta); la cassa ci somma le stime di ciò
+// che resta da chiedere in questa esecuzione, nuova richiesta compresa, e
+// confronta col tetto sui valori non arrotondati. La usa solo il
+// coordinatore, unico scrittore dello stato: i lavoratori non toccano né lo
+// stato né il conto.
 
 // capOver: spesa registrata (addebiti e riserve aperte) e stima non
 // arrotondata delle richieste ancora da fare (capNext); over se insieme
@@ -64,11 +65,11 @@ func (r *storyRunner) capNext() float64 {
 
 // reserveCharge è la riserva di una richiesta a pagamento, prima del suo
 // unico POST: tetto ricontrollato (checkCap), poi ch fra le generazioni della
-// scena e apply (lo stato della richiesta: incerta), in una sola scrittura
-// atomica dello stato. Se lo stato non si salva, o non si è salvato una
-// volta in questa esecuzione, niente cambia (apply restituisce come
-// annullarsi) e la richiesta non parte. Restituisce l'indice della riserva in
-// ss.Charges, per settleCharge e releaseCharge.
+// scena come riserva aperta e apply (lo stato della richiesta: incerta), in
+// una sola scrittura atomica dello stato. Se lo stato non si salva, o non si
+// è salvato una volta in questa esecuzione, niente cambia (apply restituisce
+// come annullarsi) e la richiesta non parte. Restituisce l'indice della
+// riserva in ss.Charges, per settle, releaseCharge e MarkUncertain.
 func (r *storyRunner) reserveCharge(ss *story.SceneState, ch story.Charge, apply func() (undo func())) (int, error) {
 	if err := r.checkCap(); err != nil {
 		return 0, err
@@ -78,41 +79,42 @@ func (r *storyRunner) reserveCharge(ss *story.SceneState, ch story.Charge, apply
 	}
 	undo := apply()
 	ch.At = time.Now()
-	ss.Charges = append(ss.Charges, ch)
+	k := ss.Reserve(ch)
 	if err := r.st.Save(); err != nil {
-		ss.Charges = ss.Charges[:len(ss.Charges)-1]
+		ss.Release(k)
 		undo()
 		r.saveErr = err
 		return 0, fmt.Errorf("stato non salvato, nessuna richiesta inviata: %w", err)
 	}
-	return len(ss.Charges) - 1, nil
+	return k, nil
 }
 
 // releaseCharge toglie la riserva k: richiesta rifiutata (4xx), mai partita o
 // caricamento non riuscito prima del job, quindi nessun addebito.
 func releaseCharge(ss *story.SceneState, k int) {
-	ss.Charges = slices.Delete(ss.Charges, k, k+1)
+	ss.Release(k)
 }
 
-// settleCharge porta nella riserva c l'addebito appena noto: il costo
-// riportato dal provider prende il posto della stima; senza, la stima dai
-// consumi riportati (usageUSD) la sostituisce solo se non è più bassa, a
-// piena precisione. Una clip senza stima resta al costo dichiarato.
-func settleCharge(c *story.Charge, costUSD, usageUSD float64) {
-	if costUSD > 0 {
-		c.CostUSD = costUSD
-		return
-	}
-	if usageUSD <= 0 {
-		return
-	}
-	if c.CostEstUSD == nil && c.Kind == story.ChargeClip {
+// settle registra la generazione k con l'addebito appena noto, al posto della
+// riserva: il costo riportato dal provider prende il posto della stima;
+// senza, la stima dai consumi riportati (usageUSD) la sostituisce solo se non
+// è più bassa, a piena precisione; una clip senza stima resta al costo
+// dichiarato. Con costo e consumi a zero la generazione resta alla sua stima.
+func settle(ss *story.SceneState, k int, costUSD, usageUSD float64) {
+	ss.Settle(k, costUSD)
+	c := &ss.Charges[k]
+	if costUSD > 0 || usageUSD <= 0 || (c.CostEstUSD == nil && c.Kind == story.ChargeClip) {
 		return
 	}
 	if c.CostEstUSD == nil || usageUSD > *c.CostEstUSD {
 		u := usageUSD
 		c.CostEstUSD = &u
 	}
+}
+
+// jobCharge è l'indice della generazione della clip del job id, -1 se non c'è.
+func jobCharge(ss *story.SceneState, id string) int {
+	return slices.IndexFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == story.ChargeClip && ch.JobID != "" && ch.JobID == id })
 }
 
 // saveState scrive lo stato; dopo un errore nessuna nuova richiesta parte in

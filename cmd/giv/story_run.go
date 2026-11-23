@@ -461,9 +461,11 @@ func (r *storyRunner) abandonJob(id string) error {
 		return usageError("--new-job: la scena %s non ha un job partito nello stato %s", id, r.st.Path())
 	}
 	j := ss.Job
-	if !slices.ContainsFunc(ss.Charges, func(ch story.Charge) bool { return ch.Kind == story.ChargeClip && ch.JobID == j.ID }) {
+	if k := jobCharge(ss, j.ID); k < 0 {
 		// come in recover: ogni job partito conta nella spesa
 		ss.Charges = append(ss.Charges, story.Charge{Kind: story.ChargeClip, JobID: j.ID, CostDeclaredUSD: r.s.Scena(id).CostoDichiaratoUSD, At: time.Now()})
+	} else if ss.Charges[k].Status != "" {
+		settle(ss, k, 0, 0) // la riserva del job lasciato resta contata alla stima
 	}
 	r.abandon = id
 	fmt.Fprintf(os.Stderr, "scena %s: --new-job: il job %s (%s) non si recupera e resta contato nella spesa; nuova richiesta\n", id, j.ID, j.Provider)
@@ -835,14 +837,16 @@ func (r *storyRunner) keyframe(ctx context.Context, scene *story.Scene, ss *stor
 	img.req.Inputs = inputs
 	img.save = func(slug string, res *provider.Result) ([]output.FileInfo, error) {
 		received = true
-		settleCharge(&ss.Charges[k], res.CostUSD, 0) // l'addebito al posto della riserva, prima del video
+		settle(ss, k, res.CostUSD, 0) // l'addebito al posto della riserva, prima del video
 		return r.saveFiles(slug, res.Media)
 	}
 	man, err := img.run(httpx.WithoutRetry(ctx))
 	if err != nil {
 		switch {
-		case received, uncertainStart(err):
-			// arrivata e addebitata senza file salvato, o senza esito: resta incerta
+		case received:
+			// arrivata e addebitata senza file salvato: resta incerta
+		case uncertainStart(err):
+			ss.MarkUncertain(k) // senza esito: forse addebitata, resta riservata
 		default:
 			// rifiutata (4xx) o mai partita: niente addebito, la scena resta da fare
 			releaseCharge(ss, k)
@@ -1071,6 +1075,7 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	if file == "" {
 		ss.Error = "nessun video nella risposta"
 		ss.Status, ss.Job = story.Fallito, nil // job finito, forse addebitato: si rifà solo con --scene
+		r.settleJob(ss, man, false)
 		r.save()
 		return errors.New(ss.Error)
 	}
@@ -1083,15 +1088,25 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	}
 	ss.Clip = &story.Take{File: rel, JobID: man.JobID, Done: time.Now()}
 	ss.Status, ss.Job, ss.Error = story.Fatto, nil, ""
-	for i := range ss.Charges {
-		if c := &ss.Charges[i]; c.Kind == story.ChargeClip && c.JobID != "" && c.JobID == man.JobID {
-			// addebito del job al posto della riserva; senza, la stima dai
-			// consumi riportati (gemini, contatori validati) se non è più bassa
-			settleCharge(c, man.CostUSD, man.usageEstUSD)
-		}
-	}
+	r.settleJob(ss, man, true)
 	r.save()
 	return nil
+}
+
+// settleJob registra la generazione del job finito di man al posto della sua
+// riserva: con video, l'addebito riportato o, senza, la stima dai consumi
+// (gemini, contatori validati) se non è più bassa; senza video resta alla
+// stima (forse addebitato).
+func (r *storyRunner) settleJob(ss *story.SceneState, man manifest, video bool) {
+	for i := range ss.Charges {
+		if c := ss.Charges[i]; c.Kind == story.ChargeClip && c.JobID != "" && c.JobID == man.JobID {
+			if video {
+				settle(ss, i, man.CostUSD, man.usageEstUSD)
+			} else {
+				settle(ss, i, 0, 0)
+			}
+		}
+	}
 }
 
 // summary compila il manifest finale dallo stato: per scena stima e addebito.

@@ -313,6 +313,7 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 		var se *httpx.StartError
 		if errors.As(err, &se) {
 			ss.VoiceError = err.Error() // resta incerta e contata
+			ss.MarkUncertain(k)
 			r.save()
 			failed := man
 			failed.Status, failed.Files = "failed", []output.FileInfo{}
@@ -333,7 +334,7 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 	r.man.Voices++
 	// addebito al posto della riserva; senza, la stima dai consumi riportati
 	// (gemini) se non è più bassa
-	settleCharge(&ss.Charges[k], res.CostUSD, res.UsageUSD)
+	settle(ss, k, res.CostUSD, res.UsageUSD)
 	if res.UsageUSD > 0 {
 		man.CostUsageUSD, man.CostUsageSource = math.Round(res.UsageUSD*1e6)/1e6, res.UsageSource
 	}

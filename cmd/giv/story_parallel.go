@@ -24,7 +24,7 @@ import (
 // e ripresa (job avviato, lavoro finito) che il coordinatore registra.
 
 // maxParallel è il massimo di --parallel e default.parallelo.
-const maxParallel = 4
+const maxParallel = story.MaxParallelo
 
 // sceneWork è il lavoro aperto di una scena: un job da avviare (avvio) o già
 // partito (recupero), atteso e scaricato da un lavoratore. Lo legge e scrive
@@ -68,15 +68,11 @@ func parallelism(flag int, s *story.Storyboard) int {
 	switch {
 	case flag > 0:
 		return flag
-	case storyParallel(s) > 0:
-		return storyParallel(s)
+	case s.Parallelo() > 0:
+		return s.Parallelo() // da 1 a 4: controllato con lo storyboard
 	}
 	return 1
 }
-
-// storyParallel è default.parallelo dello storyboard, 0 se non c'è.
-// TODO(CLI-1007): dal campo della base di B quando arriva.
-func storyParallel(s *story.Storyboard) int { return 0 }
 
 // openWork apre il lavoro w della scena e lo affida a un lavoratore.
 func (r *storyRunner) openWork(ctx context.Context, w *sceneWork) {
@@ -163,10 +159,12 @@ func (r *storyRunner) clipDone(w *sceneWork, man manifest, err error) error {
 		switch {
 		case w.started && errors.Is(err, provider.ErrJobFailed):
 			ss.Status, ss.Job = story.Fallito, nil // la spesa resta contata, si rifà solo con --scene
+			settle(ss, w.k, 0, 0)
 		case w.started:
 			ss.Status = story.Partito // il job resta: la prossima esecuzione lo recupera, non lo rilancia
 		case errors.As(err, &se):
-			// avvio senza esito: forse addebitato, si rifà solo con --scene
+			// avvio senza esito: forse addebitato, resta riservato, si rifà solo con --scene
+			ss.MarkUncertain(w.k)
 		default:
 			// avvio rifiutato (4xx) o mai partito: nessun job, niente addebito,
 			// la scena resta da fare e la prossima esecuzione la riprova
@@ -298,6 +296,9 @@ func (r *storyRunner) recovered(w *sceneWork, man manifest, err error) error {
 			return err
 		}
 		if errors.Is(err, provider.ErrJobFailed) {
+			if k := jobCharge(ss, ss.Job.ID); k >= 0 {
+				settle(ss, k, 0, 0) // la spesa resta contata alla stima
+			}
 			ss.Status, ss.Job = story.Fallito, nil
 			r.save()
 			return err

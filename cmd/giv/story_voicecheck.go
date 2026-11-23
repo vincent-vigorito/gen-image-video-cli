@@ -275,6 +275,7 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 		if (errors.As(err, &ce) && ce.code == exitAPI) || errors.As(err, &se) {
 			// forse addebitata: resta contata e incerta, non si rilancia
 			ss.VoiceCheck.Message = err.Error()
+			ss.MarkUncertain(k)
 			r.save()
 			skip("%v (contata nella spesa); %s", err, voiceCheckUncertain(ss.Voice.File))
 			return
@@ -288,7 +289,7 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 	}
 	// addebito dalla durata riportata: prende il posto della riserva solo se
 	// non è più basso, a piena precisione
-	settleCharge(&ss.Charges[k], 0, out.usageUSD)
+	settle(ss, k, 0, out.usageUSD)
 	res := &storyVoiceCheck{transcript: &out.Transcript, comparison: out.Comparison}
 	for _, c := range out.Checks {
 		if c.Name == "voice" || c.Name == "language" {
