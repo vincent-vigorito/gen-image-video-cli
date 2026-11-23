@@ -789,7 +789,7 @@ tratti fermi di un'immagine) hanno `skipped`. Sempre tutti, in quest'ordine:
 | `silence` | tratti sotto `--silence-noise` (-50 dB) lunghi almeno `--silence-min` (2 s): avviso; per metà o più: difetto |
 | `loudness` | volume integrato in LUFS; scarto oltre 1 LU da `--expect-loudness`: avviso; audio muto: avviso |
 | `peak` | picco vero sopra -1 dBTP: avviso; sopra 0: difetto |
-| `streams` | tracce in più (seconda traccia video o audio, sottotitoli, dati, copertina): avviso |
+| `streams` | tracce in più (seconda traccia video o audio, sottotitoli, dati): avviso; la copertina allegata (come nelle clip xAI) no |
 
 Con `--for <canali>` (come in `giv export`, es. `instagram:4:5,youtube`) il file si
 confronta col profilo di ogni canale, in `channels[]` con `channel`, `aspect`, `result` e
@@ -809,7 +809,7 @@ Con uno storyboard: `scenes[]`, una riga per scena con `id`, `tipo`, `take` e il
 della clip in uso (`giv story run`) o del file della scena, con la `durata` e l'`audio`
 chiesti dallo storyboard (una scena `immagine` non ha tratti fermi); `outputs[]`, una riga
 per montato di `giv story cut` con `format`, misure e fps del formato (con scene
-`immagine` niente tratti fermi). `--for` vale per i montati del formato del canale. Una
+`immagine` niente tratti fermi; il cartello finale non conta fra i tratti fermi). `--for` vale per i montati del formato del canale. Una
 scena non ancora generata o un montato che manca hanno `result` `assente` (non conta per
 `--strict`); le attese `--expect-*` valgono solo per un file.
 
