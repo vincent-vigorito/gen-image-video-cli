@@ -78,7 +78,7 @@ func (r *storyRunner) launchAvatar(ctx context.Context, scene *story.Scene, ss *
 			logFailedJob(man, err, time.Since(start) >= req.Timeout)
 			return manifest{}, err
 		}
-		files, err := r.saveFiles(slug, res.Media) // solo file nuovi in clip/, nessuna scrittura dello stato
+		files, err := r.saveFiles(storyClipDir, slug, res.Media) // solo file nuovi in clip/, nessuna scrittura dello stato
 		if err != nil {
 			return manifest{}, err
 		}

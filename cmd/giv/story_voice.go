@@ -185,6 +185,9 @@ func (sc *storyChecker) checkVoice(scene *story.Scene, c *sceneCheck) error {
 // voicesToMake sono le scene di cui giv story run genera la voce, in ordine:
 // con --scene solo quella; una voce già fatta solo con --new-voice.
 func (r *storyRunner) voicesToMake() []*story.Scene {
+	if r.mode != modeFinal {
+		return nil // --keyframes e --bozza: nessuna voce
+	}
 	var out []*story.Scene
 	for i := range r.s.Scene {
 		scene := &r.s.Scene[i]
