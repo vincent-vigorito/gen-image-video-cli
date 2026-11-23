@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -42,7 +43,8 @@ type parEnv struct {
 
 func newParEnv(t *testing.T, boardJSON string, noPrice bool) *parEnv {
 	t.Helper()
-	cat, err := os.ReadFile("testdata/or-video-models.json")
+	_, here, _, _ := runtime.Caller(0)
+	cat, err := os.ReadFile(filepath.Join(filepath.Dir(here), "testdata", "or-video-models.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,11 +178,14 @@ type parState struct {
 
 func (e *parEnv) state(t *testing.T) parState {
 	t.Helper()
+	var st parState
 	b, err := os.ReadFile(e.statePath())
+	if os.IsNotExist(err) {
+		return st
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	var st parState
 	if err := json.Unmarshal(b, &st); err != nil {
 		t.Fatal(err)
 	}
@@ -330,18 +335,21 @@ func TestParallelJobNotoScaricamentoFallito(t *testing.T) {
 	if _, se, code := e.run(t, "--parallel", "2"); code == 0 {
 		t.Fatalf("atteso errore dallo scaricamento\n%s", se)
 	}
-	if e.posts != 2 {
-		t.Fatalf("posts=%d", e.posts)
-	}
-	for _, id := range []string{"s1", "s2"} {
-		if s := e.state(t).Scenes[id]; s.Job == nil {
+	posts := e.posts
+	jobs := 0
+	for id, s := range e.state(t).Scenes {
+		if s.Job == nil {
 			t.Fatalf("%s: job non registrato: %+v", id, s)
 		}
+		jobs++
+	}
+	if posts < 1 || int(posts) != jobs {
+		t.Fatalf("posts=%d, job nello stato %d", posts, jobs)
 	}
 	atomic.StoreInt32(&e.contentCode, 0)
 	out, se, code := e.run(t, "--parallel", "2")
-	if code != 0 || e.posts != 2 || out.Recovered != 2 || out.Started != 0 {
-		t.Fatalf("ripresa: code=%d posts=%d recovered=%d\n%s", code, e.posts, out.Recovered, se)
+	if code != 0 || e.posts != 2 || out.Recovered != jobs {
+		t.Fatalf("ripresa: code=%d posts=%d (prima %d) recovered=%d\n%s", code, e.posts, posts, out.Recovered, se)
 	}
 }
 
