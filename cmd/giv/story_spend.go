@@ -78,7 +78,12 @@ func (r *storyRunner) overCap() *capBreach {
 	if !r.capped() {
 		return nil
 	}
-	next := r.capNext()
+	return r.breach(r.capNext())
+}
+
+// breach è il primo dei due tetti che la spesa che conta per lui più next
+// supera (valori non arrotondati), nil se nessuno lo è o senza tetti.
+func (r *storyRunner) breach(next float64) *capBreach {
 	if cap := r.s.TettoCostoUSD; cap != nil {
 		if spent := r.st.Spent(); spent+next > *cap {
 			return &capBreach{name: "tetto_costo_usd", what: "spesa già fatta", cap: *cap, spent: spent, next: next}
@@ -95,7 +100,11 @@ func (r *storyRunner) overCap() *capBreach {
 // checkCap ferma prima di un avvio se la spesa più la stima delle richieste
 // ancora da fare supera uno dei due tetti: codice 2, nessun nuovo avvio.
 func (r *storyRunner) checkCap() error {
-	b := r.overCap()
+	return r.capError(r.overCap())
+}
+
+// capError è il rifiuto di codice 2 per il tetto superato b, nil senza b.
+func (r *storyRunner) capError(b *capBreach) error {
 	if b == nil {
 		return nil
 	}
@@ -146,6 +155,12 @@ func (r *storyRunner) reserveCharge(ss *story.SceneState, ch story.Charge, apply
 		return 0, errHalted
 	}
 	if err := r.checkCap(); err != nil {
+		return 0, err
+	}
+	// La richiesta stessa contro entrambi i tetti, anche se capNext non la
+	// conta più (una clip scelta per la rigenerazione il cui file è tornato
+	// durante la preparazione): spesa più la sua stima, mai oltre il tetto.
+	if err := r.capError(r.breach(ch.Spent())); err != nil {
 		return 0, err
 	}
 	if r.saveErr != nil {
@@ -199,7 +214,7 @@ func settleJudge(ss *story.SceneState, k int, usageUSD float64, fromUsage bool) 
 	if usageUSD > 0 {
 		u := usageUSD
 		ss.Charges[k].CostEstUSD = &u
-		ss.Charges[k].CostFromUsage = fromUsage
+		ss.Charges[k].CostFromUsage = story.FromUsage(fromUsage)
 	}
 }
 
