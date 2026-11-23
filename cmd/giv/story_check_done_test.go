@@ -11,10 +11,10 @@ import (
 // CLI-996 (giv 0.12.1, filone B): story check con scene già fatte. Server finto
 // (capsServer): solo il catalogo, ogni altra richiesta è un avvio e fa fallire.
 
-// nomi dei campi nuovi di story check (da accordare col developer)
+// campi nuovi di story check (CLI-995)
 const (
-	fldSceneWillRun = "will_run"        // per scena: cosa partirebbe
-	fldTotalToRun   = "cost_to_run_usd" // totale di ciò che partirebbe
+	fldSceneWillRun = "run_status"       // per scena: cosa partirebbe
+	fldTotalToRun   = "run_cost_est_usd" // totale di ciò che partirebbe
 )
 
 const doneBoard = `{"default":{"provider":"openrouter","modello":"alibaba/wan-3.0","audio":"off","risoluzione":"720p","aspect":"16:9"},
@@ -178,5 +178,61 @@ func TestStoryCheckParzialeContaSoloCheManca(t *testing.T) {
 		if sceneOf(t, m, id)[fldSceneWillRun] == nil {
 			t.Errorf("scena %s senza %s", id, fldSceneWillRun)
 		}
+	}
+}
+
+func parts(t *testing.T, m map[string]any, id string) map[string]any {
+	t.Helper()
+	p, ok := sceneOf(t, m, id)[fldSceneWillRun].(map[string]any)
+	if !ok {
+		t.Fatalf("scena %s: %s non è un oggetto", id, fldSceneWillRun)
+	}
+	return p
+}
+
+func wantParts(t *testing.T, m map[string]any, id string, want map[string]string) {
+	t.Helper()
+	p := parts(t, m, id)
+	for k, v := range want {
+		if p[k] != v {
+			t.Errorf("scena %s: %s=%v, atteso %s", id, k, p[k], v)
+		}
+	}
+}
+
+func TestStoryCheckStatiDelleParti(t *testing.T) {
+	e := newDoneEnv(t)
+	m := e.check(t)
+	for _, id := range []string{"s1", "s2", "s3"} {
+		wantParts(t, m, id, map[string]string{"video": "da_generare"})
+	}
+	wantParts(t, m, "s1", map[string]string{"voce": "da_generare"})
+	e.fullState(t)
+	m = e.check(t)
+	for _, id := range []string{"s1", "s2", "s3"} {
+		wantParts(t, m, id, map[string]string{"video": "fatto"})
+		if c := num(sceneOf(t, m, id), "run_cost_est_usd"); c != 0 {
+			t.Errorf("%s run_cost_est_usd=%v, atteso 0", id, c)
+		}
+	}
+	wantParts(t, m, "s1", map[string]string{"voce": "fatto"})
+	wantParts(t, m, "s3", map[string]string{"voce": "fatto"})
+}
+
+func TestStoryCheckParzialeStatiPerScena(t *testing.T) {
+	e := newDoneEnv(t)
+	e.file(t, "clip/s1.mp4")
+	e.file(t, "voce/s1.wav")
+	e.writeState(t, `"s1":{"status":"fatto","clip":{"file":"clip/s1.mp4","job_id":"j","done":"2026-01-01T00:00:00Z"},`+
+		`"voice":{"file":"voce/s1.wav","done":"2026-01-01T00:00:00Z"},"voice_status":"fatto"}`)
+	m := e.check(t)
+	wantParts(t, m, "s1", map[string]string{"video": "fatto", "voce": "fatto"})
+	wantParts(t, m, "s2", map[string]string{"video": "da_generare"})
+	wantParts(t, m, "s3", map[string]string{"video": "da_generare", "voce": "da_generare"})
+	if c := num(sceneOf(t, m, "s1"), "run_cost_est_usd"); c != 0 {
+		t.Errorf("s1 run_cost_est_usd=%v, atteso 0", c)
+	}
+	if c := num(sceneOf(t, m, "s2"), "run_cost_est_usd"); c <= 0 {
+		t.Errorf("s2 run_cost_est_usd=%v, atteso > 0", c)
 	}
 }
