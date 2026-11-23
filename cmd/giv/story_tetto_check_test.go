@@ -35,17 +35,6 @@ func (e *parEnv) setBoard(t *testing.T, b string) {
 	}
 }
 
-func checkTotal(t *testing.T, stdout string) float64 {
-	t.Helper()
-	var r struct {
-		Total float64 `json:"cost_total_usd"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &r); err != nil {
-		t.Fatalf("uscita di check non JSON: %v\n%s", err, stdout)
-	}
-	return r.Total
-}
-
 // stato con 1,5 $ registrati, una scena approvata (1,6 $) e due no.
 func approvedScenario(t *testing.T, cap string) *parEnv {
 	t.Helper()
@@ -89,7 +78,12 @@ func TestTettoCheckGiroEntroIlTettoStoryboardOltre(t *testing.T) {
 	if !strings.Contains(se, "intero storyboard") {
 		t.Errorf("manca l'avviso sull'intero storyboard: %s", se)
 	}
-	t.Logf("JSON:\n%s", so)
+	var r struct {
+		Over bool `json:"storyboard_over_cap"`
+	}
+	if err := json.Unmarshal([]byte(so), &r); err != nil || !r.Over {
+		t.Errorf("storyboard_over_cap non è true nel JSON (%v): %.200s", err, so)
+	}
 }
 
 // stesso scenario con tetto 3,0 $: il giro di adesso non ci sta, codice 2.
@@ -127,8 +121,30 @@ func TestTettoCheckStimaDeiGiudizi(t *testing.T) {
 	if !strings.Contains(strings.ToLower(so1), "giudiz") && !strings.Contains(strings.ToLower(so1), "judg") {
 		t.Errorf("la stima dei giudizi non compare in check: %s", so1)
 	}
-	if t0, t1 := checkTotal(t, so0), checkTotal(t, so1); t1 <= t0 {
-		t.Errorf("stima del giro con aderenza %v non supera quella senza %v", t1, t0)
+	var r struct {
+		Judge float64 `json:"judge_cost_est_usd"`
+		Run   float64 `json:"run_cost_est_usd"`
+		Scene []struct {
+			Judge float64 `json:"judge_cost_est_usd"`
+		} `json:"scenes"`
+	}
+	if err := json.Unmarshal([]byte(so1), &r); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Scene) != 2 || r.Scene[0].Judge <= 0 || r.Scene[1].Judge <= 0 {
+		t.Errorf("judge_cost_est_usd per scena mancante: %+v", r.Scene)
+	}
+	if r.Run < 3.2+r.Scene[0].Judge+r.Scene[1].Judge-1e-9 {
+		t.Errorf("run_cost_est_usd %v non comprende i giudizi", r.Run)
+	}
+	var r0 struct {
+		Run float64 `json:"run_cost_est_usd"`
+	}
+	if err := json.Unmarshal([]byte(so0), &r0); err != nil {
+		t.Fatal(err)
+	}
+	if r.Run <= r0.Run {
+		t.Errorf("stima del giro con aderenza %v non supera quella senza %v", r.Run, r0.Run)
 	}
 }
 
