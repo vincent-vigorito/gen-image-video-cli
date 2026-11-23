@@ -429,6 +429,7 @@ func (r *storyRunner) preflight() error {
 		return err
 	}
 	var launch []*story.Scene
+	rejects = append(rejects, r.otherJobs()...) // bozze e definitivi: tutti validi prima di ogni avvio
 	for _, scene := range r.pending() {
 		if err := r.checkJob(r.jobOf(scene.ID)); err != nil {
 			rejects = append(rejects, fmt.Errorf("scena %s: %w", scene.ID, err))
@@ -545,6 +546,12 @@ func (r *storyRunner) abandonJob(id string) error {
 // job video e indirizzo di attesa sull'host del provider (con --voices senza
 // chiave video: jobChecker).
 func (r *storyRunner) checkJob(j *story.Job) error {
+	return r.validJob(j, r.voicesOnly)
+}
+
+// validJob è checkJob; keyless: senza chiave (jobChecker), per i job che
+// l'esecuzione non recupera.
+func (r *storyRunner) validJob(j *story.Job, keyless bool) error {
 	if err := checkProvider(j.Provider); err != nil {
 		return err
 	}
@@ -552,7 +559,7 @@ func (r *storyRunner) checkJob(j *story.Job) error {
 		return usageError("job %s: %s non ha job video", j.ID, j.Provider)
 	}
 	var p provider.Provider
-	if r.voicesOnly {
+	if keyless {
 		var err error
 		if p, err = jobChecker(j.Provider); err != nil {
 			return usageError("job %s: %v", j.ID, err)
@@ -861,12 +868,14 @@ func (r *storyRunner) launch(ctx context.Context, scene *story.Scene) error {
 		return fail(err)
 	}
 	req.Keyframes = remote.Keyframes
+	made := false // fotogramma chiave generato adesso
 	switch {
 	case scene.FotogrammaChiave != nil:
 		if r.needKeyframe(scene) {
 			if err := r.makeKeyframe(ctx, scene, ss, work, &tmp, fail); err != nil {
 				return err
 			}
+			made = true
 		} else if scene.ID == r.forced {
 			fmt.Fprintf(os.Stderr, "scena %s: riuso il fotogramma chiave %s (per rigenerarlo: --new-keyframe)\n", scene.ID, ss.Keyframe.File)
 		}
@@ -897,6 +906,9 @@ func (r *storyRunner) launch(ctx context.Context, scene *story.Scene) error {
 	if err := checkVideoInputs(&req); err != nil {
 		return fail(err)
 	}
+	if r.lastGate(scene, made) {
+		return nil // approvazione da rifare: nessun video
+	}
 	job.req, job.inputs = req, shown
 	dir := r.clipDir(scene.ID)
 	job.save = func(slug string, res *provider.Result) ([]output.FileInfo, error) {
@@ -917,7 +929,7 @@ func (r *storyRunner) makeKeyframe(ctx context.Context, scene *story.Scene, ss *
 		return fail(fmt.Errorf("fotogramma_chiave: %w", err))
 	}
 	ch := story.Charge{Kind: story.ChargeKeyframe, CostDeclaredUSD: scene.FotogrammaChiave.CostoDichiaratoUSD}
-	after := r.afterKeyframe(ss)
+	after := r.afterKeyframe(scene, ss)
 	k, err := r.reserve(ss, ch, &ss.Track) // un fotogramma senza esito rende incerta la scena, come nella 0.12
 	if err != nil {
 		return err
