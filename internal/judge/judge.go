@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
@@ -271,13 +272,15 @@ var urlRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 // ridotti a schema e host, caratteri di controllo tolti, spazi compattati, al
 // massimo n byte senza spezzare un carattere.
 func SafeText(s string, n int) string {
-	s = urlRe.ReplaceAllStringFunc(s, func(u string) string {
-		scheme, rest, _ := strings.Cut(u, "://")
-		host, _, _ := strings.Cut(rest, "/")
-		if _, h, ok := strings.Cut(host, "@"); ok {
-			host = h
+	s = urlRe.ReplaceAllStringFunc(s, func(raw string) string {
+		scheme, _, _ := strings.Cut(raw, "://")
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			// non leggibile: niente dell'indirizzo oltre lo schema
+			return strings.ToLower(scheme) + "://…"
 		}
-		return strings.ToLower(scheme) + "://" + host + "/…"
+		// solo schema e host: niente utente, percorso, query o frammento
+		return strings.ToLower(u.Scheme) + "://" + u.Host + "/…"
 	})
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || r == utf8.RuneError || unicode.Is(unicode.Cf, r) {
