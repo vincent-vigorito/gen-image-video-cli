@@ -56,11 +56,18 @@ type workEvent struct {
 }
 
 // jobStart è il job video appena avviato, come lo passa provider.OnJobStart.
+// ack lo chiude il coordinatore a job registrato (stato salvato o tentato):
+// solo allora il lavoratore lo aspetta e lo scarica.
 type jobStart struct {
 	provider string
 	job      provider.Job
 	req      provider.VideoRequest
+	ack      chan struct{}
 }
+
+// errHalted: la riserva non si fa perché un errore di un'altra scena ha già
+// fermato i nuovi avvii (è quell'errore a fermare l'esecuzione).
+var errHalted = errors.New("nessun nuovo avvio dopo l'errore di un'altra scena")
 
 // parallelism è il numero di lavori aperti insieme: --parallel, poi
 // default.parallelo, poi 1.
@@ -85,7 +92,10 @@ func (r *storyRunner) openWork(ctx context.Context, w *sceneWork) {
 }
 
 // jobStarted è provider.OnJobStart durante le scene: il job appena avviato
-// va al coordinatore come evento del lavoro in avvio (ce n'è uno alla volta).
+// va al coordinatore come evento del lavoro in avvio (ce n'è uno alla volta)
+// e il lavoratore resta qui finché il coordinatore non l'ha registrato nello
+// stato (partito, con l'id) e in giv-jobs.jsonl: un arresto durante l'attesa
+// o lo scaricamento lascia sempre un job da recuperare.
 func (r *storyRunner) jobStarted(p string, j provider.Job, req provider.VideoRequest) {
 	w := r.starting.Load()
 	if w == nil {
@@ -95,12 +105,34 @@ func (r *storyRunner) jobStarted(p string, j provider.Job, req provider.VideoReq
 		}
 		return
 	}
-	r.events <- workEvent{id: w.scene.ID, take: w.take, start: &jobStart{provider: p, job: j, req: req}}
+	ack := make(chan struct{})
+	r.events <- workEvent{id: w.scene.ID, take: w.take, start: &jobStart{provider: p, job: j, req: req, ack: ack}}
+	<-ack
 }
 
-// next riceve e registra il prossimo evento di un lavoratore.
+// next aspetta, riceve e registra il prossimo evento di un lavoratore.
 func (r *storyRunner) next() {
-	ev := <-r.events
+	r.handle(<-r.events)
+}
+
+// poll registra gli eventi dei lavoratori già arrivati, senza aspettare:
+// addebiti ed errori entrano nel conto prima di una scelta o di una riserva.
+func (r *storyRunner) poll() {
+	for {
+		select {
+		case ev := <-r.events:
+			r.handle(ev)
+		default:
+			return
+		}
+	}
+}
+
+// handle registra l'evento ev di un lavoratore.
+func (r *storyRunner) handle(ev workEvent) {
+	if ev.start != nil {
+		defer close(ev.start.ack) // a job registrato, anche se il salvataggio non è riuscito
+	}
 	w := r.open[ev.id]
 	if w == nil || w.take != ev.take {
 		// non può succedere: ogni lavoro aperto è nella mappa fino alla fine
@@ -188,7 +220,7 @@ type sceneStop struct {
 // va nell'elenco di fine esecuzione, ogni altro errore ferma i nuovi avvii
 // (i lavori aperti si concludono) ed esce alla fine.
 func (r *storyRunner) sceneErr(id string, err error) {
-	if err == nil || r.failedNow(id) {
+	if err == nil || errors.Is(err, errHalted) || r.failedNow(id) {
 		return
 	}
 	r.halt = append(r.halt, sceneStop{id: id, err: fmt.Errorf("scena %s: %w", id, err)})
@@ -325,7 +357,7 @@ func (r *storyRunner) runScenes(ctx context.Context) error {
 	provider.OnJobStart = r.jobStarted
 	defer func() { provider.OnJobStart = r.prevJobStart }()
 	for {
-		for len(r.open) < r.parallel && !r.halted(ctx) {
+		for r.poll(); len(r.open) < r.parallel && !r.halted(ctx); r.poll() {
 			scene := r.nextScene()
 			if scene == nil {
 				break

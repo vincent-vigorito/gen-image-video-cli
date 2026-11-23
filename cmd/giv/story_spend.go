@@ -66,11 +66,17 @@ func (r *storyRunner) capNext() float64 {
 // reserveCharge è la riserva di una richiesta a pagamento, prima del suo
 // unico POST: tetto ricontrollato (checkCap), poi ch fra le generazioni della
 // scena come riserva aperta e apply (lo stato della richiesta: incerta), in
-// una sola scrittura atomica dello stato. Se lo stato non si salva, o non si
+// una sola scrittura atomica dello stato. Prima registra gli esiti già
+// arrivati dei lavori aperti (addebiti reali, errori): dopo l'errore di una
+// scena nessuna riserva (errHalted). Se lo stato non si salva, o non si
 // è salvato una volta in questa esecuzione, niente cambia (apply restituisce
 // come annullarsi) e la richiesta non parte. Restituisce l'indice della
 // riserva in ss.Charges, per settle, releaseCharge e MarkUncertain.
 func (r *storyRunner) reserveCharge(ss *story.SceneState, ch story.Charge, apply func() (undo func())) (int, error) {
+	r.poll()
+	if len(r.halt) > 0 {
+		return 0, errHalted
+	}
 	if err := r.checkCap(); err != nil {
 		return 0, err
 	}
