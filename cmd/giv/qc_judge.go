@@ -204,7 +204,7 @@ func parseQCJudgeFlags(args []string) (judgeOptions, error) {
 	var o judgeOptions
 	fl := flag.NewFlagSet("qc", flag.ExitOnError)
 	fl.Usage = func() { fmt.Fprint(fl.Output(), qcJudgeHelp) }
-	fl.Bool("judge", false, "giudizio di aderenza")
+	judgeOn := fl.Bool("judge", false, "giudizio di aderenza")
 	fl.StringVar(&o.File, "video", "", "video da giudicare")
 	fl.StringVar(&o.Prompt, "prompt", "", "richiesta della scena")
 	fl.StringVar(&o.PromptFile, "prompt-file", "", "richiesta della scena da un file")
@@ -227,6 +227,11 @@ func parseQCJudgeFlags(args []string) (judgeOptions, error) {
 		if fl.NArg() > 0 {
 			return o, usageError("giv qc --judge: un solo video (in più: %q)", fl.Arg(0))
 		}
+	}
+	// il giudizio parte solo col valore effettivo di --judge: --judge=false,
+	// o --judge preso come valore di un altro flag, non inviano niente
+	if !*judgeOn {
+		return o, usageError("giv qc: --judge non attivo (--judge=false o usato come valore di un altro flag): nessun invio; per il giudizio --judge da solo")
 	}
 	fl.Visit(func(f *flag.Flag) {
 		o.Set = append(o.Set, f.Name)

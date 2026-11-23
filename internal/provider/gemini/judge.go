@@ -129,6 +129,7 @@ func parseJudge(data []byte) *JudgeReply {
 			PromptTokenCount     *int64 `json:"promptTokenCount"`
 			CandidatesTokenCount *int64 `json:"candidatesTokenCount"`
 			ThoughtsTokenCount   *int64 `json:"thoughtsTokenCount"`
+			TotalTokenCount      *int64 `json:"totalTokenCount"`
 		} `json:"usageMetadata"`
 	}
 	if len(data) == 0 {
@@ -139,15 +140,18 @@ func parseJudge(data []byte) *JudgeReply {
 		r.Invalid = "risposta non JSON"
 		return r
 	}
-	if m := resp.UsageMetadata; m != nil && m.PromptTokenCount != nil {
-		u := &judge.Usage{Prompt: *m.PromptTokenCount}
-		if m.CandidatesTokenCount != nil {
-			u.Candidates = *m.CandidatesTokenCount
-		}
+	// consumi solo se completi: token d'ingresso e d'uscita riportati (il
+	// ragionamento manca se non c'è stato); con conteggi incompleti Usage
+	// resta nil e vale la stima per eccesso
+	if m := resp.UsageMetadata; m != nil && m.PromptTokenCount != nil && m.CandidatesTokenCount != nil {
+		u := &judge.Usage{Prompt: *m.PromptTokenCount, Candidates: *m.CandidatesTokenCount}
 		if m.ThoughtsTokenCount != nil {
 			u.Thoughts = *m.ThoughtsTokenCount
 		}
-		if u.Prompt > 0 && u.Candidates >= 0 && u.Thoughts >= 0 {
+		if m.TotalTokenCount != nil {
+			u.Total = *m.TotalTokenCount
+		}
+		if u.Prompt > 0 && u.Candidates >= 0 && u.Thoughts >= 0 && u.Total >= 0 {
 			r.Usage = u
 		}
 	}
@@ -169,5 +173,9 @@ func parseJudge(data []byte) *JudgeReply {
 		}
 	}
 	r.Text = b.String()
+	if r.Usage != nil && r.Usage.Candidates == 0 && r.Text != "" {
+		// testo generato senza token d'uscita: conteggio incompleto
+		r.Usage = nil
+	}
 	return r
 }
