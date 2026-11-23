@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gen-image-video-cli/internal/httpx"
 	"gen-image-video-cli/internal/judge"
@@ -19,8 +20,11 @@ import (
 
 // Giudizio di aderenza nello storyboard (controllo.aderenza, spento di
 // partenza): lo stesso servizio di giv qc --judge (prepareJudge,
-// judgeCheck.run) su una ripresa di una scena video o avatar, con la
-// richiesta della scena e il primo riferimento locale. Il giudizio si lega
+// judgeCheck.run) su una ripresa di una scena video, con la richiesta della
+// scena (descrizione dei personaggi e prompt, o le inquadrature, come nella
+// richiesta del video) e il primo riferimento locale. Le scene avatar non
+// hanno una richiesta visiva da confrontare (niente prompt) e non si
+// giudicano. Il giudizio si lega
 // alla ripresa giudicata (story.Take.Judgements) e si recupera dallo stato
 // senza reinvio; la spesa passa dal cassiere di giv story run (riserva
 // story.ChargeJudge salvata prima dell'invio, una sola richiesta, addebito al
@@ -35,14 +39,40 @@ func judgeControlOn(s *story.Storyboard) bool {
 // judgeKeyVersion entra nell'impronta: cambia se cambia il modo di giudicare.
 const judgeKeyVersion = "giv-judge-1"
 
+// storyJudged dice se la scena si giudica: solo le scene video (un'avatar
+// non ha una richiesta visiva).
+func storyJudged(sc *story.Scene) bool { return sc != nil && sc.Tipo == story.Video }
+
+// storyJudgePrompt è la richiesta della scena da confrontare, come nella
+// richiesta del video: descrizione dei personaggi del kit davanti al prompt,
+// oppure alle inquadrature in ordine, con i loro secondi.
+func storyJudgePrompt(s *story.Storyboard, sc *story.Scene) (string, error) {
+	text := strings.TrimSpace(sc.Prompt)
+	if len(sc.Inquadrature) > 0 {
+		parts := make([]string, 0, len(sc.Inquadrature))
+		for i, q := range sc.Inquadrature {
+			parts = append(parts, fmt.Sprintf("inquadratura %d (%d s): %s", i+1, q.Durata, strings.TrimSpace(q.Prompt)))
+		}
+		text = strings.Join(parts, "; ")
+	}
+	if text == "" {
+		return "", errors.New("la scena non ha un prompt da confrontare")
+	}
+	prompt := strings.TrimSpace(s.ConDescrizione(sc, text))
+	if n := utf8.RuneCountInString(prompt); n > judge.MaxPromptChars {
+		return "", fmt.Errorf("richiesta della scena di %d caratteri: il giudizio ne accetta al massimo %d", n, judge.MaxPromptChars)
+	}
+	return prompt, nil
+}
+
 // storyJudgeInputs sono la richiesta della scena e il riferimento del
 // giudizio, senza leggere i file: il primo file locale (.png, .jpg, .webp)
 // degli insiemi in usa, altrimenti il fotogramma chiave in uso, altrimenti
 // immagine; gli indirizzi non valgono. ref è "" senza riferimento.
 func storyJudgeInputs(s *story.Storyboard, ss *story.SceneState, sc *story.Scene) (prompt, ref string, err error) {
-	prompt = strings.TrimSpace(sc.Prompt)
-	if prompt == "" {
-		return "", "", errors.New("la scena non ha un prompt da confrontare")
+	prompt, err = storyJudgePrompt(s, sc)
+	if err != nil {
+		return "", "", err
 	}
 	var cands []string
 	for _, name := range sc.Usa {
@@ -142,22 +172,28 @@ func storyJudgeTake(s *story.Storyboard, st *story.State, id, kind string) (*sto
 }
 
 // storyJudgeDue dice se la ripresa in uso di tipo kind della scena id va
-// giudicata (controllo.aderenza acceso, scena video o avatar con la ripresa
-// e un prompt): no se ha già un giudizio fatto con la stessa impronta, o un
-// giudizio incerto (nessun reinvio senza una scelta esplicita: why lo dice).
-// Gratuito: legge i file per l'impronta, nessun ffmpeg, nessuna chiamata.
+// giudicata (controllo.aderenza acceso, scena video con la ripresa): no in
+// silenzio senza controllo, per le scene non video e senza la ripresa; no
+// con why (avviso) se ha un giudizio incerto (nessun reinvio senza una scelta
+// esplicita) o se la scena non si può giudicare (senza prompt, riferimento
+// fuori cartella); no se ha già un giudizio fatto con la stessa impronta.
+// err solo se la ripresa o il riferimento non si leggono. Gratuito: legge i
+// file per l'impronta, nessun ffmpeg, nessuna chiamata.
 func storyJudgeDue(s *story.Storyboard, st *story.State, id, kind string) (due bool, why string, err error) {
 	sc := s.Scena(id)
-	if !judgeControlOn(s) || sc == nil || (sc.Tipo != story.Video && sc.Tipo != story.Avatar) {
+	if !judgeControlOn(s) || !storyJudged(sc) {
 		return false, "", nil
 	}
 	t, clip, err := storyJudgeTake(s, st, id, kind)
+	if errors.Is(err, story.ErrNotDone) {
+		return false, "", nil
+	}
 	if err != nil {
 		return false, "", err
 	}
 	prompt, ref, err := storyJudgeInputs(s, st.Scenes[id], sc)
 	if err != nil {
-		return false, "", err
+		return false, storyJudgeImpossible(id, err), nil
 	}
 	key, err := storyJudgeKey(judge.DefaultModel, prompt, ref, clip)
 	if err != nil {
@@ -174,6 +210,11 @@ func storyJudgeDue(s *story.Storyboard, st *story.State, id, kind string) (due b
 	return true, "", nil
 }
 
+// storyJudgeImpossible è l'avviso per una scena che non si può giudicare.
+func storyJudgeImpossible(id string, err error) string {
+	return fmt.Sprintf("scena %s: giudizio di aderenza non possibile: %v", id, err)
+}
+
 // storyJudgeUncertain è l'avviso per un giudizio rimasto senza esito.
 func storyJudgeUncertain(id, file string) string {
 	return fmt.Sprintf("scena %s: il giudizio di %s è rimasto senza esito e può essere stato addebitato (contato nella spesa): non si rilancia; per giudicarla a mano giv qc %s --judge --prompt \"<prompt della scena>\"", id, file, file)
@@ -181,18 +222,24 @@ func storyJudgeUncertain(id, file string) string {
 
 // storyJudgePlanUSD è la stima preventiva, non arrotondata, del giudizio
 // della scena sc prima che la ripresa esista (piano e tetto prima del giro):
-// fotogrammi alle misure più costose, riferimento se la scena ne ha uno. ok
-// false col motivo se non stimabile (con un tetto: codice 2 prima del giro).
+// fotogrammi alle misure più costose, riferimento se la scena ne ha uno o ha
+// un fotogramma chiave. 0 e ok senza controllo.aderenza e per le scene non
+// video; 0, ok e why (avviso) se la scena non si può giudicare (nessun
+// invio, nessuna spesa); ok false col motivo se non stimabile (con un tetto:
+// codice 2 prima del giro).
 func storyJudgePlanUSD(s *story.Storyboard, st *story.State, sc *story.Scene) (usd float64, ok bool, why string) {
+	if !judgeControlOn(s) || !storyJudged(sc) {
+		return 0, true, ""
+	}
 	var ss *story.SceneState
 	if st != nil {
 		ss = st.Scenes[sc.ID]
 	}
 	prompt, ref, err := storyJudgeInputs(s, ss, sc)
 	if err != nil {
-		return 0, false, err.Error()
+		return 0, true, storyJudgeImpossible(sc.ID, err)
 	}
-	est, why := judge.PlanEstimate(judge.DefaultModel, prompt, montage.JudgeFrameCount, ref != "", time.Now())
+	est, why := judge.PlanEstimate(judge.DefaultModel, prompt, montage.JudgeFrameCount, ref != "" || sc.FotogrammaChiave != nil, time.Now())
 	if est == nil {
 		return 0, false, why
 	}
@@ -217,6 +264,9 @@ func prepareStoryJudge(s *story.Storyboard, st *story.State, id, kind string) (*
 	sc := s.Scena(id)
 	if sc == nil {
 		return nil, fmt.Errorf("scena %s non nello storyboard", id)
+	}
+	if !storyJudged(sc) {
+		return nil, fmt.Errorf("scena %s: si giudicano solo le scene video", id)
 	}
 	t, clip, err := storyJudgeTake(s, st, id, kind)
 	if err != nil {
