@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,7 +172,7 @@ func TestStoryCheckParzialeContaSoloCheManca(t *testing.T) {
 	if got := num(m, fldTotalToRun); got < want-1e-3 || got > want+1e-3 || got >= num(base, "cost_total_usd") {
 		t.Errorf("%s=%v, atteso %v (solo s2, s3 e voce s3)", fldTotalToRun, got, want)
 	}
-	if v := sceneOf(t, m, "s1")[fldSceneWillRun]; v == sceneOf(t, m, "s2")[fldSceneWillRun] {
+	if v := sceneOf(t, m, "s1")[fldSceneWillRun]; fmt.Sprint(v) == fmt.Sprint(sceneOf(t, m, "s2")[fldSceneWillRun]) {
 		t.Errorf("s1 (fatta) e s2 (da fare) dicono lo stesso: %v", v)
 	}
 	for _, id := range []string{"s1", "s2", "s3"} {
