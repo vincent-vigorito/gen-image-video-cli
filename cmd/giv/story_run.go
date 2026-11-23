@@ -243,6 +243,7 @@ type storyRunner struct {
 	judgeEst  map[string]float64
 	judgeSent map[string]bool
 	judged    map[string]*qcJudgeOut
+	waiting   map[string]bool // scene il cui definitivo aspetta l'approvazione
 }
 
 // storyRunOptions sono i flag di giv story run.
@@ -301,7 +302,7 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 		checkEst: map[string]float64{}, checkDone: map[string]bool{}, voiceChecks: map[string]*storyVoiceCheck{},
 		parallel: parallelism(o.parallel, s), open: map[string]*sceneWork{}, events: make(chan workEvent, 2*maxParallel),
 		picked: map[string]bool{}, sent: map[string]bool{}, rank: map[string]int{},
-		mode: o.mode, kind: story.TakeFinal, judgeEst: map[string]float64{}, judgeSent: map[string]bool{}, judged: map[string]*qcJudgeOut{}}
+		mode: o.mode, kind: story.TakeFinal, judgeEst: map[string]float64{}, judgeSent: map[string]bool{}, judged: map[string]*qcJudgeOut{}, waiting: map[string]bool{}}
 	r.sc.state = st
 	if o.mode == modeDraft {
 		r.kind = story.TakeDraft // prima di --new-job: il job da lasciare è quello della bozza
@@ -782,6 +783,9 @@ func (r *storyRunner) scene(ctx context.Context, scene *story.Scene) error {
 		}
 		return nil
 	}
+	if skip, err := r.regate(scene); skip || err != nil {
+		return err
+	}
 	if !r.planned[scene.ID] {
 		if err := r.plan([]*story.Scene{scene}, false); err != nil {
 			return err
@@ -1216,6 +1220,13 @@ func (r *storyRunner) done(scene *story.Scene, ss *story.SceneState, man manifes
 	}
 	tr.Clip = &story.Take{File: rel, JobID: man.JobID, Done: time.Now()}
 	tr.Status, tr.Job, tr.Error = story.Fatto, nil, ""
+	if !r.drafts(scene.ID) {
+		// la prima clip definitiva diventa la partenza attesa dalle
+		// approvazioni delle scene con continua_da da questa, nello stesso salvataggio
+		if err := r.st.PinSource(r.s, scene.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "avviso: scena %s: %v\n", scene.ID, err)
+		}
+	}
 	r.settleJob(ss, kind, man, true)
 	r.save()
 	return nil

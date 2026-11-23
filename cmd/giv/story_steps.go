@@ -232,30 +232,67 @@ func (r *storyRunner) gate() error {
 	if r.mode != modeFinal || !r.s.Approvazione {
 		return nil
 	}
-	waiting := map[string]bool{}
 	var keep []*story.Scene
 	for _, scene := range r.order {
 		why := ""
 		if r.toLaunch(scene) {
-			if err := definitiveGate(r.s, r.st, scene); err != nil {
-				if scene.ID == r.forced {
-					return usageError("%v: per approvarla giv story approve %s %s", err, r.path, scene.ID)
-				}
-				why = strings.TrimPrefix(err.Error(), "scena "+scene.ID+": ")
-			} else if from := scene.ContinuaDa; from != "" && waiting[from] {
-				why = fmt.Sprintf("continua_da %s: la scena %s aspetta l'approvazione", from, from)
+			var err error
+			if why, err = r.gateWhy(scene); err != nil {
+				return err
 			}
 		}
 		if why == "" {
 			keep = append(keep, scene)
 			continue
 		}
-		waiting[scene.ID] = true
-		r.man.AwaitingApproval = append(r.man.AwaitingApproval, scene.ID)
-		fmt.Fprintf(os.Stderr, "scena %s: da approvare, niente fotogramma chiave né video (%s): giv story approve %s %s\n", scene.ID, why, r.path, scene.ID)
+		r.await(scene.ID, why)
 	}
 	r.order = keep
 	return nil
+}
+
+// gateWhy è il motivo per cui il definitivo della scena non parte adesso
+// (vuoto se parte): approvazione mancante o non più valida, o continua_da da
+// una scena che aspetta l'approvazione. Con --scene è codice 2.
+func (r *storyRunner) gateWhy(scene *story.Scene) (string, error) {
+	if from := scene.ContinuaDa; from != "" && r.waiting[from] {
+		return fmt.Sprintf("continua_da %s: la scena %s aspetta l'approvazione", from, from), nil
+	}
+	err := definitiveGate(r.s, r.st, scene)
+	switch {
+	case err == nil:
+		return "", nil
+	case scene.ID == r.forced:
+		return "", usageError("%v: per approvarla giv story approve %s %s", err, r.path, scene.ID)
+	}
+	return strings.TrimPrefix(err.Error(), "scena "+scene.ID+": "), nil
+}
+
+// await registra la scena come da approvare: nessuna richiesta, fuori dal
+// conto delle richieste da fare, elencata in awaiting_approval.
+func (r *storyRunner) await(id, why string) {
+	r.waiting[id], r.sent[id] = true, true
+	delete(r.judgeEst, id)
+	r.thisRun[id] = "da approvare"
+	r.man.AwaitingApproval = append(r.man.AwaitingApproval, id)
+	fmt.Fprintf(os.Stderr, "scena %s: da approvare, niente fotogramma chiave né video (%s): giv story approve %s %s\n", id, why, r.path, id)
+}
+
+// regate ricontrolla, subito prima del suo avvio, il definitivo di una scena
+// con continua_da: la clip di partenza registrata in questa esecuzione
+// (PinSource) può aver reso vecchia la sua approvazione, o la scena di
+// partenza può essere da approvare. Se non parte, salta come da approvare
+// (skip) e resta fuori dal conto; con --scene è codice 2.
+func (r *storyRunner) regate(scene *story.Scene) (skip bool, err error) {
+	if r.mode != modeFinal || !r.s.Approvazione || scene.ContinuaDa == "" {
+		return false, nil
+	}
+	why, err := r.gateWhy(scene)
+	if err != nil || why == "" {
+		return false, err
+	}
+	r.await(scene.ID, why)
+	return true, nil
 }
 
 // planDrafts prepara le bozze delle scene (profilo default.bozza, file
@@ -384,6 +421,9 @@ func (r *storyRunner) judgeScenes(ctx context.Context) {
 	for _, scene := range r.order {
 		if ctx.Err() != nil {
 			return
+		}
+		if r.waiting[scene.ID] {
+			continue // da approvare: niente di nuovo da giudicare
 		}
 		if err := r.judgeScene(ctx, scene); err != nil {
 			fmt.Fprintf(os.Stderr, "avviso: scena %s: giudizio di aderenza: %s\n", scene.ID, strings.ReplaceAll(localErrMsg(err), "\n", " "))
