@@ -289,6 +289,10 @@ type Charge struct {
 	// Status è lo stato della riserva: aperta, incerta, o vuoto per una voce
 	// registrata (ChargeOpen, ChargeUncertain)
 	Status string `json:"status,omitempty"`
+	// CostFromUsage: solo per un giudizio registrato, CostEstUSD è il costo
+	// calcolato dai consumi (token riportati), non una stima. Assente: stima,
+	// o stato 0.13.0 che non lo dice. Non cambia la spesa (Spent).
+	CostFromUsage bool `json:"cost_from_usage,omitempty"`
 }
 
 // Reserve aggiunge ch alle generazioni della scena come riserva aperta e ne
@@ -668,6 +672,9 @@ func (st *State) validate() error {
 					fail("%s: importo non valido", w)
 					break
 				}
+			}
+			if c.CostFromUsage && (c.Kind != ChargeJudge || c.Status != "" || c.CostEstUSD == nil || c.CostUSD > 0) {
+				fail("%s: cost_from_usage vale solo per un giudizio registrato con cost_est_usd", w)
 			}
 		}
 	}
