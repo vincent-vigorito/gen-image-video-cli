@@ -808,9 +808,10 @@ Con uno storyboard: `scenes[]`, una riga per scena con `id`, `tipo`, `take` e il
 della clip in uso (`giv story run`) o del file della scena, con la `durata` e l'`audio`
 chiesti dallo storyboard (una scena `immagine` non ha tratti fermi); `outputs[]`, una riga
 per montato di `giv story cut` con `format`, misure e fps del formato (con scene
-`immagine` niente tratti fermi; il cartello finale non conta fra i tratti fermi). `--for` vale per i montati del formato del canale. Una
-scena non ancora generata o un montato che manca hanno `result` `assente` (non conta per
-`--strict`); le attese `--expect-*` valgono solo per un file.
+`immagine` niente tratti fermi; il cartello finale non conta fra i tratti fermi). `--for`
+vale per i montati del formato del canale. Una scena non ancora generata o un montato che
+manca hanno `result` `assente` (non conta per `--strict`); le attese `--expect-*` valgono
+solo per un file.
 
 ### Controllo della voce: `giv qc --voice`
 

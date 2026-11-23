@@ -4,6 +4,27 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.12.1] - non rilasciata
+
+> **Pulizia dei rilievi più visibili della 0.12.0, a costo zero.** Il controllo tecnico non
+> dà più avvisi a vuoto sul cartello finale e sulla copertina delle clip. Nessuna chiamata a
+> pagamento nello sviluppo e nelle prove di questa versione. I comandi, gli storyboard, i
+> kit e gli stati della 0.12.0 danno lo stesso risultato; i campi JSON nuovi si aggiungono.
+
+### Corretto
+
+- **Controllo tecnico, cartello finale**: nei montati dello storyboard (`giv qc
+  <storyboard>` e il controllo di `giv story run` e `giv story cut`) gli ultimi secondi del
+  cartello finale (`montaggio.cartello_finale.durata`, anche dal kit; 3 s se non indicata)
+  non contano più fra i tratti fermi di `freeze`, e il `message` lo dice («esclusi gli
+  ultimi N s (cartello finale)»). Un fermo prima del cartello, lungo almeno
+  `--freeze-min`, resta un avviso. `giv qc <file>` non sa del cartello e non cambia.
+- **Controllo tecnico, copertina**: una copertina allegata al file (traccia video
+  `attached_pic`, come nelle clip di xAI) non dà più l'avviso «tracce in più» di
+  `streams`, né in `giv qc` né nel controllo di `giv story run` e `giv story cut`; resta
+  contata in `value.cover`. Una seconda traccia video o audio, sottotitoli e dati restano
+  avvisi.
+
 ## [0.12.0] - 2026-11-22
 
 > **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
@@ -202,9 +223,6 @@ versioning [SemVer](https://semver.org/lang/it/).
 - **`giv story check` e le scene già fatte**: la stima del video di una scena compare anche
   quando la scena è già generata; il tetto di `giv story run` conta invece la spesa
   registrata più le stime di ciò che resta da fare.
-- **Controllo tecnico, avvisi attesi**: il cartello finale dei montati è un'immagine ferma e
-  il controllo `freeze` lo segnala come avviso; le clip di xAI portano una traccia di
-  copertina e `streams` dà un avviso («tracce in più»), che nel montato sparisce.
 - **Trascrizione e nomi propri**: il riconoscimento sbaglia i nomi propri; nella prova un
   nome di marca a inizio frase è stato trascritto in altro modo, due volte su due, e il
   controllo della voce ha dato un avviso. Ascoltare prima di rifare la voce; al

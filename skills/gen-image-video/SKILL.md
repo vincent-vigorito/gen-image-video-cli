@@ -173,7 +173,9 @@ normali) con le misure; JSON `files`, `characters`, `voice`, `pronunciations`,
 `ok`/`avviso`/`difetto`; soglie `--black-min 0.5`, `--freeze-min 2`, `--freeze-noise -60`,
 `--silence-min 2`, `--silence-noise -50`; `--for` aggiunge `channels[]` col profilo di ogni
 canale; con uno storyboard `scenes[]` e `outputs[]` (`assente` se non ancora fatti; le
-`--expect-*` valgono solo su un file); `--strict` = codice 1 con un difetto, senza = 0.
+`--expect-*` valgono solo su un file; il cartello finale dei montati non conta fra i
+fermi); la copertina allegata alle clip di xAI non è un avviso di `streams` (resta in
+`value.cover`); `--strict` = codice 1 con un difetto, senza = 0.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
