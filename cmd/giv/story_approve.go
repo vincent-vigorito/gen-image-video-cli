@@ -16,8 +16,9 @@ import (
 // definitivo di una scena video parte solo dopo giv story approve, che
 // registra nello stato la ripresa vista (la bozza se default.bozza c'è,
 // altrimenti il fotogramma chiave) e la ricetta del definitivo
-// (story.RecipeKey). Una nuova ripresa, un altro fotogramma chiave o un cambio
-// della ricetta la rendono vecchia (story.CheckApproval); un cambio in
+// (story.RecipeKey). Una nuova ripresa, un altro fotogramma chiave, un cambio
+// della ricetta o del materiale da vedere (default.bozza aggiunto o tolto) la
+// rendono vecchia (checkApproval); un cambio in
 // un'altra scena indipendente no. Le scene avatar non hanno né bozza né
 // fotogramma chiave: l'approvazione non le riguarda e partono come prima.
 // Il comando è locale: nessuna rete, nessuna spesa.
@@ -85,7 +86,22 @@ func definitiveGate(s *story.Storyboard, st *story.State, scene *story.Scene) er
 	if err != nil {
 		return fmt.Errorf("%w: %v", story.ErrStaleApproval, err)
 	}
-	return st.CheckApproval(s, scene.ID, recipe)
+	return checkApproval(s, st, scene.ID, recipe)
+}
+
+// checkApproval è la verifica condivisa da gate, approve e foglio: vale
+// story.CheckApproval e in più il materiale approvato deve essere quello che
+// lo storyboard chiede oggi (approvalTake): un fotogramma approvato prima di
+// aggiungere default.bozza, o una bozza approvata prima di toglierla, non vale
+// più (la ricetta del definitivo non cambia, il materiale da vedere sì).
+func checkApproval(s *story.Storyboard, st *story.State, id, recipe string) error {
+	if err := st.CheckApproval(s, id, recipe); err != nil {
+		return err
+	}
+	if a, take := st.Scenes[id].Approval, approvalTake(s); a.Take != take {
+		return fmt.Errorf("scena %s: %w: approvato il materiale %s, lo storyboard ora chiede %s", id, story.ErrStaleApproval, a.Take, take)
+	}
+	return nil
 }
 
 // approvalMissing è il motivo per cui la scena non ha materiale da approvare.
@@ -241,7 +257,7 @@ func approveStory(path, kitFile string, ids []string, all bool) (*storyApproveRe
 			skip(sc, strings.TrimPrefix(err.Error(), "scena "+sc.ID+": "))
 			continue
 		}
-		if st.CheckApproval(s, sc.ID, recipe) == nil {
+		if checkApproval(s, st, sc.ID, recipe) == nil {
 			a := ss.Approval
 			res.Approved = append(res.Approved, approvedScene{ID: sc.ID, Take: a.Take, File: a.File, SHA256: a.SHA256, Keyframe: a.Keyframe, Already: true})
 			continue
