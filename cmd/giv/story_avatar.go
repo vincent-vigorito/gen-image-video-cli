@@ -30,13 +30,18 @@ func storyCommand(scene *story.Scene) string {
 // launchAvatar genera la clip di una scena avatar: immagine e voce sono lette
 // solo dentro la cartella dello storyboard e copiate in una cartella privata,
 // da cui le carica il provider; poi riserva e avvio come le scene video.
-func (r *storyRunner) launchAvatar(ctx context.Context, i int, scene *story.Scene, ss *story.SceneState, fail func(error) error) error {
+func (r *storyRunner) launchAvatar(ctx context.Context, scene *story.Scene, ss *story.SceneState, fail func(error) error) error {
 	job := r.sc.clips[scene.ID]
 	work, err := montage.TempDir("giv-story-") // rifiuta una TMPDIR condivisa senza sticky bit
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(work)
+	owned := true // dopo startClip le copie sono del lavoro della clip
+	defer func() {
+		if owned {
+			os.RemoveAll(work)
+		}
+	}()
 	req := job.req
 	if req.Image, err = r.privateCopy(scene.Immagine, work); err != nil {
 		return fail(fmt.Errorf("immagine: %w", err))
@@ -63,6 +68,7 @@ func (r *storyRunner) launchAvatar(ctx context.Context, i int, scene *story.Scen
 	if !ok {
 		return fail(fmt.Errorf("giv avatar non disponibile con %s", job.provider))
 	}
+	slug := r.sc.names[scene.ID] // letto qui: il lavoratore non legge le mappe del coordinatore
 	run := func(ctx context.Context) (manifest, error) {
 		man := job.manifest(req) // ingressi come nello storyboard, impronte delle copie
 		fmt.Fprintf(os.Stderr, "giv avatar con %s/%s…\n", job.provider, req.Model)
@@ -72,14 +78,15 @@ func (r *storyRunner) launchAvatar(ctx context.Context, i int, scene *story.Scen
 			logFailedJob(man, err, time.Since(start) >= req.Timeout)
 			return manifest{}, err
 		}
-		files, err := r.saveFiles(r.sc.names[scene.ID], res.Media)
+		files, err := r.saveFiles(slug, res.Media) // solo file nuovi in clip/, nessuna scrittura dello stato
 		if err != nil {
 			return manifest{}, err
 		}
 		man.done(files, res)
 		return man, nil
 	}
-	return r.startClip(ctx, i, scene, ss, job.plan.costExact, run, fail, storyCommand(scene))
+	owned = false
+	return r.startClip(ctx, scene, ss, job.plan.costExact, run, fail, storyCommand(scene), func() { os.RemoveAll(work) })
 }
 
 // privateAudio legge la voce rel (relativa alla cartella dello storyboard) solo

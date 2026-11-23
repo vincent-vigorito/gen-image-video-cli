@@ -12,7 +12,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -299,11 +298,10 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 		e := v.est.Exact
 		ch.CostEstUSD = &e
 	}
-	prevStatus, prevError, err := r.reserveVoice(scene.ID, ss, ch)
+	prevStatus, prevError, k, err := r.reserveVoice(scene.ID, ss, ch)
 	if err != nil {
 		return err
 	}
-	k := len(ss.Charges) - 1
 	man := manifest{Command: "story voice", Provider: v.req.Provider, Model: voiceModel(v.req), Prompt: v.req.Text,
 		Params: map[string]any{"scene": scene.ID, "voice": v.req.Voice, "language": v.req.Language, "chars": utf8.RuneCountInString(v.req.Text)}}
 	if v.est != nil {
@@ -323,7 +321,7 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 		}
 		// rifiutata o mai partita: niente addebito, si toglie solo la sua
 		// riserva; una richiesta di prima rimasta incerta resta incerta (K7)
-		ss.Charges = slices.Delete(ss.Charges, k, k+1)
+		releaseCharge(ss, k)
 		if prevStatus == story.Incerto {
 			ss.VoiceStatus, ss.VoiceError = prevStatus, prevError
 		} else {
@@ -333,14 +331,9 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 		return voiceError(v.req.Provider, err)
 	}
 	r.man.Voices++
-	if res.CostUSD > 0 {
-		ss.Charges[k].CostUSD = res.CostUSD
-	} else if c := &ss.Charges[k]; res.UsageUSD > 0 && (c.CostEstUSD == nil || res.UsageUSD > *c.CostEstUSD) {
-		// stima dai consumi riportati (gemini): prende il posto della riserva
-		// solo se non è più bassa, a piena precisione
-		u := res.UsageUSD
-		c.CostEstUSD = &u
-	}
+	// addebito al posto della riserva; senza, la stima dai consumi riportati
+	// (gemini) se non è più bassa
+	settleCharge(&ss.Charges[k], res.CostUSD, res.UsageUSD)
 	if res.UsageUSD > 0 {
 		man.CostUsageUSD, man.CostUsageSource = math.Round(res.UsageUSD*1e6)/1e6, res.UsageSource
 	}
@@ -365,31 +358,28 @@ func (r *storyRunner) makeVoice(ctx context.Context, scene *story.Scene) error {
 	r.voiceMade(scene.ID, res.DurationS)
 	man.Files, man.DurationS, man.CostUSD = files, res.DurationS, res.CostUSD
 	logRun(man)
-	if err := r.st.Save(); err != nil {
+	if err := r.saveState(); err != nil {
 		return fmt.Errorf("voce %s generata ma stato non salvato, nessuna altra richiesta inviata: %w", rel, err)
 	}
 	return nil
 }
 
-// reserveVoice ricontrolla il tetto con la spesa fatta fin qui (più le voci e
-// i video ancora da fare) e registra la voce ch come incerta nel file di
-// stato, prima di inviarla: se lo stato non si salva la richiesta non parte.
-// Restituisce stato ed errore della voce di prima della riserva.
-func (r *storyRunner) reserveVoice(id string, ss *story.SceneState, ch story.Charge) (string, string, error) {
-	if err := r.checkCap(0); err != nil {
-		return "", "", err
-	}
+// reserveVoice è la riserva della cassa per la voce: tetto ricontrollato con
+// la spesa fatta fin qui (più le voci e i video ancora da fare) e voce ch
+// registrata come incerta nel file di stato, prima di inviarla; se lo stato
+// non si salva la richiesta non parte. Restituisce stato ed errore della voce
+// di prima della riserva e l'indice della riserva.
+func (r *storyRunner) reserveVoice(id string, ss *story.SceneState, ch story.Charge) (string, string, int, error) {
 	status, msg := ss.VoiceStatus, ss.VoiceError
-	ch.At = time.Now()
-	ss.Charges = append(ss.Charges, ch)
-	ss.VoiceStatus, ss.VoiceError = story.Incerto, ""
-	if err := r.st.Save(); err != nil {
-		ss.Charges = ss.Charges[:len(ss.Charges)-1]
-		ss.VoiceStatus, ss.VoiceError = status, msg
-		return "", "", fmt.Errorf("stato non salvato, nessuna richiesta inviata: %w", err)
+	k, err := r.reserveCharge(ss, ch, func() func() {
+		ss.VoiceStatus, ss.VoiceError = story.Incerto, ""
+		return func() { ss.VoiceStatus, ss.VoiceError = status, msg }
+	})
+	if err != nil {
+		return "", "", 0, err
 	}
 	r.voiceSent[id] = true
-	return status, msg, nil
+	return status, msg, k, nil
 }
 
 // voiceIdle è lo stato della voce senza richieste in corso: fatta se ce n'è

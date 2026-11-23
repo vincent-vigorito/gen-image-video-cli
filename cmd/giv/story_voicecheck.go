@@ -243,26 +243,26 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 		skip("non fatto: %s", strings.ReplaceAll(err.Error(), "--max-cost", "tetto_costo_usd"))
 		return
 	}
-	ch := story.Charge{Kind: story.ChargeTranscribe, At: time.Now()}
+	ch := story.Charge{Kind: story.ChargeTranscribe}
 	if vc.est != nil {
 		e := vc.est.Exact
 		ch.CostEstUSD = &e
 	}
 	if cap != nil {
 		r.checkEst[id] = *ch.CostEstUSD // misurata sul file: al posto di quella dai caratteri
-		if spent, next := r.st.Spent(), r.capNext(0); spent+next > *cap {
+		if spent, next, over := r.capOver(); over {
 			skip("non fatto: spesa già fatta %.4f $ più generazioni da fare %.4f $ (trascrizione di %.6f $ compresa) oltre tetto_costo_usd %.4f $",
 				round4(spent), round4(next), vc.est.USD, *cap)
 			return
 		}
 	}
 	prev := ss.VoiceCheck
-	ss.Charges = append(ss.Charges, ch)
-	k := len(ss.Charges) - 1
-	ss.VoiceCheck = &story.VoiceCheck{File: ss.Voice.File, Status: story.Incerto, At: ch.At}
-	if err := r.st.Save(); err != nil {
-		ss.Charges, ss.VoiceCheck = ss.Charges[:k], prev
-		skip("stato non salvato, nessuna trascrizione inviata: %v", err)
+	k, err := r.reserveCharge(ss, ch, func() func() {
+		ss.VoiceCheck = &story.VoiceCheck{File: ss.Voice.File, Status: story.Incerto, At: time.Now()}
+		return func() { ss.VoiceCheck = prev }
+	})
+	if err != nil {
+		skip("%s", strings.Replace(err.Error(), "nessuna richiesta inviata", "nessuna trascrizione inviata", 1))
 		return
 	}
 	out, err := vc.run(ctx)
@@ -280,18 +280,15 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 			return
 		}
 		// rifiutata, mai partita o caricamento non completo: nessun addebito
-		ss.Charges = slices.Delete(ss.Charges, k, k+1)
+		releaseCharge(ss, k)
 		ss.VoiceCheck = prev
 		r.save()
 		skip("trascrizione non riuscita (nessun addebito): %v", err)
 		return
 	}
-	if c := &ss.Charges[k]; out.usageUSD > 0 && (c.CostEstUSD == nil || out.usageUSD > *c.CostEstUSD) {
-		// addebito dalla durata riportata: prende il posto della riserva solo
-		// se non è più basso, a piena precisione
-		u := out.usageUSD
-		c.CostEstUSD = &u
-	}
+	// addebito dalla durata riportata: prende il posto della riserva solo se
+	// non è più basso, a piena precisione
+	settleCharge(&ss.Charges[k], 0, out.usageUSD)
 	res := &storyVoiceCheck{transcript: &out.Transcript, comparison: out.Comparison}
 	for _, c := range out.Checks {
 		if c.Name == "voice" || c.Name == "language" {
@@ -303,7 +300,7 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 	ss.VoiceCheck.Status = story.Fatto
 	r.voiceChecks[id] = res
 	r.man.VoiceChecks++
-	if err := r.st.Save(); err != nil {
+	if err := r.saveState(); err != nil {
 		fmt.Fprintf(os.Stderr, "avviso: scena %s: controllo della voce fatto ma stato non salvato (resta incerto): %v\n", id, err)
 	}
 }
