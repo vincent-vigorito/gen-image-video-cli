@@ -49,17 +49,18 @@ const qcJudgeHelp = `Giudizio di aderenza (a pagamento: gemini diretto, solo su 
   --video <file>         video da giudicare (oppure come argomento)
   --prompt "<testo>"     richiesta della scena (al più 4000 caratteri); oppure --prompt-file <f> UTF-8
   --ref <immagine>       riferimento facoltativo, file .png, .jpg o .webp: personaggio o prodotto
-  --model <modello>      modello visivo di gemini (default gemini-2.5-flash-lite)
+  --model <modello>      modello visivo di gemini (default gemini-3.5-flash-lite)
   --max-cost <usd>       rifiuta (codice 2, nessun invio) se la stima supera il tetto o non è stimabile
   --dry-run              controlli tecnici, destinatario, immagini, richiesta e stima, senza invio
   --strict               un difetto fa uscire con codice 1 (il JSON esce comunque)
 
   Prima dell'invio, su stderr: destinatario, immagini (istante, misure, byte), caratteri della
   richiesta e stima. Stima per eccesso dal listino: ingresso al massimo (testo un token per
-  byte, immagini 258 token per riquadro) e uscita al limite della richiesta (maxOutputTokens
-  2048); l'addebito viene dai token riportati. Ogni giudizio inviato lascia una riga in
-  giv-log.jsonl. Risposta illeggibile: giudizio incerto, codice 0. Esito incerto (redirect,
-  errore del server, rete): codice 5 e riga failed, senza rilancio (può essere stato addebitato).
+  byte, immagini 258 token per riquadro e almeno 1120 per immagine) e uscita al limite della
+  richiesta (maxOutputTokens 2048); l'addebito viene dai token riportati. Ogni giudizio inviato
+  lascia una riga in giv-log.jsonl; rifiutato da gemini (errore 4xx): riga error a costo zero.
+  Risposta illeggibile: giudizio incerto, codice 0. Esito incerto (redirect, errore del server,
+  rete): codice 5 e riga failed, senza rilancio (può essere stato addebitato).
 `
 
 func init() {
@@ -450,6 +451,16 @@ func (j *judgeCheck) run(ctx context.Context) (*qcJudgeOut, error) {
 			failed.Status = "failed"
 			logRun(failed)
 			return nil, &cliError{code: exitAPI, msg: fmt.Sprintf("giudizio dall'esito incerto: %v — può essere stato addebitato, richiesta non ripetuta: controlla sul provider prima di rilanciare", se.Err)}
+		}
+		var he *httpx.Error
+		if errors.As(err, &he) && he.Status >= 400 && he.Status <= 499 {
+			// inviato e rifiutato: nessun addebito, riga a costo zero senza
+			// il messaggio del provider
+			rejected := man
+			rejected.Status = "error"
+			rejected.CostEstUSD, rejected.usageEstUSD = 0, 0
+			rejected.CostSource = fmt.Sprintf("rifiutato da gemini (HTTP %d): nessun addebito", he.Status)
+			logRun(rejected)
 		}
 		return nil, err
 	}

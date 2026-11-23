@@ -220,7 +220,7 @@ prima o dopo.
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 | `qc` | file o storyboard come argomento · `--expect-duration <s>` · `--expect-size <LxA>` · `--expect-fps <n>` · `--expect-audio on\|off` · `--expect-loudness <lufs>` (attese, solo per un file) · `--for <canali>` (come `giv export`) · `--strict` (un difetto = codice 1) · soglie `--black-min <s>` (default 0.5) · `--freeze-min <s>` (2) · `--freeze-noise <dB>` (-60) · `--silence-min <s>` (2) · `--silence-noise <dB>` (-50): vedi [Controllo tecnico](#controllo-tecnico-giv-qc) |
 | `qc --voice` | `--voice <file audio>` · `--script "<testo>"` oppure `--script-file <file>` · `--pronuncia <file.json>` · `--kit <kit.json>` · `--nome <nome>` (ripetibile) · `--lang <codice>` (default `it`) · `--provider xai` · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Controllo della voce](#controllo-della-voce-giv-qc---voice) |
-| `qc --judge` | `--judge` (senza, nessun invio) · il video come argomento o `--video <file>` · `--prompt "<richiesta>"` oppure `--prompt-file <file>` (al più 4000 caratteri) · `--ref <immagine>` (facoltativo, `.png`, `.jpg` o `.webp`) · `--model <m>` (default `gemini-2.5-flash-lite`) · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Giudizio di aderenza](#giudizio-di-aderenza-giv-qc---judge) |
+| `qc --judge` | `--judge` (senza, nessun invio) · il video come argomento o `--video <file>` · `--prompt "<richiesta>"` oppure `--prompt-file <file>` (al più 4000 caratteri) · `--ref <immagine>` (facoltativo, `.png`, `.jpg` o `.webp`) · `--model <m>` (default `gemini-3.5-flash-lite`) · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Giudizio di aderenza](#giudizio-di-aderenza-giv-qc---judge) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -884,10 +884,11 @@ senza il flag `giv qc` non invia niente, e `--judge=false` esce con codice 2 sen
   caratteri della richiesta e stima. `--dry-run` fa i controlli tecnici e mette tutto nel
   JSON, senza inviare: `request` con `destination`, `endpoint`, `images`, `prompt_chars`,
   `max_output_tokens` e, solo nel dry-run, il corpo della richiesta in `body`.
-- **Costo.** Stima per eccesso dal listino di giv (`gemini-2.5-flash-lite`: 0,10 $ per
-  milione di token d'ingresso, 0,40 $ d'uscita): ingresso al massimo (testo un token per
-  byte, immagini 258 token per riquadro) e uscita al limite della richiesta (2048 token).
-  Per una clip 9:16 con un riferimento la stima è circa 0,002 $. `--max-cost` rifiuta con
+- **Costo.** Stima per eccesso dal listino di giv (`gemini-3.5-flash-lite`: 0,30 $ per
+  milione di token d'ingresso, 2,50 $ d'uscita, ragionamento compreso): ingresso al massimo
+  (testo un token per byte, immagini 258 token per riquadro e almeno 1120 per immagine) e
+  uscita al limite della richiesta (2048 token). Per una clip 9:16 con un riferimento la
+  stima è circa 0,008 $. `--max-cost` rifiuta con
   codice 2, senza invio, se la stima supera il tetto o non si può fare (un modello senza
   tariffa nel listino). L'addebito (`cost_usage_usd`) viene dai token riportati da Gemini;
   se mancano vale la stima.
@@ -904,7 +905,8 @@ senza il flag `giv qc` non invia niente, e `--judge=false` esce con codice 2 sen
 - Il JSON ha `mode` `judge`, `provider`, `model`, `prompt`, `judgment`, `judged_at`,
   `request`, `params`, `cost_est_usd` e `cost_source`, `cost_usage_usd` e
   `cost_usage_source`, più le misure e i controlli tecnici del file. Ogni giudizio inviato
-  lascia una riga in `giv-log.jsonl`. Un esito incerto (reindirizzamento, errore del
+  lascia una riga in `giv-log.jsonl`; uno rifiutato da Gemini con un errore 4xx (per
+  esempio un modello non disponibile) lascia una riga `error` a costo zero. Un esito incerto (reindirizzamento, errore del
   server, rete dopo l'invio) esce con codice 5 e una riga `failed`, senza rilancio: può
   essere stato addebitato. Con `--strict` un difetto dei controlli tecnici esce con 1 (il
   giudizio dà al più un avviso); `--judge` insieme a `--voice` esce con codice 2.
@@ -1408,6 +1410,9 @@ un'altra scena indipendente no.
   col comando per approvarle e l'id in `awaiting_approval`; con `--scene` una scena da
   approvare esce con codice 2. Una scena con `continua_da` da una scena che aspetta
   l'approvazione aspetta con lei. Riprese già fatte e job già partiti restano.
+  L'approvazione si ricontrolla subito prima di ogni video definitivo: un fotogramma
+  chiave rigenerato (`--scene <id> --new-keyframe`) o un file approvato cambiato nel
+  frattempo la rendono vecchia, il video non parte e la scena torna da approvare.
 - `foglio-approvazione.jpg`, accanto allo storyboard, mostra per ogni scena video il
   fotogramma chiave e la bozza in uso, con id, materiale e «approvata» nelle etichette;
   lo riscrivono `giv story run --keyframes`, `giv story run --bozza` e `giv story cut

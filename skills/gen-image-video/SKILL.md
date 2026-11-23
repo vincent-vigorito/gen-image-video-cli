@@ -90,7 +90,7 @@ giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia 
 giv qc      <video> --judge --prompt "<richiesta>" | --prompt-file <f> [--ref <immagine>] [--model <m>]
             [--max-cost <usd>] [--dry-run] [--strict]
                                                 # giudizio di aderenza: 4 fotogrammi + richiesta a gemini, a pagamento
-                                                # (~0,002 $), solo con --judge; --dry-run mostra destinatario e dati
+                                                # (~0,008 $), solo con --judge; --dry-run mostra destinatario e dati
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check [--kit <kit.json>] <storyboard.json>
@@ -191,7 +191,7 @@ fermi); la copertina allegata alle clip di xAI non è un avviso di `streams` (re
 `qc --judge` (a pagamento, solo col flag; senza, e con `--judge=false`, nessun invio): dopo
 i controlli tecnici quattro fotogrammi (JPEG ≤ 768 px, senza metadati), la richiesta
 (`--prompt`/`--prompt-file`, ≤ 4000 caratteri) e il `--ref` facoltativo in una sola
-richiesta a Gemini diretto (`GEMINI_API_KEY`, `gemini-2.5-flash-lite`); JSON `judgment`
+richiesta a Gemini diretto (`GEMINI_API_KEY`, `gemini-3.5-flash-lite`); JSON `judgment`
 (`verdict` `aderente`/`non aderente`/`incerto`, `recognizable`, `action`, `reasons`,
 `defects`, `not_assessable`, `message`), controllo `adherence` (non aderente o incerto =
 avviso), `judged_at`, `request`, `cost_est_usd`, `cost_usage_usd`; risposta illeggibile =
@@ -700,9 +700,9 @@ Vince la scena, poi lo storyboard, poi il kit.
   `cost_usage_usd`. Kit e `giv qc` gratis; `giv qc --voice` paga solo la trascrizione
   xai, 0,10 $ per ora di audio (stima a minuti interi).
 - Giudizio di aderenza (`giv qc --judge`, `controllo.aderenza`): Gemini
-  `gemini-2.5-flash-lite`, 0,10 $ per milione di token d'ingresso e 0,40 $ d'uscita; stima
-  per eccesso (testo un token per byte, 258 token per riquadro d'immagine, uscita al limite
-  di 2048 token), circa 0,002 $ a giudizio; addebito dai token riportati. Listino da
+  `gemini-3.5-flash-lite`, 0,30 $ per milione di token d'ingresso e 2,50 $ d'uscita; stima
+  per eccesso (testo un token per byte, 258 token per riquadro d'immagine e almeno 1120 per
+  immagine, uscita al limite di 2048 token), circa 0,008 $ a giudizio; addebito dai token riportati. Listino da
   riverificare prima delle prove reali.
 - Gradini prima del definitivo (0.13.0): `giv story run --keyframes` paga solo i
   fotogrammi chiave, `--bozza` solo le bozze (es. `alibaba/wan-3.0` a 480p, 0,05 $/s invece
