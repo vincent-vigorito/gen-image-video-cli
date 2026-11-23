@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.13.1] - non rilasciata
+## [0.13.1] - 2026-11-23
 
 > **Pulizia dei rilievi della 0.13.0, a costo zero.** `giv story run --max-cost` mette un
 > tetto al singolo giro, in aggiunta a `tetto_costo_usd`; `--keyframes` elenca le scene da
