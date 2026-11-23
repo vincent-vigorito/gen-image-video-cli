@@ -298,6 +298,15 @@ func TestBasePinSourceSceneTolteESostituite(t *testing.T) {
 		}
 		_ = s
 	})
+	t.Run("A con clip solo nelle precedenti", func(t *testing.T) {
+		s, st, dir, _ := prepara(t)
+		os.WriteFile(filepath.Join(dir, "a1.mp4"), []byte("clip a"), 0o644)
+		a := st.Scene("s1")
+		a.Previous = []Take{{File: "a1.mp4"}}
+		if err := valida(t, s, st, "s2"); !errors.Is(err, ErrStaleApproval) {
+			t.Fatalf("B doveva essere vecchia: %v", err)
+		}
+	})
 	t.Run("A già sostituita", func(t *testing.T) {
 		s, st, dir, _ := prepara(t)
 		os.WriteFile(filepath.Join(dir, "a1.mp4"), []byte("clip a"), 0o644)
