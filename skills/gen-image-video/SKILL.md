@@ -29,7 +29,8 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
   `inputs` (`image`/`last_frame`/`refs[]` con `sha256` breve), `params`, `job_id`,
   `duration_s`, `cost_est_usd` + `cost_source` (stima da listino dove il costo non è
   riportato, es. xai; nei comandi sulle clip resta accanto a `cost_usd`), `cost_usage_usd` + `cost_usage_source` (gemini: costo dai token
-  riportati, accanto alla stima), `warnings[]` (controlli ignorati).
+  riportati, accanto alla stima; `giv voice` xai: calcolato da giv sui caratteri, non
+  letto dal provider), `warnings[]` (controlli ignorati).
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
   openai, anche con `--model`, e video senza un provider scelto) · 3 modello non trovato (404: `giv models --provider P`) ·
@@ -84,7 +85,7 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
             [--expect-audio on|off] [--for <canali>] [--strict]
                                                 # controllo tecnico in locale (neri, fermi, muti, volume, canali), gratis
 giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <f.json>] [--kit <kit.json>]
-            [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
+            [--nome <nome>]... [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
                                                 # in più trascrive la voce (xai, 0,10 $/h) e la confronta col testo
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
@@ -173,7 +174,9 @@ normali) con le misure; JSON `files`, `characters`, `voice`, `pronunciations`,
 `ok`/`avviso`/`difetto`; soglie `--black-min 0.5`, `--freeze-min 2`, `--freeze-noise -60`,
 `--silence-min 2`, `--silence-noise -50`; `--for` aggiunge `channels[]` col profilo di ogni
 canale; con uno storyboard `scenes[]` e `outputs[]` (`assente` se non ancora fatti; le
-`--expect-*` valgono solo su un file); `--strict` = codice 1 con un difetto, senza = 0.
+`--expect-*` valgono solo su un file; il cartello finale dei montati non conta fra i
+fermi); la copertina allegata alle clip di xAI non è un avviso di `streams` (resta in
+`value.cover`); `--strict` = codice 1 con un difetto, senza = 0.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -424,7 +427,11 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    stima: dare un `costo_dichiarato_usd`, per esempio ai modelli a token come Seedance e
    ai fotogrammi chiave), `removed_scenes`/`removed_spent_usd` (spesa già registrata nello
    stato per scene tolte dallo storyboard: conta nel tetto) e i `warnings` di ogni scena
-   in `scenes` (controlli che il modello ignora). Nessuna generazione, nessun costo.
+   in `scenes` (controlli che il modello ignora). Con lo stato di `giv story run`,
+   `run_cost_est_usd` è ciò che `story run` lancerebbe adesso (a pagamento) e per scena
+   `run_status` dice parte per parte (`fotogramma`, `video`, `voce`, `trascrizione`)
+   `fatto`, `da_generare`, `partito` (si recupera senza pagare), `incerto`, `fallito` o
+   `mancante` (da rifare con `--scene`). Nessuna generazione, nessun costo.
 4. Il modello va scelto fra quelli del catalogo letto in quel momento: un modello sparito
    viene rifiutato (`giv models --provider openrouter --kind video --caps`).
 5. Generazione: `giv story run storyboard.json`, a pagamento, solo dopo un check con 0 e
@@ -587,8 +594,11 @@ e non rigenera):
 - La voce detta come il testo: `./bin/giv qc --voice voce/s1-v1.wav --script-file
   testi/s1.txt --kit kit.json --max-cost 0.01` (trascrizione xai, a pagamento, frazioni di
   centesimo; `--dry-run` per la stima). In `comparison` le parole `different`, `missing` ed
-  `extra`; sui nomi propri la trascrizione sbaglia spesso: ascoltare prima di rifare la
-  voce (`giv story run --scene s1 --new-voice`, a pagamento, da chiedere).
+  `extra`; sui nomi propri la trascrizione sbaglia spesso: metterli nel campo `nomi` del
+  kit (o `--nome`, ripetibile), che vanno alla trascrizione come termini da riconoscere,
+  e ascoltare prima di rifare la voce (`giv story run --scene s1 --new-voice`, a
+  pagamento, da chiedere). Dopo `giv story cut` il confronto è anche in `voices[]` di
+  `storyboard.controllo.json`.
 
 **Kit di marca e personaggi**: prima di usarlo `./bin/giv kit check kit.json` (gratis):
 file con le misure, avvisi su logo senza trasparenza, font, riferimenti e descrizione;
@@ -596,7 +606,8 @@ codice 2 con un problema per riga se qualcosa non va. Esempio in `examples/kit/`
 storyboard: campo `"kit": "../kit/kit.json"` (o `--kit` su `story check`, `run` e `cut`);
 logo, cartello finale, musica e stile dei testi del kit arrivano da soli nel montaggio, i
 personaggi si usano per nome in `usa` (descrizione davanti al prompt, tutela del
-personaggio), la voce e le pronunce del kit fanno da predefiniti del blocco `parlato`.
+personaggio), la voce e le pronunce del kit fanno da predefiniti del blocco `parlato`, i
+`nomi` (marca, prodotti, personaggi) vanno alla trascrizione del controllo della voce.
 Vince la scena, poi lo storyboard, poi il kit.
 
 ## Costi

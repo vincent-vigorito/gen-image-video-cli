@@ -4,6 +4,72 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.12.1] - non rilasciata
+
+> **Pulizia dei rilievi più visibili della 0.12.0, a costo zero.** Il controllo tecnico non
+> dà più avvisi a vuoto sul cartello finale e sulla copertina delle clip; `giv story check`
+> dice cosa è già fatto e quanto costerebbe ciò che partirebbe adesso; i nomi propri vanno
+> alla trascrizione come termini da riconoscere; `<nome>.controllo.json` dopo `giv story
+> cut` riporta il confronto delle voci; `giv voice` con xAI ha il costo nel JSON. Nessuna
+> chiamata a pagamento nello sviluppo e nelle prove di questa versione. I comandi, gli
+> storyboard, i kit e gli stati della 0.12.0 danno lo stesso risultato; i campi JSON nuovi
+> si aggiungono.
+
+### Aggiunto
+
+- **`giv story check` dice cosa è fatto e cosa partirebbe adesso**, dallo stato di `giv
+  story run`: per scena `run_status`, lo stato di ogni parte (`fotogramma`, `video`,
+  `voce`, `trascrizione`, solo quelle che la scena ha) fra `fatto`, `da_generare`,
+  `partito` (job registrato, si recupera senza nuovo avvio), `incerto`, `fallito` e
+  `mancante` (registrata ma file assente: non si rifà da sola), e `run_cost_est_usd`, la
+  stima delle parti da generare; in cima `run_cost_est_usd` (ciò che `giv story run`
+  lancerebbe adesso; senza stato è uguale a `cost_total_usd`) e `run_not_estimated`. Su
+  stderr una riga per scena e il riepilogo «giv story run adesso: stima N $ (storyboard
+  intero M $)». `cost_total_usd` resta il costo dell'intero storyboard.
+- **Nomi propri per la trascrizione**: campo `nomi` del kit (facoltativo, al più 100 nomi
+  da 1 a 50 caratteri, senza caratteri invisibili né ripetizioni a meno delle maiuscole;
+  `giv kit check` li conta in `names`, e un kit con i soli nomi non è più vuoto) e `giv
+  qc --voice --nome <nome>`, ripetibile, con gli stessi limiti (fuori: codice 2), che si
+  aggiunge ai nomi del kit con `--kit`; nel `--dry-run` `params.nomi`. Il controllo della
+  voce (`giv qc --voice` e `controllo.voce` di `giv story run`, che usa i nomi del kit)
+  manda alla trascrizione xAI come termini da riconoscere (`keyterm`) prima i nomi, poi le
+  parole scritte del dizionario delle pronunce, senza ripetizioni; oltre 100 un avviso e i
+  seguenti non si inviano.
+- **Confronto delle voci in `<nome>.controllo.json` dopo `giv story cut`** (e nelle
+  esecuzioni di `giv story run` dopo quella che ha trascritto): le righe in `voices[]`
+  delle voci già controllate portano `comparison` dall'esito registrato nello stato
+  (`words`, `matched`, `ratio`, `different`, `missing`, `extra` con `expected`, `heard` e
+  `position`, `truncated`), un riepilogo di al più 20 parole per elenco, ognuna di al più
+  50 caratteri. Lo stato lo registra in `voice_check.comparison`, validato quando si legge;
+  uno stato della 0.12.0 senza il campo resta valido.
+- **Costo nel JSON di `giv voice` con xAI**: `cost_usage_usd` e `cost_usage_source`, gli
+  stessi campi di Gemini. xAI non riporta il costo: è **calcolato da giv** sul listino (15
+  $ per milione di caratteri) e sui caratteri del testo inviato, non un addebito letto dal
+  provider; `cost_usage_source` lo dice.
+
+### Corretto
+
+- **Controllo tecnico, cartello finale**: nei montati dello storyboard (`giv qc
+  <storyboard>` e il controllo di `giv story run` e `giv story cut`) gli ultimi secondi del
+  cartello finale (`montaggio.cartello_finale.durata`, anche dal kit; 3 s se non indicata)
+  non contano più fra i tratti fermi di `freeze`, e il `message` lo dice («esclusi gli
+  ultimi N s (cartello finale)»). Un fermo prima del cartello, lungo almeno
+  `--freeze-min`, resta un avviso. `giv qc <file>` non sa del cartello e non cambia.
+- **Controllo tecnico, copertina**: una copertina allegata al file (traccia video
+  `attached_pic`, come nelle clip di xAI) non dà più l'avviso «tracce in più» di
+  `streams`, né in `giv qc` né nel controllo di `giv story run` e `giv story cut`; resta
+  contata in `value.cover`. Una seconda traccia video o audio, sottotitoli e dati restano
+  avvisi.
+
+### Limiti noti
+
+- **Nomi propri nella trascrizione, non verificato dal vivo**: che i nomi mandati come
+  termini da riconoscere (`nomi` del kit, `--nome`) correggano davvero la trascrizione dei
+  nomi propri (nella prova della 0.12.0 un nome di marca a inizio frase era stato
+  trascritto in altro modo, due volte su due) non è provato: in questa versione nessuna
+  trascrizione a pagamento, solo server finti. Una differenza su un nome resta un avviso
+  da ascoltare prima di rifare la voce.
+
 ## [0.12.0] - 2026-11-22
 
 > **Voce dentro giv, kit di marca e controllo dei file.** La voce fuori campo si genera con
@@ -199,19 +265,6 @@ versioning [SemVer](https://semver.org/lang/it/).
   --new-keyframe` rifà anche la clip, e con un tetto la stima di entrambi deve starci.
 - **`giv image` senza stima né tetto**: non ha `--dry-run` né `--max-cost`; il costo si
   vede solo dopo la chiamata (`cost_usd` dove il provider lo riporta).
-- **`giv story check` e le scene già fatte**: la stima del video di una scena compare anche
-  quando la scena è già generata; il tetto di `giv story run` conta invece la spesa
-  registrata più le stime di ciò che resta da fare.
-- **Controllo tecnico, avvisi attesi**: il cartello finale dei montati è un'immagine ferma e
-  il controllo `freeze` lo segnala come avviso; le clip di xAI portano una traccia di
-  copertina e `streams` dà un avviso («tracce in più»), che nel montato sparisce.
-- **Trascrizione e nomi propri**: il riconoscimento sbaglia i nomi propri; nella prova un
-  nome di marca a inizio frase è stato trascritto in altro modo, due volte su due, e il
-  controllo della voce ha dato un avviso. Ascoltare prima di rifare la voce; al
-  riconoscitore vanno come termini attesi solo le parole del dizionario delle pronunce.
-- **`<nome>.controllo.json` dopo `giv story cut`**: per le voci riporta l'esito registrato
-  nello stato, senza trascrizione né confronto parola per parola: quelli sono nel JSON di
-  `giv story run` (campo `controllo`), e il file viene riscritto a ogni `story cut`.
 
 ### Prove dal vivo
 
