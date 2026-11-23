@@ -39,7 +39,8 @@ Controlli, ognuno ok, avviso o difetto, con misura, attesa, soglia e tratti trov
   silence   tratti muti dell'audio: avviso; per metà della durata o più: difetto
   loudness  volume integrato (LUFS), contro --expect-loudness (scarto oltre 1 LU: avviso)
   peak      picco vero: sopra -1 dBTP avviso, sopra 0 difetto
-  streams   tracce in più (seconda traccia video o audio, sottotitoli, dati, copertina): avviso
+  streams   tracce in più (seconda traccia video o audio, sottotitoli, dati): avviso; la copertina
+            allegata (come nelle clip xAI) no
 
 Flag:
   --expect-duration <s>    durata attesa in secondi
@@ -62,8 +63,8 @@ Flag:
 
 Con uno storyboard (.json): una riga per scena (scenes) con la clip in uso di giv story run o il
 file della scena (immagine: senza tratti fermi), con la durata e l'audio chiesti dallo storyboard,
-e una per montato di giv story cut (outputs) con misure e fps del formato; --for vale per i montati
-del formato del canale. Le scene senza clip e i montati che mancano sono "assente". Le attese
+e una per montato di giv story cut (outputs) con misure e fps del formato (il cartello finale non
+conta fra i tratti fermi); --for vale per i montati del formato del canale. Le scene senza clip e i montati che mancano sono "assente". Le attese
 --expect-* valgono solo per un file.
 
 Uscita: su stdout solo il JSON (result, counts, checks, channels…); codice 0 anche con difetti
@@ -209,6 +210,18 @@ func qcCutName(s *story.Storyboard, path, format string) string {
 	return out
 }
 
+// qcCardSeconds è la durata del cartello finale accodato da giv story cut
+// (montaggio.cartello_finale, anche dal kit); 0 senza cartello.
+func qcCardSeconds(s *story.Storyboard) float64 {
+	if s.Montaggio == nil || s.Montaggio.CartelloFinale == nil {
+		return 0
+	}
+	if d := s.Montaggio.CartelloFinale.Durata; d != nil {
+		return *d
+	}
+	return montage.DefaultCardSeconds
+}
+
 // qcRowCheck controlla il file della riga: un file illeggibile diventa una
 // riga con esito difetto, ffmpeg assente ferma tutto.
 func qcRowCheck(row *qcRow, file string, o montage.QCOptions) error {
@@ -303,8 +316,9 @@ func qcStory(s *story.Storyboard, path string, th montage.QCThresholds, profiles
 		if w, h, fps, err := cutFormatFor(s, f); err == nil {
 			o.ExpectWidth, o.ExpectHeight, o.ExpectFPS = w, h, float64(fps)
 		}
-		// con scene immagine il montato ha tratti fermi voluti
-		o.Still, o.Thresholds = images, th
+		// con scene immagine il montato ha tratti fermi voluti; il cartello
+		// finale (cutOverlays) è una coda ferma voluta
+		o.Still, o.StillTailS, o.Thresholds = images, qcCardSeconds(s), th
 		for _, p := range profiles {
 			if p.Aspect.String() == aspect {
 				o.Profiles = append(o.Profiles, p)
