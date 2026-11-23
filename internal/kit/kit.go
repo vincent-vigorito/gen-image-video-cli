@@ -1,7 +1,7 @@
 // Package kit legge e controlla il kit di marca e personaggi di giv: un file
 // JSON (di solito kit.json) con logo, colori, font, cartello finale, musica,
-// immagini e descrizione dei personaggi, voce e pronunce, scritto una volta e
-// richiamato dagli storyboard.
+// immagini e descrizione dei personaggi, voce, pronunce e nomi propri, scritto
+// una volta e richiamato dagli storyboard.
 //
 // Il kit è in sola lettura e chiuso nella sua cartella (quella del file JSON):
 // ogni file è un percorso relativo a quella cartella e non ne esce, nemmeno
@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -37,13 +38,16 @@ type Kit struct {
 	Personaggi map[string]Personaggio `json:"personaggi,omitempty"`
 	Voce       *Voce                  `json:"voce,omitempty"`
 	Pronuncia  map[string]string      `json:"pronuncia,omitempty"` // parola scritta -> come si pronuncia
+	// Nomi sono i nomi propri (marca, prodotti, personaggi) da far
+	// riconoscere alla trascrizione del controllo della voce
+	Nomi []string `json:"nomi,omitempty"`
 
 	// Dir è la cartella del kit (quella del file JSON): i file sono relativi a lei.
 	Dir string `json:"-"`
 }
 
 // kitFields sono i campi di primo livello del kit.
-var kitFields = []string{"marca", "personaggi", "voce", "pronuncia"}
+var kitFields = []string{"marca", "personaggi", "voce", "pronuncia", "nomi"}
 
 // Marca sono i predefiniti del montaggio. Logo, StileTesti, CartelloFinale e
 // Musica hanno gli stessi campi del blocco montaggio dello storyboard, con i
@@ -140,6 +144,8 @@ const (
 	MaxPronunce    = 200 // voci del dizionario (il tetto di xAI)
 	MaxParola      = 100 // caratteri della parola di una voce del dizionario (come giv voice)
 	MaxPronuncia   = 128 // caratteri della sua pronuncia
+	MaxNomi        = 100 // nomi propri (i termini che la trascrizione di xAI accetta)
+	MaxNome        = 50  // caratteri di un nome proprio (come un termine di xAI)
 
 	// DescrizioneLunga è la lunghezza, in caratteri, oltre la quale la
 	// descrizione di un personaggio allunga troppo il prompt: si avvisa.
@@ -200,7 +206,7 @@ func Parse(data []byte) (*Kit, error) {
 	if json.Unmarshal(data, &top) == nil && len(top) > 0 && !slices.ContainsFunc(slices.Collect(maps.Keys(top)), func(k string) bool {
 		return slices.ContainsFunc(kitFields, func(f string) bool { return strings.EqualFold(k, f) })
 	}) {
-		return nil, errors.New("non è un kit di giv: nessuno dei campi marca, personaggi, voce, pronuncia")
+		return nil, errors.New("non è un kit di giv: nessuno dei campi marca, personaggi, voce, pronuncia, nomi")
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -258,8 +264,8 @@ func (k *Kit) Validate() error {
 			fail("%s: %v", where, err)
 		}
 	}
-	if k.Marca == nil && len(k.Personaggi) == 0 && k.Voce == nil && len(k.Pronuncia) == 0 {
-		fail("kit vuoto: serve almeno uno fra marca, personaggi, voce e pronuncia")
+	if k.Marca == nil && len(k.Personaggi) == 0 && k.Voce == nil && len(k.Pronuncia) == 0 && len(k.Nomi) == 0 {
+		fail("kit vuoto: serve almeno uno fra marca, personaggi, voce, pronuncia e nomi")
 	}
 	if m := k.Marca; m != nil {
 		validateMarca(m, fail, file)
@@ -306,6 +312,7 @@ func (k *Kit) Validate() error {
 		word(where+": parola", w, MaxParola, fail)
 		word(where+": pronuncia", k.Pronuncia[w], MaxPronuncia, fail)
 	}
+	validateNomi(k.Nomi, fail)
 	return errors.Join(errs...)
 }
 
@@ -558,6 +565,38 @@ func text(where, t string, required bool, fail func(string, ...any)) {
 		fail("%s: al più %d byte", where, maxTestoBytes)
 	case !utf8.ValidString(t):
 		fail("%s: testo non UTF-8", where)
+	}
+}
+
+// validateNomi controlla i nomi propri: al più MaxNomi, ognuno non vuoto, di
+// al più MaxNome caratteri, UTF-8 valido, senza caratteri di controllo né
+// invisibili, senza ripetizioni (anche a meno delle maiuscole).
+func validateNomi(nomi []string, fail func(string, ...any)) {
+	if len(nomi) > MaxNomi {
+		fail("nomi: al più %d", MaxNomi)
+		return
+	}
+	seen := map[string]int{}
+	for i, n := range nomi {
+		where := fmt.Sprintf("nomi n. %d", i+1)
+		t := strings.TrimSpace(n)
+		switch {
+		case t == "":
+			fail("%s vuoto", where)
+		case !utf8.ValidString(t):
+			fail("%s: testo non UTF-8", where)
+		case strings.ContainsFunc(t, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }):
+			fail("%s: a capo, caratteri di controllo e invisibili non ammessi", where)
+		case utf8.RuneCountInString(t) > MaxNome:
+			fail("%s: al più %d caratteri", where, MaxNome)
+		default:
+			low := strings.ToLower(t)
+			if j, dup := seen[low]; dup {
+				fail("%s: %q ripete nomi n. %d", where, t, j)
+				continue
+			}
+			seen[low] = i + 1
+		}
 	}
 }
 
