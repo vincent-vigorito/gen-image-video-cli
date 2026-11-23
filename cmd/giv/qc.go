@@ -83,6 +83,14 @@ var qcVoice struct {
 	Run   func(args []string) error
 }
 
+// qcJudge è giv qc --judge, il giudizio di aderenza (cmd/giv/qc_judge.go):
+// se Run c'è, riceve tutti gli argomenti di giv qc quando fra loro c'è
+// --judge; Usage va in coda all'aiuto.
+var qcJudge struct {
+	Usage string
+	Run   func(args []string) error
+}
+
 // qcFileOut è l'uscita di giv qc su un file.
 type qcFileOut struct {
 	Command  string `json:"command"`
@@ -374,6 +382,15 @@ func qcTarget(fs *flag.FlagSet, args []string) (string, error) {
 
 // cmdQC è giv qc.
 func cmdQC(args []string) error {
+	if qcJudgeArg(args) {
+		if qcVoiceArg(args) {
+			return usageError("giv qc: --judge e --voice insieme: uno alla volta")
+		}
+		if qcJudge.Run == nil {
+			return usageError("giv qc --judge: giudizio di aderenza non disponibile in questa versione")
+		}
+		return qcJudge.Run(args)
+	}
 	if qcVoiceArg(args) {
 		if qcVoice.Run == nil {
 			return usageError("giv qc --voice: controllo della voce non disponibile in questa versione")
@@ -385,6 +402,9 @@ func cmdQC(args []string) error {
 		fmt.Fprint(os.Stderr, qcHelp)
 		if qcVoice.Usage != "" {
 			fmt.Fprint(os.Stderr, "\n"+qcVoice.Usage)
+		}
+		if qcJudge.Usage != "" {
+			fmt.Fprint(os.Stderr, "\n"+qcJudge.Usage)
 		}
 	}
 	expDur := fs.Float64("expect-duration", 0, "durata attesa in secondi")
