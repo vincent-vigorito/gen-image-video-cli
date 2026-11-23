@@ -350,6 +350,11 @@ func (r *storyRunner) stopped(err error) error {
 		}
 		errs = append(errs, fmt.Errorf("scena %s fallita sul provider (spesa contata): %s; %s", id, r.st.Scenes[id].Error, redo))
 	}
+	if len(errs) == 0 && err == nil && r.saveErr != nil {
+		// uno stato non salvato non è mai un'uscita 0: su disco può mancare
+		// l'ultimo esito (i job registrati si recuperano senza nuovi avvii)
+		return fmt.Errorf("stato %s non salvato: %w", r.st.Path(), r.saveErr)
+	}
 	return errors.Join(append(errs, err)...)
 }
 
