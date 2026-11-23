@@ -172,24 +172,26 @@ func (st *State) approvalSource(s *Storyboard, id string) (*ApprovalSource, erro
 	return src, nil
 }
 
-// PinSource fissa la clip definitiva in uso della scena id (percorso e
-// contenuto) come clip di partenza attesa dalle scene con continua_da id
-// approvate quando id non aveva ancora una clip. Va chiamata da giv story run
-// subito dopo aver registrato la clip definitiva di id, prima di salvare lo
-// stato, e solo lì: chiamata più tardi fisserebbe un file sostituito nel
-// frattempo. Non cambia una clip di partenza già fissata: se id è stata
-// rigenerata, quelle approvazioni restano vecchie. Se il file non si legge
-// non fissa niente (le approvazioni restano vecchie) e lo dice.
+// PinSource fissa la prima clip definitiva della scena id (percorso e
+// contenuto) come clip di partenza attesa dalle approvazioni dello stato che
+// aspettano id (Source.Scene == id senza file: approvate quando id non aveva
+// ancora una clip), anche di scene tolte per ora dallo storyboard. Va
+// chiamata da giv story run subito dopo aver registrato la clip definitiva di
+// id, prima di salvare lo stato, e solo lì: chiamata più tardi fisserebbe un
+// file sostituito nel frattempo. Fissa solo se quella clip è la prima di id
+// (nessuna clip sostituita): una sorgente rimasta senza file dopo la prima
+// clip resta vecchia anche sulle successive, e non cambia una sorgente già
+// fissata. Se il file non si legge non fissa niente (le approvazioni restano
+// vecchie) e lo dice.
 func (st *State) PinSource(s *Storyboard, id string) error {
 	ps := st.Scenes[id]
-	if ps == nil || ps.Clip == nil {
+	if ps == nil || ps.Clip == nil || ps.ClipTakes() != 1 {
 		return nil
 	}
 	var sum string
-	for i := range s.Scene {
-		b := &s.Scene[i]
-		ss := st.Scenes[b.ID]
-		if b.ContinuaDa != id || ss == nil || ss.Approval == nil {
+	for _, b := range sortedKeys(st.Scenes) {
+		ss := st.Scenes[b]
+		if ss == nil || ss.Approval == nil {
 			continue
 		}
 		src := ss.Approval.Source
