@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -18,22 +20,6 @@ func (e *parEnv) noSpend(t *testing.T) {
 	if e.posts != 0 || e.images != 0 || e.polls != 0 || e.judges != 0 {
 		t.Errorf("richieste a pagamento partite: posts=%d images=%d polls=%d giudizi=%d", e.posts, e.images, e.polls, e.judges)
 	}
-}
-
-// campi numerici dell'uscita JSON il cui nome contiene "cap" (tetto)
-func capFields(t *testing.T, so string) map[string]float64 {
-	t.Helper()
-	var m map[string]any
-	if err := json.Unmarshal([]byte(so), &m); err != nil {
-		t.Fatalf("uscita non JSON: %v\n%s", err, so)
-	}
-	r := map[string]float64{}
-	for k, v := range m {
-		if f, ok := v.(float64); ok && strings.Contains(k, "cap") {
-			r[k] = f
-		}
-	}
-	return r
 }
 
 // --max-cost sotto la stima del giro: codice 2, nessuna richiesta a pagamento.
@@ -54,48 +40,43 @@ func TestR1026MaxCostAbbastanza(t *testing.T) {
 	if code != 0 || e.posts != 1 {
 		t.Fatalf("code=%d posts=%d\n%s\n%s", code, e.posts, so, se)
 	}
-	found := false
-	for k, v := range capFields(t, so) {
-		if k != "cap_usd" && math.Abs(v-2) < 1e-9 {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("tetto del giro (2) assente dall'uscita: %s", so)
-	}
 	var m map[string]any
 	json.Unmarshal([]byte(so), &m)
+	if f, _ := m["run_cap_usd"].(float64); math.Abs(f-2) > 1e-9 {
+		t.Errorf("run_cap_usd=%v, atteso 2", m["run_cap_usd"])
+	}
 	if f, _ := m["run_spent_usd"].(float64); math.Abs(f-0.5) > 1e-9 {
 		t.Errorf("run_spent_usd=%v, atteso 0.5", m["run_spent_usd"])
 	}
 }
 
 // due scene da 0,5 $: una per una stanno in 0,7 $, insieme no. Con
-// --parallel 2 la seconda non parte.
+// --parallel 2 il preflight del giro conta tutte e due: codice 2, la seconda
+// (e la prima) non parte; la scena sola invece sta nel tetto e parte.
 func TestR1026DueSceneNonInsiemeParallelo(t *testing.T) {
 	e := newParEnv(t, ib("", "", ps("s1", ""), ps("s2", "")), false)
 	_, se, code := e.rawRun(t, "--max-cost", "0.7", "--parallel", "2")
-	_ = code
-	if e.posts != 1 {
-		t.Fatalf("posts=%d, atteso 1 (la seconda scena non deve partire)\n%s", e.posts, se)
+	if code != 2 || e.posts != 0 {
+		t.Fatalf("code=%d posts=%d, atteso 2 e nessun avvio\n%s", code, e.posts, se)
 	}
-	if !strings.Contains(e.bodies[0], "p-s1") {
-		t.Errorf("è partita la scena sbagliata: %s", e.bodies[0])
+	e1 := newParEnv(t, ib("", "", ps("s1", "")), false)
+	if _, se, code := e1.rawRun(t, "--max-cost", "0.7", "--parallel", "2"); code != 0 || e1.posts != 1 {
+		t.Fatalf("scena sola: code=%d posts=%d\n%s", code, e1.posts, se)
 	}
 }
 
 // vince sempre il tetto più stretto: storyboard 0,7 con --max-cost 5, e
-// storyboard 5 con --max-cost 0,7.
+// storyboard 5 con --max-cost 0,7: in entrambi i casi due scene non ci stanno.
 func TestR1026VinceIlPiuStretto(t *testing.T) {
 	e := newParEnv(t, ib("", `,"tetto_costo_usd":0.7`, ps("s1", ""), ps("s2", "")), false)
-	e.rawRun(t, "--max-cost", "5", "--parallel", "2")
-	if e.posts != 1 {
-		t.Errorf("tetto storyboard più stretto: posts=%d, atteso 1", e.posts)
+	_, se, code := e.rawRun(t, "--max-cost", "5", "--parallel", "2")
+	if code != 2 || e.posts != 0 || !strings.Contains(se, "tetto_costo_usd") {
+		t.Errorf("tetto storyboard più stretto: code=%d posts=%d\n%s", code, e.posts, se)
 	}
 	e2 := newParEnv(t, ib("", `,"tetto_costo_usd":5`, ps("s1", ""), ps("s2", "")), false)
-	e2.rawRun(t, "--max-cost", "0.7", "--parallel", "2")
-	if e2.posts != 1 {
-		t.Errorf("--max-cost più stretto: posts=%d, atteso 1", e2.posts)
+	_, se, code = e2.rawRun(t, "--max-cost", "0.7", "--parallel", "2")
+	if code != 2 || e2.posts != 0 || !strings.Contains(se, "--max-cost") {
+		t.Errorf("--max-cost più stretto: code=%d posts=%d\n%s", code, e2.posts, se)
 	}
 }
 
@@ -111,13 +92,28 @@ func TestR1026MaxCostNonStimabile(t *testing.T) {
 
 // valore 0, negativo o non numerico: codice 2, nessuna richiesta.
 func TestR1026MaxCostValoreNonValido(t *testing.T) {
-	for _, v := range []string{"0", "-1", "abc"} {
+	for _, v := range []string{"0", "-1"} {
 		e := newParEnv(t, ib("", "", ps("s1", "")), false)
 		_, se, code := e.rawRun(t, "--max-cost", v)
 		if code != 2 {
 			t.Errorf("--max-cost %s: code=%d\n%s", v, code, se)
 		}
 		e.noSpend(t)
+	}
+}
+
+// valore non numerico: il parser dei flag esce da solo con 2 (processo a parte).
+func TestR1026MaxCostNonNumerico(t *testing.T) {
+	if os.Getenv("R1026_HELPER") == "1" {
+		cmdStory([]string{"run", "--max-cost", "abc", "x.json"})
+		os.Exit(0)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestR1026MaxCostNonNumerico$")
+	cmd.Env = append(os.Environ(), "R1026_HELPER=1")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("atteso exit 2, ottenuto %v", err)
 	}
 }
 
@@ -136,9 +132,12 @@ func TestR1026MaxCostConBozza(t *testing.T) {
 // uno solo; con 0,1 $ nessuno.
 func TestR1026MaxCostConKeyframes(t *testing.T) {
 	e := newParEnv(t, ib("", `,"approvazione":true`, ps("s1", keyfr), ps("s2", keyfr)), false)
-	e.rawRun(t, "--keyframes", "--max-cost", "0.2")
-	if e.images != 1 {
-		t.Errorf("immagini=%d con tetto 0,2 $, atteso 1", e.images)
+	if _, se, code := e.rawRun(t, "--keyframes", "--max-cost", "0.2"); code != 2 || e.images != 0 {
+		t.Errorf("tetto 0,2 $ per 0,28 $: code=%d immagini=%d\n%s", code, e.images, se)
+	}
+	e3 := newParEnv(t, ib("", `,"approvazione":true`, ps("s1", keyfr), ps("s2", keyfr)), false)
+	if _, se, code := e3.rawRun(t, "--keyframes", "--max-cost", "0.3"); code != 0 || e3.images != 2 {
+		t.Errorf("tetto 0,3 $: code=%d immagini=%d\n%s", code, e3.images, se)
 	}
 	e2 := newParEnv(t, ib("", `,"approvazione":true`, ps("s1", keyfr)), false)
 	_, se, code := e2.rawRun(t, "--keyframes", "--max-cost", "0.1")
@@ -147,14 +146,23 @@ func TestR1026MaxCostConKeyframes(t *testing.T) {
 	}
 }
 
-// i giudizi di aderenza contano nel tetto del giro: il video (0,5) ci sta in
-// 0,5005, il giudizio no.
+// i giudizi di aderenza contano nel tetto del giro: il video (0,5) ci
+// starebbe in 0,5005, il giudizio no: codice 2, niente parte. Con 3 $ parte
+// tutto e run_spent_usd supera il solo video.
 func TestR1026MaxCostContaIGiudizi(t *testing.T) {
 	e := newParEnv(t, ib("", `,"controllo":{"aderenza":true}`, ps("s1", "")), false)
 	e.withJudge(t)
-	e.rawRun(t, "--max-cost", "0.5005")
-	if e.posts != 1 || e.judges != 0 {
-		t.Errorf("posts=%d giudizi=%d, attesi 1 e 0", e.posts, e.judges)
+	_, se, code := e.rawRun(t, "--max-cost", "0.5005")
+	if code != 2 || e.posts != 0 || e.judges != 0 {
+		t.Fatalf("code=%d posts=%d giudizi=%d\n%s", code, e.posts, e.judges, se)
+	}
+	e2 := newParEnv(t, ib("", `,"controllo":{"aderenza":true}`, ps("s1", "")), false)
+	e2.withJudge(t)
+	so, se, code := e2.rawRun(t, "--max-cost", "3")
+	var m map[string]any
+	json.Unmarshal([]byte(so), &m)
+	if f, _ := m["run_spent_usd"].(float64); code != 0 || e2.judges != 1 || f <= 0.5 {
+		t.Errorf("code=%d giudizi=%d run_spent_usd=%v\n%s", code, e2.judges, m["run_spent_usd"], se)
 	}
 }
 
@@ -248,20 +256,13 @@ func TestR1026GiudizioStimaOConsumi(t *testing.T) {
 		}
 		return judgeCharge(t, e)
 	}
-	known := map[string]bool{"kind": true, "cost_est_usd": true, "cost_usd": true, "at": true}
 	extra := func(c map[string]any) string {
-		var r []string
-		for k, v := range c {
-			if !known[k] {
-				b, _ := json.Marshal(v)
-				r = append(r, k+"="+string(b))
-			}
-		}
-		return strings.Join(r, ",")
+		b, _ := json.Marshal(c["cost_from_usage"])
+		return string(b)
 	}
 	cons := run(``)                           // consumi completi
 	stima := run(`{"promptTokenCount":1000}`) // consumi incompleti: resta la stima
-	if extra(cons) == extra(stima) {
+	if extra(cons) != "true" || extra(stima) == "true" {
 		t.Errorf("stima e consumi non distinguibili nello stato:\nconsumi=%v\nstima=%v", cons, stima)
 	}
 }
@@ -297,7 +298,7 @@ func TestR1026StatoVecchioStessiTotali(t *testing.T) {
 		for _, c := range s.(map[string]any)["charges"].([]any) {
 			cm := c.(map[string]any)
 			for k := range cm {
-				if k != "kind" && k != "cost_est_usd" && k != "cost_usd" && k != "at" {
+				if k == "cost_from_usage" {
 					delete(cm, k)
 				}
 			}
