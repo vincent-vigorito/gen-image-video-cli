@@ -39,7 +39,7 @@ const maxSize = 4 << 20
 type Storyboard struct {
 	Titolo        string              `json:"titolo,omitempty"`
 	Formato       *Formato            `json:"formato,omitempty"`
-	Default       Generazione         `json:"default"`
+	Default       Predefiniti         `json:"default"`
 	Avatar        *AvatarDefault      `json:"avatar,omitempty"`          // scene avatar
 	TettoCostoUSD *float64            `json:"tetto_costo_usd,omitempty"` // nil = nessun tetto
 	Strict        bool                `json:"strict,omitempty"`          // controlli di rifinitura come errori
@@ -57,6 +57,10 @@ type Storyboard struct {
 	// Controllo è il controllo dei file in giv story run e cut: avvisa e
 	// basta, non rigenera e non spende.
 	Controllo *Controllo `json:"controllo,omitempty"`
+	// Approvazione true: il definitivo di una scena generata parte solo dopo
+	// l'approvazione della sua bozza o del suo fotogramma chiave (giv story
+	// approve, CheckApproval); assente: come prima.
+	Approvazione bool `json:"approvazione,omitempty"`
 
 	// Dir è la cartella dello storyboard: i percorsi sono relativi a questa.
 	Dir string `json:"-"`
@@ -110,6 +114,32 @@ type Generazione struct {
 	Tutela      string                     `json:"tutela,omitempty"`
 	Param       map[string]json.RawMessage `json:"param,omitempty"` // parametri passanti del modello
 }
+
+// Predefiniti è il blocco default: la generazione delle scene che non la
+// indicano, più bozze e parallelo, che valgono solo qui.
+type Predefiniti struct {
+	Generazione
+	// Bozza è la generazione delle bozze video (giv story run --bozza):
+	// provider, modello e risoluzione economici; assente: niente bozze.
+	Bozza *Bozza `json:"bozza,omitempty"`
+	// Parallelo sono le scene tenute aperte insieme da giv story run, da 1 a
+	// 4; 0 (assente): 1. --parallel prevale.
+	Parallelo int `json:"parallelo,omitempty"`
+}
+
+// Bozza è il blocco default.bozza: come si genera la bozza video di una
+// scena; durata, richiesta e riferimenti sono quelli del definitivo.
+type Bozza struct {
+	Provider    string `json:"provider,omitempty"` // vuoto: quello del definitivo
+	Modello     string `json:"modello"`
+	Risoluzione string `json:"risoluzione,omitempty"`
+}
+
+// MaxParallelo è il massimo di default.parallelo e di --parallel.
+const MaxParallelo = 4
+
+// Parallelo è default.parallelo: 0 se assente.
+func (s *Storyboard) Parallelo() int { return s.Default.Parallelo }
 
 // Scene è una scena dello storyboard.
 type Scene struct {
@@ -261,6 +291,9 @@ type Controllo struct {
 	// Voce: giv story run trascrive ogni voce generata e la confronta col
 	// testo della scena (a pagamento, xai, nel tetto), una volta per voce.
 	Voce bool `json:"voce,omitempty"`
+	// Aderenza: giudizio di aderenza delle riprese video alla richiesta della
+	// scena (a pagamento, gemini, nel tetto), solo se indicato qui.
+	Aderenza bool `json:"aderenza,omitempty"`
 }
 
 // Without dice se montaggio.senza toglie l'elemento name.
@@ -443,6 +476,12 @@ func (s *Storyboard) Validate() error {
 	}
 	if s.Formato != nil && s.Formato.FPS < 0 {
 		fail("formato.fps deve essere positivo")
+	}
+	if p := s.Default.Parallelo; p < 0 || p > MaxParallelo {
+		fail("default.parallelo deve essere un intero da 1 a %d", MaxParallelo)
+	}
+	if b := s.Default.Bozza; b != nil && strings.TrimSpace(b.Modello) == "" {
+		fail("default.bozza: modello mancante (il modello economico delle bozze)")
 	}
 	if p := s.Parlato; p != nil {
 		// i limiti della voce (provider, voce, lingua, velocità, pronunce) li
