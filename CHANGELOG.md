@@ -4,6 +4,69 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.13.1] - non rilasciata
+
+> **Pulizia dei rilievi della 0.13.0, a costo zero.** `giv story run --max-cost` mette un
+> tetto al singolo giro, in aggiunta a `tetto_costo_usd`; `--keyframes` elenca le scene da
+> approvare; due fotogrammi chiave della stessa scena non collidono più sul nome;
+> `"parallelo": 0` è un errore; nello stato l'addebito del giudizio dice se è la stima o
+> il costo dai consumi. Nessuna chiamata a pagamento nello sviluppo e nelle prove di
+> questa versione. **Senza `--max-cost` tutto si comporta come nella 0.13.0**; storyboard,
+> kit e stati della 0.12.x e della 0.13.0 restano validi e i campi JSON nuovi si
+> aggiungono.
+
+### Aggiunto
+
+- **Tetto del singolo giro: `giv story run --max-cost <usd>`.** Vale in aggiunta a
+  `tetto_costo_usd` dello storyboard: si controllano entrambi, sul valore non arrotondato,
+  e il giro si ferma al primo dei due (vince il più stretto). Il tetto del giro conta tutto
+  ciò che il giro riserva e addebita: fotogrammi chiave, bozze, definitivi, voci,
+  trascrizioni e giudizi; prima del primo avvio la stima del giro deve starci, poi prima di
+  ogni richiesta a pagamento riserve e addebiti del giro più le stime ancora da fare. Oltre il tetto, o con una
+  richiesta senza stima né costo dichiarato, codice 2 senza nuovi avvii; un valore non
+  valido (non numerico, zero o negativo, non finito) è codice 2 prima di tutto. Vale per
+  il definitivo, `--bozza` e `--keyframes`, anche con `--parallel`. Non si
+  scrive né nello storyboard né nello stato: vale solo per il giro in cui lo si indica.
+  Nel JSON `run_cap_usd` (il tetto del giro, solo con `--max-cost`) e `run_spent_usd`
+  (con `--max-cost` presente anche a 0).
+
+### Corretto
+
+- **`--keyframes` con l'approvazione sul fotogramma chiave** (`"approvazione": true` senza
+  `default.bozza`): `awaiting_approval` elenca le scene il cui fotogramma aspetta `giv
+  story approve`.
+- **Nomi dei file di `giv story run`**: due fotogrammi chiave della stessa scena generati
+  nello stesso secondo non collidono più. Il nome resta
+  `<id>-r<N>-fotogramma-<AAAAMMGG-hhmmss>.<ext>`; se il file c'è già, `-2`, `-3`… prima
+  dell'estensione, come `giv image`. Vale per tutti i file di `giv story run` (clip, bozze,
+  fotogrammi).
+- **`"parallelo": 0`** scritto nel blocco `default` è un errore di validazione: codice 2
+  da `giv story check` e `giv story run`, col messaggio dei valori ammessi (da 1 a 4).
+  Il campo assente resta valido e vale 1.
+- **Addebito del giudizio di aderenza**: nello stato l'addebito di tipo `giudizio` ha
+  `cost_from_usage: true` quando `cost_est_usd` è il costo dai consumi riportati da Gemini;
+  assente, è la stima (o un addebito scritto dalla 0.13.0); un valore che non sia `true` o
+  `false` rende lo stato non valido. Totali, spesa e tetto non cambiano.
+
+### Compatibilità
+
+- Storyboard, kit e stati della 0.12.x e della 0.13.0 restano validi; senza `--max-cost`
+  generazione, file, richieste, risultati e comandi restano quelli della 0.13.0.
+  Un'eccezione voluta: uno storyboard con `"parallelo": 0` scritto, prima letto come 1, ora
+  esce con codice 2 (togliere il campo o scrivere 1).
+- Gli addebiti di giudizio degli stati della 0.13.0 non hanno `cost_from_usage`: si
+  leggono come prima e non si riscrivono.
+
+### Limiti noti
+
+- Nessuna prova dal vivo in questa versione: tutto è stato provato con server finti e
+  comandi locali.
+- Veo non è risultato attivo sull'API Gemini diretta (nella 0.13.0 il definitivo è stato
+  provato via OpenRouter).
+- La bozza anticipa soggetto e inquadratura, non i difetti del definitivo.
+- Alcune bozze arrivano con misure leggermente diverse da quelle richieste e con una
+  traccia audio anche ad audio spento.
+
 ## [0.13.0] - 2026-11-23
 
 > **Guardare e approvare una scena prima di pagarne il definitivo.** Prima i soli
@@ -145,17 +208,12 @@ Prove del 23/11/2026, 3,10 $ in tutto.
 
 - Veo non è risultato attivo sull'API Gemini diretta: il definitivo è stato provato via
   OpenRouter.
-- `giv story run` non ha un tetto per singolo giro: vale `tetto_costo_usd` dello
-  storyboard.
 - La bozza anticipa soggetto e inquadratura, non i difetti del definitivo.
-- Con l'approvazione sul fotogramma chiave (senza profilo di bozza) `--keyframes` non
-  elenca le scene da approvare.
-- Due fotogrammi chiave della stessa scena generati nello stesso secondo collidono sul
-  nome del file.
-- `"parallelo": 0` esplicito in `default` non è segnalato.
-- Il costo reale del giudizio sta nel campo `cost_est_usd` dell'addebito.
 - Alcune bozze arrivano con misure leggermente diverse da quelle richieste e con una
   traccia audio anche ad audio spento.
+- Tetto del singolo giro, scene da approvare dopo `--keyframes`, nomi dei fotogrammi
+  chiave nello stesso secondo, `"parallelo": 0` e addebito del giudizio fra stima e
+  consumi: chiusi nella 0.13.1.
 
 ## [0.12.1] - 2026-11-23
 

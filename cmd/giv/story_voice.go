@@ -230,8 +230,8 @@ func (r *storyRunner) voicePreflight() error {
 		}
 		// decisione 22: con un tetto la voce senza costo massimo garantito
 		// (gemini) non parte; senza, parte con l'avviso
-		if rf := speech.CapRefusal(v.req.Provider); rf != "" && r.s.TettoCostoUSD != nil {
-			rejects = append(rejects, fmt.Errorf("scena %s: voce: costo non stimabile con tetto_costo_usd (%s)", scene.ID, rf))
+		if rf := speech.CapRefusal(v.req.Provider); rf != "" && r.capped() {
+			rejects = append(rejects, fmt.Errorf("scena %s: voce: costo non stimabile con %s (%s)", scene.ID, r.capName(), rf))
 			continue
 		}
 		for _, w := range v.warns {
@@ -241,8 +241,8 @@ func (r *storyRunner) voicePreflight() error {
 			fmt.Fprintf(os.Stderr, "avviso: scena %s: %s\n", scene.ID, voiceProbableWarning(v))
 		}
 		if v.est == nil {
-			if r.s.TettoCostoUSD != nil {
-				rejects = append(rejects, fmt.Errorf("scena %s: voce non stimabile (%s): con tetto_costo_usd non parte", scene.ID, v.why))
+			if r.capped() {
+				rejects = append(rejects, fmt.Errorf("scena %s: voce non stimabile (%s): con %s non parte", scene.ID, v.why, r.capName()))
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "avviso: scena %s: voce senza stima del costo (non contata nel totale): %s\n", scene.ID, v.why)

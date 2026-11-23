@@ -52,7 +52,7 @@ Uso:
   giv story check <storyboard.json>   controlla lo storyboard e ne stima il costo: nessuna
                                       generazione, gratuito
   giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--keyframes | --bozza]
-                [--parallel <n>] <storyboard.json>
+                [--parallel <n>] [--max-cost <usd>] <storyboard.json>
                                       genera a pagamento le voci dai testi, poi le scene video e
                                       avatar mancanti; stato e spesa in <nome>.stato.json
                                       accanto allo storyboard
@@ -72,6 +72,7 @@ Flag di giv story run (anche dopo il file):
   --keyframes        solo i fotogrammi chiave, nessun video
   --bozza            le bozze video col profilo default.bozza, in clip/bozza/
   --parallel <n>     scene tenute aperte insieme, da 1 a 4 (di partenza 1, o default.parallelo)
+  --max-cost <usd>   tetto di spesa di questo giro, insieme a tetto_costo_usd dello storyboard
 
 Flag di giv story approve:
   --all              approva ogni scena video con materiale da vedere ed elenca le altre
@@ -114,7 +115,7 @@ Flag (anche dopo il file):
   -h, --help     questo aiuto
 `,
 	"run": `uso: giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--keyframes | --bozza]
-                     [--parallel <n>] [--kit <kit.json>] <storyboard.json>
+                     [--parallel <n>] [--max-cost <usd>] [--kit <kit.json>] <storyboard.json>
 
 Genera a pagamento le voci dai testi delle scene (testo senza voce: voce/<id>-v<N>.wav
 accanto allo storyboard, prima dei video), poi le scene video e avatar dello storyboard, in
@@ -155,7 +156,9 @@ Flag (anche dopo il file):
   --keyframes        solo i fotogrammi chiave delle scene che ne hanno uno (quelli già
                      pronti si riusano), poi foglio-contatto.jpg e foglio-approvazione.jpg;
                      nessun video. Con --scene e --new-keyframe rifà solo quell'immagine:
-                     col tetto conta solo il suo costo, stimato o dichiarato
+                     col tetto conta solo il suo costo, stimato o dichiarato. Con
+                     approvazione: true e senza default.bozza, awaiting_approval elenca
+                     le scene il cui fotogramma chiave aspetta giv story approve
   --bozza            le bozze video col profilo default.bozza (provider, modello e
                      risoluzione; stessa richiesta, durata e riferimenti del definitivo)
                      in clip/bozza/, con stato e spesa propri, riserva e tetto come ogni
@@ -164,6 +167,14 @@ Flag (anche dopo il file):
                      default.parallelo): gli avvii restano uno alla volta in ordine di
                      storyboard, si sovrappongono solo attesa e scaricamento; continua_da
                      aspetta la clip della scena precedente
+  --max-cost <usd>   tetto di spesa di questo giro, in dollari (maggiore di zero), insieme
+                     a tetto_costo_usd: prima del giro la stima di ciò che partirebbe
+                     (fotogrammi, bozze, definitivi, voci, trascrizioni e giudizi) deve
+                     starci, poi prima di ogni richiesta a pagamento riserve e addebiti
+                     di questo giro più le stime ancora da fare; il primo dei due tetti
+                     superato ferma gli avvii (codice 2) e, con --max-cost, una richiesta
+                     non stimabile è codice 2 prima di ogni avvio. Non si scrive né nello
+                     storyboard né nello stato; nel JSON run_cap_usd e run_spent_usd
   --kit <file>       kit di marca e personaggi al posto del campo kit dello storyboard
   -h, --help         questo aiuto
 `,

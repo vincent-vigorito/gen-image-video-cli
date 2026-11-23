@@ -145,7 +145,8 @@ type qcJudgeOut struct {
 	CostUsageUSD    float64          `json:"cost_usage_usd"`
 	CostUsageSource string           `json:"cost_usage_source,omitempty"`
 
-	usageUSD float64 // CostUsageUSD non arrotondato (conto del tetto di giv story run)
+	usageUSD        float64 // CostUsageUSD non arrotondato (conto del tetto di giv story run)
+	usageFromTokens bool    // usageUSD dai token riportati da gemini (non la stima per eccesso)
 }
 
 // judgeCheck è un giudizio verificato e pronto a partire: fotogrammi
@@ -502,6 +503,7 @@ func (j *judgeCheck) run(ctx context.Context) (*qcJudgeOut, error) {
 		fmt.Fprintf(os.Stderr, "avviso: %s\n", w)
 	}
 	out.usageUSD, out.CostUsageUSD, out.CostUsageSource = usd, math.Round(usd*1e6)/1e6, src
+	out.usageFromTokens = ok
 	fmt.Fprintf(os.Stderr, "giudizio: %s\n", out.Judgment.Verdict)
 	man.Warnings = out.Warnings
 	man.CostUsageUSD, man.CostUsageSource, man.usageEstUSD = out.CostUsageUSD, out.CostUsageSource, usd

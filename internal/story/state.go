@@ -289,6 +289,28 @@ type Charge struct {
 	// Status è lo stato della riserva: aperta, incerta, o vuoto per una voce
 	// registrata (ChargeOpen, ChargeUncertain)
 	Status string `json:"status,omitempty"`
+	// CostFromUsage: solo per un giudizio registrato, CostEstUSD è il costo
+	// calcolato dai consumi (token riportati), non una stima. Assente: stima,
+	// o stato 0.13.0 che non lo dice. Non cambia la spesa (Spent).
+	CostFromUsage FromUsage `json:"cost_from_usage,omitempty"`
+}
+
+// FromUsage è il segno di un giudizio registrato col costo dai consumi: nello
+// stato vale true o false, null è uno stato corrotto (il campo assente resta
+// valido).
+type FromUsage bool
+
+// UnmarshalJSON rifiuta null e accetta solo true o false.
+func (f *FromUsage) UnmarshalJSON(b []byte) error {
+	var v *bool
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	if v == nil {
+		return errors.New("cost_from_usage: null non ammesso, vale true o false")
+	}
+	*f = FromUsage(*v)
+	return nil
 }
 
 // Reserve aggiunge ch alle generazioni della scena come riserva aperta e ne
@@ -668,6 +690,9 @@ func (st *State) validate() error {
 					fail("%s: importo non valido", w)
 					break
 				}
+			}
+			if c.CostFromUsage && (c.Kind != ChargeJudge || c.Status != "" || c.CostEstUSD == nil || c.CostUSD > 0) {
+				fail("%s: cost_from_usage vale solo per un giudizio registrato con cost_est_usd", w)
 			}
 		}
 	}

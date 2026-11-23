@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -52,6 +54,7 @@ func cmdStoryRun(args []string) error {
 	parallel := fl.Int("parallel", 0, "scene aperte insieme, da 1 a 4 (di partenza 1 o default.parallelo): avvii uno alla volta in ordine, si sovrappongono attesa e scaricamento")
 	keyframes := fl.Bool("keyframes", false, "solo i fotogrammi chiave che mancano, nessun video né voce")
 	draft := fl.Bool("bozza", false, "bozze video col profilo default.bozza in clip/bozza/, nessun definitivo né voce")
+	maxCost := fl.Float64("max-cost", 0, "tetto di spesa di questo giro in dollari, oltre a tetto_costo_usd")
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["run"]) }
 	if err := fl.Parse(args); err != nil {
 		return usageError("%v", err)
@@ -87,14 +90,25 @@ func cmdStoryRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	parallelSet := false
-	fl.Visit(func(f *flag.Flag) { parallelSet = parallelSet || f.Name == "parallel" })
+	parallelSet, maxCostSet := false, false
+	fl.Visit(func(f *flag.Flag) {
+		parallelSet = parallelSet || f.Name == "parallel"
+		maxCostSet = maxCostSet || f.Name == "max-cost"
+	})
 	if parallelSet && (*parallel < 1 || *parallel > maxParallel) {
 		return usageError("--parallel va da 1 a %d, non %d", maxParallel, *parallel)
 	}
+	var runCap *float64
+	if maxCostSet {
+		// tetto del giro: un importo finito e positivo (0 non vale come "senza tetto")
+		if v := *maxCost; math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+			return usageError("--max-cost vuole un importo in dollari maggiore di zero, non %v", v)
+		}
+		runCap = maxCost
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	o := storyRunOptions{only: *only, newKeyframe: *newKeyframe, newJob: *newJob, newVoice: *newVoice, voicesOnly: *voicesOnly, kit: *kitFile, parallel: *parallel, mode: mode}
+	o := storyRunOptions{only: *only, newKeyframe: *newKeyframe, newJob: *newJob, newVoice: *newVoice, voicesOnly: *voicesOnly, kit: *kitFile, parallel: *parallel, mode: mode, runCap: runCap}
 	man, err := runStory(ctx, path, o)
 	if man != nil && ctx.Err() == nil {
 		if s, lerr := story.LoadWithKit(path, *kitFile); lerr == nil {
@@ -142,11 +156,16 @@ type storyRunManifest struct {
 	// per il tetto (addebito dove c'è, altrimenti stima); i job recuperati
 	// restano dell'esecuzione che li ha avviati
 	RunCostEstUSD float64 `json:"run_cost_est_usd,omitempty"`
-	RunSpentUSD   float64 `json:"run_spent_usd,omitempty"`
+	// RunSpentUSD c'è anche a 0 con --max-cost (RunCapUSD): è il conto del
+	// tetto del giro
+	RunSpentUSD *float64 `json:"run_spent_usd,omitempty"`
 	// spesa nello stato di scene non più nello storyboard: in spent_usd, non fra le scene
 	RemovedSpentUSD float64        `json:"removed_spent_usd,omitempty"`
 	RemovedScenes   []removedScene `json:"removed_scenes,omitempty"`
 	CapUSD          *float64       `json:"cap_usd,omitempty"`
+	// RunCapUSD è il tetto di questo giro (--max-cost): non si scrive né
+	// nello storyboard né nello stato
+	RunCapUSD *float64 `json:"run_cap_usd,omitempty"`
 	// Parallel sono le scene tenute aperte insieme (--parallel o
 	// default.parallelo), solo se più di una
 	Parallel int `json:"parallel,omitempty"`
@@ -156,7 +175,9 @@ type storyRunManifest struct {
 	Mode string `json:"mode,omitempty"`
 	// AwaitingApproval sono le scene il cui definitivo aspetta giv story
 	// approve (approvazione nello storyboard): né fotogramma né video; con
-	// --bozza le scene la cui bozza, a fine giro, aspetta l'approvazione
+	// --bozza le scene la cui bozza, a fine giro, aspetta l'approvazione, e
+	// con --keyframes (senza default.bozza) quelle il cui fotogramma chiave
+	// la aspetta
 	AwaitingApproval []string `json:"awaiting_approval,omitempty"`
 	// Judgements sono i giudizi di aderenza (controllo.aderenza) con esito in
 	// questa esecuzione
@@ -200,6 +221,7 @@ type storyRunner struct {
 	failed  []string // scene fallite sul provider (in questa esecuzione o prima): non si rigenerano da sole
 	man     storyRunManifest
 	started time.Time // inizio dell'esecuzione: gli addebiti da qui in poi sono suoi
+	runCap  *float64  // --max-cost: tetto delle riserve e degli addebiti di questa esecuzione (nil senza)
 
 	kitRoot      *os.Root // cartella del kit: i suoi file letti solo qui dentro (nil senza kit)
 	newVoice     string   // --new-voice: scena di cui rigenerare la voce
@@ -253,8 +275,9 @@ type storyRunOptions struct {
 	newKeyframe, newJob, newVoice bool
 	voicesOnly                    bool
 	kit                           string
-	parallel                      int    // --parallel; 0: default.parallelo o 1
-	mode                          string // --keyframes, --bozza; vuoto: definitivo
+	parallel                      int      // --parallel; 0: default.parallelo o 1
+	mode                          string   // --keyframes, --bozza; vuoto: definitivo
+	runCap                        *float64 // --max-cost: tetto di questo giro; nil senza
 }
 
 func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunManifest, error) {
@@ -297,7 +320,7 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 		return nil, err
 	}
 	defer root.Close()
-	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only, started: time.Now(),
+	r := &storyRunner{s: s, st: st, root: root, path: path, sc: newStoryChecker(s), forced: only, started: time.Now(), runCap: o.runCap,
 		est: map[string]float64{}, planned: map[string]bool{}, thisRun: map[string]string{},
 		voicesOnly: o.voicesOnly, voiceSent: map[string]bool{}, voiceThisRun: map[string]string{}, speech: map[string]speech.Synthesizer{},
 		checkEst: map[string]float64{}, checkDone: map[string]bool{}, voiceChecks: map[string]*storyVoiceCheck{},
@@ -335,7 +358,7 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 		r.vc = r.sc.draftChecker()
 		r.vc.out = filepath.Join(s.Dir, filepath.FromSlash(story.DraftDir))
 	}
-	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: st.Path(), Titolo: s.Titolo, CapUSD: s.TettoCostoUSD, Mode: o.mode}
+	r.man = storyRunManifest{Command: "story run", Storyboard: path, State: st.Path(), Titolo: s.Titolo, CapUSD: s.TettoCostoUSD, RunCapUSD: o.runCap, Mode: o.mode}
 	if r.parallel > 1 {
 		r.man.Parallel = r.parallel
 	}
@@ -377,8 +400,9 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 	// controllo.aderenza: le riprese nuove (o mai giudicate) si giudicano a
 	// fine giro, una richiesta per ripresa; avvisa e basta
 	r.judgeScenes(ctx)
-	// --bozza: le scene la cui bozza ora aspetta l'approvazione
-	r.draftsAwaiting()
+	// --bozza e --keyframes: le scene la cui bozza o il cui fotogramma
+	// chiave ora aspetta l'approvazione
+	r.takesAwaiting()
 	r.summary()
 	r.man.voiceChecks = r.voiceChecks
 	return &r.man, r.stopped(nil)
@@ -617,16 +641,15 @@ func (r *storyRunner) plan(scenes []*story.Scene, all bool) error {
 	if err != nil {
 		return err
 	}
-	cap := r.s.TettoCostoUSD
-	if cap == nil {
+	if !r.capped() {
 		if len(missing) > 0 {
 			fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(missing, ", "))
 		}
 		return nil
 	}
 	if len(missing) > 0 {
-		return usageError("%s: con tetto_costo_usd ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
-			r.path, strings.Join(missing, ", "))
+		return usageError("%s: con %s ogni generazione vuole una stima o un costo_dichiarato_usd; senza: %s",
+			r.path, r.capName(), strings.Join(missing, ", "))
 	}
 	if all {
 		return r.checkCap()
@@ -670,6 +693,11 @@ func (r *storyRunner) planScenes(scenes []*story.Scene) ([]string, error) {
 			// e nessuna scrittura dello stato, come per le scene video
 			if _, err := r.sc.client(job.provider); err != nil {
 				return nil, fmt.Errorf("scena %s: %w", c.ID, err)
+			}
+			// con --max-cost, come con tetto_costo_usd (controllo dello
+			// storyboard): la stima vuole la durata misurata della voce
+			if r.runCap != nil && job.plan.CostEstUSD == nil {
+				return nil, usageError("scena %s: con --max-cost la scena avatar vuole la durata della voce misurata con ffprobe: costo non stimabile, costo_dichiarato_usd non basta", c.ID)
 			}
 		}
 		if r.needKeyframe(scene) && scene.FotogrammaChiave.CostoDichiaratoUSD == nil {
@@ -1140,12 +1168,11 @@ func (r *storyRunner) saveFiles(sub, slug string, media []provider.Media) ([]out
 	ts := time.Now().Format("20060102-150405")
 	var files []output.FileInfo
 	for i, m := range media {
-		name := slug + "-" + ts
+		base := slug + "-" + ts
 		if len(media) > 1 {
-			name = fmt.Sprintf("%s-%d", name, i+1)
+			base = fmt.Sprintf("%s-%d", base, i+1)
 		}
-		name += output.Ext(m.Mime)
-		f, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		name, f, err := createIn(dir, base, output.Ext(m.Mime))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", filepath.Join(sub, name), err)
 		}
@@ -1159,6 +1186,24 @@ func (r *storyRunner) saveFiles(sub, slug string, media []provider.Media) ([]out
 		files = append(files, output.FileInfo{Path: filepath.Join(r.s.Dir, sub, name), Mime: m.Mime, Bytes: len(m.Data)})
 	}
 	return files, nil
+}
+
+// createIn crea nella cartella dir un file nuovo base+ext (O_EXCL): se il
+// nome c'è già, anche come link, non si sovrascrive né si segue e si prova
+// base-2, base-3… (due file della stessa scena nello stesso secondo, come due
+// fotogrammi chiave di fila). Restituisce il nome usato.
+func createIn(dir *os.Root, base, ext string) (string, *os.File, error) {
+	for n := 1; ; n++ {
+		name := base + ext
+		if n > 1 {
+			name = fmt.Sprintf("%s-%d%s", base, n, ext)
+		}
+		f, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) && n < 100 {
+			continue
+		}
+		return name, f, err
+	}
 }
 
 // lastFrame estrae nella cartella privata work l'ultimo fotogramma della scena
@@ -1325,10 +1370,10 @@ func (r *storyRunner) summary() {
 	}
 	r.man.CostEstUSD, r.man.CostUSD = round4(r.man.CostEstUSD), round4(r.man.CostUSD)
 	r.man.SpentUSD = round4(r.st.Spent())
-	var runEst, runSpent float64
+	var runEst float64
 	for _, ss := range r.st.Scenes {
 		for _, c := range ss.Charges {
-			if c.At.Before(r.started) {
+			if !r.ofThisRun(c) {
 				continue
 			}
 			switch {
@@ -1337,10 +1382,13 @@ func (r *storyRunner) summary() {
 			case c.CostDeclaredUSD != nil:
 				runEst += *c.CostDeclaredUSD
 			}
-			runSpent += c.Spent()
 		}
 	}
-	r.man.RunCostEstUSD, r.man.RunSpentUSD = round4(runEst), round4(runSpent)
+	r.man.RunCostEstUSD = round4(runEst)
+	// la spesa del giro è quella che la cassa ha contato per --max-cost
+	if runSpent := round4(r.runSpent()); runSpent != 0 || r.runCap != nil {
+		r.man.RunSpentUSD = &runSpent
+	}
 	var removed float64
 	r.man.RemovedScenes, removed = removedSpend(r.s, r.st)
 	r.man.RemovedSpentUSD = round4(removed)
