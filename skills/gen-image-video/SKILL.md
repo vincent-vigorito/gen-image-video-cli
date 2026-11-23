@@ -1,6 +1,6 @@
 ---
 name: gen-image-video
-description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON, anche con la voce generata dai testi e il kit di marca (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI con frazioni di centesimo e dizionario delle pronunce, o Gemini), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis; con --voice anche la voce confrontata col testo, trascrizione xAI a pagamento), o confrontare modelli/provider sullo stesso prompt.
+description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli) sui provider Gemini, OpenAI, x.ai, OpenRouter (inclusi ByteDance Seedream/Seedance) e fal (Kling, Seedance, Topaz). Usare quando serve generare o modificare immagini da prompt, lavorare con reference di stile (--input), generare video text-to-video o animare un'illustrazione (image-to-video, anche con ultimo fotogramma, immagini di riferimento, fotogrammi intermedi e inquadrature di Kling 4.0, o con Gemini diretto), fare spot da foto di prodotto o mascotte coerenti fra scene con preset di camera ed effetti, controllare capacità e costo di un video prima di spendere (--dry-run, --max-cost), recuperare un job video già partito senza pagarlo due volte (giv job fetch), preparare uno spot a più scene con voce fuori campo da uno storyboard JSON, anche con la voce generata dai testi e il kit di marca (giv story check, giv story run, giv story cut, anche in più formati con logo, titoli, cartello finale e musica sotto la voce), guardare fotogrammi chiave e bozze video economiche e approvare le scene prima di pagarne il definitivo (giv story run --keyframes, giv story run --bozza, giv story cut --bozza, giv story approve), generare più scene in parallelo dentro il tetto di spesa (giv story run --parallel), allungare, modificare o ingrandire una clip esistente (giv extend, giv edit anche sui video Gemini con --from, giv upscale con openrouter o fal), far parlare un personaggio da un'immagine e una voce (giv avatar, fal), rifinire in locale e gratis un video che c'è già (giv post trim, speed, freeze, reframe in 9:16, 1:1 o 4:5, overlay con logo, titoli e cartello finale, mix con musica sotto la voce e volume finale), guardare un video o uno storyboard in un foglio di contatto, estrarne un fotogramma o una GIF (giv sheet, giv frame, giv gif, in locale e gratis), esportare un video finito per Instagram, TikTok, YouTube e LinkedIn (giv export, in locale e gratis), generare la voce fuori campo da un testo (giv voice, xAI con frazioni di centesimo e dizionario delle pronunce, o Gemini), controllare un kit di marca e personaggi (giv kit check, gratis), controllare tecnicamente clip, storyboard e montati prima di consegnare (giv qc: neri, fermi, muti, volume, picco, profili dei canali, in locale e gratis; con --voice anche la voce confrontata col testo, trascrizione xAI a pagamento; con --judge il giudizio di aderenza di un video alla richiesta della scena con Gemini, a pagamento e solo su richiesta esplicita), o confrontare modelli/provider sullo stesso prompt.
 ---
 
 # giv — CLI generazione immagini e video
@@ -87,18 +87,29 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
 giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <f.json>] [--kit <kit.json>]
             [--nome <nome>]... [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
                                                 # in più trascrive la voce (xai, 0,10 $/h) e la confronta col testo
+giv qc      <video> --judge --prompt "<richiesta>" | --prompt-file <f> [--ref <immagine>] [--model <m>]
+            [--max-cost <usd>] [--dry-run] [--strict]
+                                                # giudizio di aderenza: 4 fotogrammi + richiesta a gemini, a pagamento
+                                                # (~0,002 $), solo con --judge; --dry-run mostra destinatario e dati
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio
 giv story check [--kit <kit.json>] <storyboard.json>
                                                 # valida uno storyboard e ne stima il costo (voci comprese), gratis
-giv story run [--scene <id> [--new-keyframe | --new-job | --new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
+giv story run [--scene <id> [--new-keyframe | --new-job | --new-voice]] [--voices] [--keyframes | --bozza]
+              [--parallel <n>] [--kit <kit.json>] <storyboard.json>
                                                 # genera le voci dai testi, poi le scene video e avatar, a pagamento;
                                                 # riprende da dove si era fermato; --voices solo le voci;
+                                                # --keyframes solo i fotogrammi chiave, --bozza le bozze di default.bozza
+                                                # in clip/bozza/, --parallel 1-4 scene aperte insieme (avvii in ordine);
                                                 # con controllo.tecnico controlla i file come giv qc
-giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
+giv story approve [--all] [--kit <kit.json>] <storyboard.json> [<scena>…]
+                                                # approva bozza (o fotogramma chiave) viste: con "approvazione": true
+                                                # il definitivo parte solo per quelle; gratis, nessuna rete
+giv story cut [--bozza] [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
                                                 # monta con ffmpeg le scene pronte, un file per formato
                                                 # di montaggio.formati, gratis; --export come giv export --for;
-                                                # sottotitoli "auto" dai testi, controllo.tecnico sui montati
+                                                # sottotitoli "auto" dai testi, controllo.tecnico sui montati;
+                                                # --bozza le bozze in <nome>.bozza.mp4 con la scritta BOZZA
 giv story help                                  # aiuto (su stderr); giv story <sottocomando> --help
 giv log     [-n N] [--sum-cost [--by provider|model]] [--json]   # registro (giv-log.jsonl nella cwd)
 giv presets [--json]                            # preset di camera ed effetti
@@ -177,6 +188,14 @@ canale; con uno storyboard `scenes[]` e `outputs[]` (`assente` se non ancora fat
 `--expect-*` valgono solo su un file; il cartello finale dei montati non conta fra i
 fermi); la copertina allegata alle clip di xAI non è un avviso di `streams` (resta in
 `value.cover`); `--strict` = codice 1 con un difetto, senza = 0.
+`qc --judge` (a pagamento, solo col flag; senza, e con `--judge=false`, nessun invio): dopo
+i controlli tecnici quattro fotogrammi (JPEG ≤ 768 px, senza metadati), la richiesta
+(`--prompt`/`--prompt-file`, ≤ 4000 caratteri) e il `--ref` facoltativo in una sola
+richiesta a Gemini diretto (`GEMINI_API_KEY`, `gemini-2.5-flash-lite`); JSON `judgment`
+(`verdict` `aderente`/`non aderente`/`incerto`, `recognizable`, `action`, `reasons`,
+`defects`, `not_assessable`, `message`), controllo `adherence` (non aderente o incerto =
+avviso), `judged_at`, `request`, `cost_est_usd`, `cost_usage_usd`; risposta illeggibile =
+`incerto`; esito incerto = codice 5 senza rilancio. Avvisa e basta: non rigenera.
 
 I 5xx transitori vengono ritentati da soli (2 tentativi con backoff, avviso su stderr):
 non serve gestire i retry lato agente. Nei video l'attesa del job riprova anche su 429 ed
@@ -457,6 +476,35 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    stato e su disco. Il fotogramma chiave non si rigenera mai da solo: se il suo file è
    stato cancellato la scena esce con codice 2 e chiede `--new-keyframe`. Guardare il
    nuovo fotogramma (`keyframe` nel JSON) prima del montaggio.
+   **Guardare prima di pagare il definitivo** (dalla 0.13.0; esempio in
+   `examples/spot/storyboard-approvazione.json`): nello storyboard `"approvazione": true`
+   e, per le bozze, `"default": {…, "bozza": {"modello": "alibaba/wan-3.0",
+   "risoluzione": "480p"}}` (modello obbligatorio, provider vuoto = quello del
+   definitivo). Poi, in ordine:
+   - `giv story run --keyframes storyboard.json`: solo i fotogrammi chiave (a pagamento,
+     pochi centesimi), poi guardare `foglio-approvazione.jpg`; un'immagine sbagliata si
+     rifà da sola con `--keyframes --scene s2 --new-keyframe` (col tetto conta solo lei);
+   - `giv story run --bozza storyboard.json`: le bozze economiche in `clip/bozza/`, poi
+     `giv story cut --bozza storyboard.json` (gratis: `storyboard.bozza.mp4` con la scritta
+     BOZZA, rifà solo `foglio-approvazione.jpg`). La bozza mostra inquadratura, azione e
+     tempi; un altro modello può muovere diversamente;
+   - far vedere bozze o fotogrammi a chi decide, poi `giv story approve storyboard.json s2`
+     (o `--all`; gratis, nessuna rete): registra il file visto e la ricetta del
+     definitivo; con scene indicate è tutto o niente (codice 2);
+   - `giv story check storyboard.json`: `approval` per scena (`da_preparare`,
+     `da_approvare`, `pronta`, `in_corso`, `fatta`), `finals_cost_est_usd` e
+     `drafts_cost_est_usd`; `run_cost_est_usd` conta solo i definitivi approvati;
+   - `giv story run storyboard.json`: paga solo i definitivi approvati; le altre scene in
+     `awaiting_approval`. Cambiare prompt, modello, durata, riferimenti o kit di una scena
+     ne annulla l'approvazione (va rivista e riapprovata).
+   **Più scene insieme**: `--parallel 3` (o `default.parallelo`, 1-4, di partenza 1) tiene
+   aperte fino a tre scene: avvii sempre uno alla volta e in ordine, si sovrappongono solo
+   attesa e scaricamento; il tetto conta anche le riserve delle scene aperte.
+   **Aderenza**: `"controllo": {"tecnico": true, "aderenza": true}` fa giudicare a `giv story
+   run` ogni ripresa video nuova come `giv qc --judge` (gemini, a pagamento, nel tetto;
+   spento se assente). Il giudizio resta nello stato legato alla ripresa, non si reinvia e
+   non rigenera niente: con `non aderente` decidere se rifare la scena (`--scene`, da
+   chiedere).
 6. Montaggio: `giv story cut storyboard.json` (serve `ffmpeg`), gratis e senza rete,
    quando ogni scena video ha la sua clip nello stato: codice 2 con «clip mancanti» elenca
    le scene ancora da generare. Nel blocco `montaggio`: `transizione` (`taglio` o `dissolvenza` di
@@ -651,6 +699,14 @@ Vince la scena, poi lo storyboard, poi il kit.
   doppio dal 01/01/2027: stima *probabile* di circa 0,15 $ a richiesta, costo dai token in
   `cost_usage_usd`. Kit e `giv qc` gratis; `giv qc --voice` paga solo la trascrizione
   xai, 0,10 $ per ora di audio (stima a minuti interi).
+- Giudizio di aderenza (`giv qc --judge`, `controllo.aderenza`): Gemini
+  `gemini-2.5-flash-lite`, 0,10 $ per milione di token d'ingresso e 0,40 $ d'uscita; stima
+  per eccesso (testo un token per byte, 258 token per riquadro d'immagine, uscita al limite
+  di 2048 token), circa 0,002 $ a giudizio; addebito dai token riportati. Listino da
+  riverificare prima delle prove reali.
+- Gradini prima del definitivo (0.13.0): `giv story run --keyframes` paga solo i
+  fotogrammi chiave, `--bozza` solo le bozze (es. `alibaba/wan-3.0` a 480p, 0,05 $/s invece
+  di 0,10 a 720p); `giv story approve` e `giv story cut --bozza` sono gratis.
 - Per prove ripetute usare i modelli flash/lite/mini e `--duration 4`; il modello top
   solo per l'output finale. `-n N` su openrouter costa N richieste.
 

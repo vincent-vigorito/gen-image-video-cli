@@ -44,6 +44,7 @@ type storyCutResult struct {
 	AudioCodec string   `json:"audio_codec,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
 	Format     string   `json:"format,omitempty"` // con più formati: il formato del file
+	Draft      bool     `json:"draft,omitempty"`  // --bozza: montato delle bozze, con la scritta BOZZA
 	// Exports sono i file per canale di --export (senza più formati)
 	Exports []exportItem `json:"exports,omitempty"`
 	// Controllo è il controllo dei file dopo il montaggio (controllo.tecnico)
@@ -65,7 +66,7 @@ type storyCutFormats struct {
 // generazione e senza rete; il file d'uscita dello storyboard si riscrive a
 // ogni montaggio.
 func runStoryCut(args []string) error {
-	path, only, exportSpec, kitFile, err := storyCutArgs(args)
+	path, only, exportSpec, kitFile, draft, err := storyCutArgs(args)
 	if err != nil {
 		return err
 	}
@@ -105,18 +106,22 @@ func runStoryCut(args []string) error {
 	}
 	// tutti i piani prima di montare: un problema in un formato ferma tutto
 	plans := make([]montage.Plan, len(formats))
-	var outs []string // montati ed esportazioni, controllati prima di pubblicare
+	var outs []string   // montati ed esportazioni, controllati prima di pubblicare
+	var finals []string // con --bozza: i montati definitivi, che la bozza non sostituisce
 	for i, f := range formats {
-		if plans[i], err = cutPlanFor(s, path, f); err != nil {
+		if plans[i], err = cutPlanDraft(s, path, f, draft); err != nil {
 			return err
 		}
 		plans[i].RootDir = root
 		outs = append(outs, plans[i].Output)
+		if draft {
+			finals = append(finals, s.Path(cutOutput(s, path, f, false)))
+		}
 	}
 	for k, pr := range profiles {
 		outs = append(outs, exportName(plans[sources[k]].Output, formats[sources[k]], pr))
 	}
-	if err := checkCutOutputs(s, path, outs); err != nil {
+	if err := checkCutOutputs(s, path, outs, finals...); err != nil {
 		return err
 	}
 	tool := montage.Tool{}
@@ -138,7 +143,17 @@ func runStoryCut(args []string) error {
 			return err
 		}
 		out.Warnings = append(out.Warnings, clash...)
+		out.Draft = draft
 		multi.Formats = append(multi.Formats, *out)
+	}
+	if draft {
+		// la bozza è una copia: foglio di contatto, esportazioni e controllo
+		// restano quelli del definitivo; si riscrive il foglio delle approvazioni
+		approvalSheet(s, path)
+		if formats[0] == "" {
+			return output.PrintJSON(multi.Formats[0])
+		}
+		return output.PrintJSON(multi)
 	}
 	contactSheet(s, path)
 	if len(profiles) > 0 {
@@ -251,6 +266,13 @@ func storyInputs(s *story.Storyboard, path string) []string {
 		for i := range sc.Previous {
 			takes = append(takes, &sc.Previous[i])
 		}
+		if d := sc.Draft; d != nil {
+			// bozze, in uso e sostituite
+			takes = append(takes, d.Clip)
+			for i := range d.Previous {
+				takes = append(takes, &d.Previous[i])
+			}
+		}
 		for _, t := range takes {
 			if t == nil || t.File == "" || story.IsURL(t.File) {
 				continue
@@ -258,6 +280,11 @@ func storyInputs(s *story.Storyboard, path string) []string {
 			names := []string{t.File}
 			if t == sc.Voice || t.Kind == story.TakeVoice {
 				names = append(names, voiceTimingsFile(t.File)) // tempi della voce
+			}
+			for _, j := range t.Judgements {
+				if j.Report != "" {
+					names = append(names, j.Report) // rapporto del giudizio
+				}
 			}
 			for _, n := range names {
 				if st, err := os.Stat(s.Path(n)); err == nil && st.Mode().IsRegular() {
@@ -288,8 +315,8 @@ func samePath(a, b string) bool {
 // checkCutOutputs controlla, prima di pubblicare qualcosa, le uscite di giv
 // story cut (montati per formato ed esportazioni): diverse fra loro e mai uno
 // dei file di cutProtected. Errore d'uso, nessun montaggio.
-func checkCutOutputs(s *story.Storyboard, path string, outs []string) error {
-	protected := cutProtected(s, path)
+func checkCutOutputs(s *story.Storyboard, path string, outs []string, also ...string) error {
+	protected := append(cutProtected(s, path), also...)
 	for i, o := range outs {
 		for _, p := range protected {
 			if samePath(o, p) {
@@ -461,38 +488,42 @@ func cutOne(tool montage.Tool, path string, plan *montage.Plan, format string) (
 
 // storyCutArgs legge gli argomenti di giv story cut: il file dello storyboard,
 // --formato e --export (anche dopo il file).
-func storyCutArgs(args []string) (path, format, export, kitFile string, err error) {
+func storyCutArgs(args []string) (path, format, export, kitFile string, draft bool, err error) {
 	fl := flag.NewFlagSet("story cut", flag.ExitOnError)
 	only := fl.String("formato", "", "monta solo questo formato")
 	exp := fl.String("export", "", "canali per giv export")
+	bozza := fl.Bool("bozza", false, "monta le bozze con la scritta BOZZA")
 	kitFlag := fl.String("kit", "", "kit di marca e personaggi al posto del campo kit")
 	fl.Usage = func() { fmt.Fprint(os.Stderr, storySubHelp["cut"]) }
-	const use = "uso: giv story cut [--formato <r>] [--export <canali>] <storyboard.json>"
+	const use = "uso: giv story cut [--bozza] [--formato <r>] [--export <canali>] <storyboard.json>"
 	if err := fl.Parse(args); err != nil {
-		return "", "", "", "", usageError("%v", err)
+		return "", "", "", "", false, usageError("%v", err)
 	}
 	rest := fl.Args()
 	if len(rest) == 0 {
-		return "", "", "", "", usageError(use)
+		return "", "", "", "", false, usageError(use)
 	}
 	path = rest[0]
 	if err := fl.Parse(rest[1:]); err != nil {
-		return "", "", "", "", usageError("%v", err)
+		return "", "", "", "", false, usageError("%v", err)
 	}
 	if fl.NArg() > 0 {
-		return "", "", "", "", usageError(use)
+		return "", "", "", "", false, usageError(use)
 	}
 	set := flagsSet(fl)
 	if set["formato"] && strings.TrimSpace(*only) == "" {
-		return "", "", "", "", usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
+		return "", "", "", "", false, usageError("--formato vuoto (%s)", strings.Join(story.Formati, ", "))
 	}
 	if set["export"] && strings.TrimSpace(*exp) == "" {
-		return "", "", "", "", usageError("--export vuoto (%s)", strings.Join(montage.Channels(), ", "))
+		return "", "", "", "", false, usageError("--export vuoto (%s)", strings.Join(montage.Channels(), ", "))
 	}
 	if err := checkKitFlag(fl, *kitFlag); err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", false, err
 	}
-	return path, *only, *exp, *kitFlag, nil
+	if *bozza && set["export"] {
+		return "", "", "", "", false, usageError("--bozza: niente --export, le bozze non si pubblicano")
+	}
+	return path, *only, *exp, *kitFlag, *bozza, nil
 }
 
 // cutFormats sono i formati da montare: con only quello solo (fra
@@ -530,6 +561,57 @@ func cutPlan(s *story.Storyboard, path string) (montage.Plan, error) {
 // cutPlanFor è cutPlan per il formato aspect ("9:16"…; vuoto: quello dello
 // storyboard): stesso lato corto, file <uscita>-<WxH>.mp4.
 func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) {
+	return cutPlanDraft(s, path, aspect, false)
+}
+
+// cutDraftMark è la scritta sul montato delle bozze.
+const cutDraftMark = "BOZZA"
+
+// cutOutput è il file d'uscita del montato, relativo alla cartella dello
+// storyboard: montaggio.uscita, altrimenti <nome>.mp4; con draft
+// <nome>.bozza.mp4; con aspect <…>-<WxH>.mp4.
+func cutOutput(s *story.Storyboard, path, aspect string, draft bool) string {
+	out := ""
+	if s.Montaggio != nil {
+		out = s.Montaggio.Uscita
+	}
+	if out == "" {
+		out = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ".mp4"
+	}
+	if draft {
+		ext := filepath.Ext(out)
+		out = strings.TrimSuffix(out, ext) + ".bozza" + ext
+	}
+	if aspect != "" {
+		ext := filepath.Ext(out)
+		out = strings.TrimSuffix(out, ext) + "-" + strings.ReplaceAll(aspect, ":", "x") + ext
+	}
+	return out
+}
+
+// draftClip è la clip da montare per la scena id con --bozza: la bozza in
+// uso, altrimenti il definitivo (State.ClipFile); controllata come i file
+// dello storyboard.
+func draftClip(s *story.Storyboard, st *story.State, id string) (string, error) {
+	if ss := st.Scenes[id]; ss != nil {
+		if t := ss.Current(story.TakeDraft); t != nil {
+			p, err := s.CheckFile(t.File)
+			if err != nil {
+				return "", fmt.Errorf("scena %s: bozza %w", id, err)
+			}
+			return p, nil
+		}
+	}
+	p, err := st.ClipFile(s, id)
+	if err == nil {
+		fmt.Fprintf(os.Stderr, "scena %s: nessuna bozza, monto il definitivo\n", id)
+	}
+	return p, err
+}
+
+// cutPlanDraft è cutPlanFor; con draft monta le bozze (draftClip) in
+// <nome>.bozza.mp4 con la scritta BOZZA.
+func cutPlanDraft(s *story.Storyboard, path, aspect string, draft bool) (montage.Plan, error) {
 	var p montage.Plan
 	w, h, fps, err := cutFormatFor(s, aspect)
 	if err != nil {
@@ -579,6 +661,9 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 				return p, err
 			}
 			clip, err := st.ClipFile(s, sc.ID)
+			if draft {
+				clip, err = draftClip(s, st, sc.ID)
+			}
 			if err != nil {
 				missing = append(missing, sceneMissing(st, sc.ID, err))
 				continue
@@ -641,14 +726,10 @@ func cutPlanFor(s *story.Storyboard, path, aspect string) (montage.Plan, error) 
 	if err := cutOverlays(s, m, &p); err != nil {
 		return p, usageError("%s: %v", path, err)
 	}
-	out := m.Uscita
-	if out == "" {
-		out = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ".mp4"
+	if draft {
+		p.Watermark = cutDraftMark
 	}
-	if aspect != "" {
-		ext := filepath.Ext(out)
-		out = strings.TrimSuffix(out, ext) + "-" + strings.ReplaceAll(aspect, ":", "x") + ext
-	}
+	out := cutOutput(s, path, aspect, draft)
 	p.Output, p.Root = s.Path(out), s.Dir
 	// controllo anticipato, per un errore d'uso prima del montaggio; la
 	// pubblicazione resta comunque vincolata a Root

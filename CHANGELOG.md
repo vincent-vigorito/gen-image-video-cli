@@ -4,6 +4,121 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
+## [0.13.0] - non rilasciata
+
+> **Guardare e approvare una scena prima di pagarne il definitivo.** Prima i soli
+> fotogrammi chiave (`giv story run --keyframes`), poi bozze video economiche (`--bozza`,
+> col profilo `default.bozza`) montate con la scritta BOZZA (`giv story cut --bozza`); con
+> `"approvazione": true` il definitivo parte solo per le scene approvate con `giv story
+> approve`. Le scene possono restare aperte in parallelo (`--parallel`, fino a 4) dentro lo
+> stesso tetto di spesa; il giudizio di aderenza con Gemini (`giv qc --judge`,
+> `controllo.aderenza`) confronta quattro fotogrammi con la richiesta, solo su richiesta
+> esplicita. **Senza le opzioni nuove tutto si comporta come nella 0.12.1**; storyboard,
+> kit e stati della 0.12.x restano validi e i campi JSON nuovi si aggiungono.
+
+### Aggiunto
+
+- **Solo i fotogrammi chiave: `giv story run --keyframes`.** Genera a pagamento solo i
+  `fotogramma_chiave` che mancano (quelli pronti si riusano), nessun video né voce, poi
+  `foglio-contatto.jpg` e `foglio-approvazione.jpg`. Con `--scene <id> --new-keyframe`
+  rifà una sola immagine: anche con un tetto conta solo il suo costo, stimato o dichiarato.
+- **Bozze video: `default.bozza` e `giv story run --bozza`.** Nel blocco `default`
+  `bozza` (`provider`, vuoto: quello del definitivo; `modello`, obbligatorio;
+  `risoluzione`): le bozze hanno la stessa richiesta, durata e riferimenti del definitivo,
+  file in `clip/bozza/` (`<id>-b<N>`…), stato (`draft` della scena) e spesa propri
+  (addebiti di tipo `bozza`), con la stessa riserva e lo stesso tetto di ogni richiesta. Il
+  fotogramma chiave è condiviso con il definitivo; `continua_da` parte dalla bozza della
+  scena prima. Senza `default.bozza`, `--bozza` esce con codice 2.
+- **Approvazione: `"approvazione": true` e `giv story approve`.** `giv story approve
+  <storyboard> <scena>…` (o `--all`) registra nello stato, sotto lo stesso blocco di `giv
+  story run`, il materiale visto (la bozza in uso, o il fotogramma chiave se non ci sono
+  bozze) col suo `sha256` e la ricetta del definitivo (richiesta, modelli, durata,
+  formato, riferimenti, file del kit col loro contenuto, `continua_da`). Locale e
+  gratuito. Con le scene indicate è tutto o niente (codice 2, stato invariato); `--all`
+  elenca in `skipped` le scene saltate col motivo. JSON: `material`, `approved` (`id`,
+  `take`, `file`, `sha256`, `keyframe`, `already`), `skipped`; nello stato `approval`
+  della scena. Con `approvazione: true` `giv story run` avvia il definitivo solo delle scene
+  approvate con la ricetta di adesso; le altre (né fotogramma chiave né video) sono in
+  `awaiting_approval` e su stderr col comando per approvarle. Una nuova bozza, un altro
+  fotogramma chiave o un cambio della ricetta chiedono una nuova approvazione; un cambio in
+  un'altra scena indipendente no. Le scene avatar non si approvano e partono come prima.
+- **Montato delle bozze: `giv story cut --bozza`.** Monta le bozze in uso in
+  `<nome>.bozza.mp4` (con `formati`, `<nome>.bozza-<WxH>.mp4`) con la scritta BOZZA su
+  tutto il montato e riscrive solo `foglio-approvazione.jpg` (fotogramma chiave e bozza in
+  uso di ogni scena video, con «approvata» nell'etichetta): montato definitivo, foglio di
+  contatto e controllo restano come sono. Niente `--export`; nel JSON `draft: true`.
+- **`giv story check` con bozze e approvazioni.** Per scena video `draft` (profilo, stato,
+  file e stima della bozza) e `approval` (`da_preparare`, `da_approvare`, `pronta`,
+  `in_corso`, `fatta`, motivo in `approval_note`); `run_status` `da_approvare` per i
+  definitivi che aspettano l'approvazione, non contati in `run_cost_est_usd` (la spesa
+  ancora prevista adesso); in cima `drafts_cost_est_usd`, `drafts_not_estimated` e
+  `finals_cost_est_usd` (bozze e definitivi ancora da fare).
+- **Scene in parallelo: `giv story run --parallel <n>` e `default.parallelo`.** Da 1 a 4,
+  di partenza 1 (come prima); il flag prevale sul campo. Gli avvii restano uno alla volta
+  e in ordine di storyboard, si sovrappongono solo attesa e scaricamento, e un solo
+  coordinatore scrive lo stato. Prima di ogni avvio il tetto conta spesa registrata,
+  riserve ancora aperte e stima della nuova richiesta, sul valore non arrotondato. Una
+  scena con `continua_da` aspetta il file completo della precedente, nella stessa
+  versione (bozza o definitivo). JSON: `parallel`.
+- **Giudizio di aderenza: `giv qc <video> --judge`.** Quattro fotogrammi del video (JPEG,
+  lato lungo al più 768 px, senza metadati), la richiesta della scena (`--prompt` o
+  `--prompt-file`, al più 4000 caratteri) e il riferimento facoltativo `--ref` vanno in una
+  sola richiesta a Gemini diretto (`gemini-2.5-flash-lite` di default, `--model`), **a
+  pagamento** e **solo con `--judge`**: senza il flag nessun invio. Prima dell'invio su
+  stderr destinatario, immagini, caratteri e stima; `--dry-run` mostra tutto senza
+  inviare; `--max-cost` è il tetto (stima oltre il tetto o non stimabile: codice 2, nessun
+  invio). Stima per eccesso dal listino (0,10 $ e 0,40 $ per milione di token d'ingresso e
+  d'uscita; circa 0,002 $ a giudizio), addebito dai token riportati. Il rapporto
+  `judgment` ha `verdict` (`aderente`, `non aderente`, `incerto`), `recognizable`,
+  `action`, `reasons`, `defects`, `not_assessable`, `message`; il controllo `adherence` in
+  `checks`; poi `judged_at`, `request`, `cost_est_usd`, `cost_source`, `cost_usage_usd`,
+  `cost_usage_source`. Risposta illeggibile: `incerto`. Esito incerto (redirect, errore
+  del server, rete): codice 5, riga `failed` in `giv-log.jsonl`, nessun rilancio.
+- **Aderenza nello storyboard: `"controllo": {"aderenza": true}`**, spenta se assente.
+  `giv story run` giudica a fine giro, con lo stesso servizio di `giv qc --judge`, la
+  ripresa nuova di ogni scena video (il definitivo, o la bozza con `--bozza`; con
+  `--keyframes` nessun giudizio; le avatar no), con la richiesta com'è andata al video.
+  Stima nel piano e nel tetto (con tetto un giudizio non stimabile è codice 2 prima di ogni
+  avvio), riserva prima dell'invio, addebito di tipo `giudizio`. Il giudizio resta legato
+  alla ripresa (`judgements` nello stato) e si rilegge senza reinvio; uno incerto resta
+  contato e non si rilancia. JSON: `scenes[].judgement`, `judgements`; nel controllo
+  `adherence` sulla riga della scena. Nessun giudizio rigenera una scena.
+- **Stato**: per scena `draft` (le bozze), `approval`, `charges` di ogni tipo (`clip`,
+  `fotogramma`, `voce`, `trascrizione`, `bozza`, `giudizio`) con lo `status` della riserva
+  (`aperta`, `incerta`), e `judgements` sulle riprese. Uno stato della 0.12.x si apre come
+  prima e il conto della spesa coincide.
+- **Esempio** `examples/spot/storyboard-approvazione.json`: bozze a 480p, tre scene in
+  parallelo, `approvazione` e `controllo.aderenza`.
+
+### Cosa è a pagamento
+
+- A pagamento, sempre dentro il tetto: `giv story run` (voci, fotogrammi chiave, video),
+  `--keyframes` (solo i fotogrammi chiave), `--bozza` (le bozze), la trascrizione di
+  `controllo.voce`, il giudizio di `controllo.aderenza` e `giv qc --judge`.
+- Gratuiti e senza rete: `giv story check` (legge solo il catalogo del provider), `giv
+  story approve`, `giv story cut` e `giv story cut --bozza`, `giv qc` senza `--judge` né
+  `--voice`.
+- Il giudizio manda fotogrammi e richiesta a Gemini **solo su richiesta esplicita**; nessun
+  aggiornamento lo attiva da solo.
+
+### Compatibilità
+
+- Storyboard, kit e stati della 0.12.x restano validi. Senza le opzioni nuove
+  (`--keyframes`, `--bozza`, `--parallel`, `approvazione`, `default.bozza`,
+  `default.parallelo`, `controllo.aderenza`) generazione seriale, file, richieste,
+  risultati e comandi restano quelli della 0.12.1.
+- Le riprese già fatte valgono come definitive, con la loro spesa e i job da recuperare;
+  attivare `approvazione` governa solo gli avvii futuri. `giv story check` e `giv story
+  cut` leggono i vecchi stati senza riscriverli.
+
+### Verificato dal vivo
+
+- _(dalle prove reali della 0.13.0, da completare)_
+
+### Limiti noti
+
+- _(dalle prove reali della 0.13.0, da completare)_
+
 ## [0.12.1] - 2026-11-23
 
 > **Pulizia dei rilievi più visibili della 0.12.0, a costo zero.** Il controllo tecnico non

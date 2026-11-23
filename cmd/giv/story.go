@@ -27,7 +27,7 @@ const storyTimeout = 15 * time.Minute
 // cmdStory smista i sottocomandi di giv story.
 func cmdStory(args []string) error {
 	if len(args) == 0 {
-		return usageError("uso: giv story check|run|cut <storyboard.json>")
+		return usageError("uso: giv story check|run|approve|cut <storyboard.json>")
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
@@ -37,10 +37,12 @@ func cmdStory(args []string) error {
 		return cmdStoryCheck(args[1:])
 	case "run":
 		return cmdStoryRun(args[1:])
+	case "approve":
+		return cmdStoryApprove(args[1:])
 	case "cut":
 		return cmdStoryCut(args[1:])
 	}
-	return usageError("giv story %s: sottocomando sconosciuto (check, run o cut)", args[0])
+	return usageError("giv story %s: sottocomando sconosciuto (check, run, approve o cut)", args[0])
 }
 
 // storyHelp è l'aiuto di giv story (giv story --help), su stderr come quello di giv.
@@ -49,11 +51,16 @@ const storyHelp = `giv story — video a più scene da uno storyboard JSON (form
 Uso:
   giv story check <storyboard.json>   controlla lo storyboard e ne stima il costo: nessuna
                                       generazione, gratuito
-  giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] <storyboard.json>
+  giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--keyframes | --bozza]
+                [--parallel <n>] <storyboard.json>
                                       genera a pagamento le voci dai testi, poi le scene video e
                                       avatar mancanti; stato e spesa in <nome>.stato.json
                                       accanto allo storyboard
-  giv story cut <storyboard.json>     monta con ffmpeg le scene già pronte in un solo video
+  giv story approve [--all] <storyboard.json> [<scena>…]
+                                      approva la bozza (o il fotogramma chiave) delle scene: con
+                                      approvazione nello storyboard il definitivo la aspetta
+  giv story cut [--bozza] <storyboard.json>
+                                      monta con ffmpeg le scene già pronte in un solo video
   giv story <sottocomando> --help     aiuto e flag del sottocomando
 
 Flag di giv story run (anche dopo il file):
@@ -62,8 +69,17 @@ Flag di giv story run (anche dopo il file):
   --new-job          con --scene: abbandona il job già partito della scena e ne avvia uno nuovo
   --new-voice        con --scene: rigenera anche la voce dal testo della scena
   --voices           genera solo le voci dai testi, nessun video
+  --keyframes        solo i fotogrammi chiave, nessun video
+  --bozza            le bozze video col profilo default.bozza, in clip/bozza/
+  --parallel <n>     scene tenute aperte insieme, da 1 a 4 (di partenza 1, o default.parallelo)
 
-Flag di check, run e cut:
+Flag di giv story approve:
+  --all              approva ogni scena video con materiale da vedere ed elenca le altre
+
+Flag di giv story cut:
+  --bozza            monta le bozze in <nome>.bozza.mp4 con la scritta BOZZA
+
+Flag di check, run, approve e cut:
   --kit <file>       kit di marca e personaggi al posto del campo kit dello storyboard
 
 Uscita: su stdout solo il JSON del risultato; avanzamento, avvisi ed errori su stderr.
@@ -80,7 +96,12 @@ listino (voci comprese) e costi dichiarati e, con tetto_costo_usd, li confronta 
 insieme alla spesa già registrata nello stato (<nome>.stato.json) per scene non più nello
 storyboard (removed_scenes). Dallo stato dice per scena cosa è già fatto e cosa partirebbe
 adesso (run_status: fatto, da_generare, partito, incerto, fallito, mancante) e la stima di
-ciò che giv story run lancerebbe adesso (run_cost_est_usd, run_not_estimated). Col kit
+ciò che giv story run lancerebbe adesso (run_cost_est_usd, run_not_estimated). Con
+approvazione: true dice per scena video approval (da_preparare, da_approvare, pronta,
+in_corso, fatta, motivo in approval_note), run_status da_approvare per i definitivi non
+approvati (non contati in run_cost_est_usd) e finals_cost_est_usd, i definitivi ancora da
+fare; con default.bozza la bozza di ogni scena video (draft: profilo, stima, stato) e
+drafts_cost_est_usd, le bozze ancora da fare. Col kit
 (campo kit o --kit) mostra i valori che ne vengono. Ogni problema trovato esce con codice
 2, uno per riga.
 
@@ -88,7 +109,8 @@ Flag (anche dopo il file):
   --kit <file>   kit di marca e personaggi al posto del campo kit dello storyboard
   -h, --help     questo aiuto
 `,
-	"run": `uso: giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--kit <kit.json>] <storyboard.json>
+	"run": `uso: giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--keyframes | --bozza]
+                     [--parallel <n>] [--kit <kit.json>] <storyboard.json>
 
 Genera a pagamento le voci dai testi delle scene (testo senza voce: voce/<id>-v<N>.wav
 accanto allo storyboard, prima dei video), poi le scene video e avatar dello storyboard, in
@@ -105,7 +127,8 @@ non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
 con 1. Con controllo.voce trascrive ogni voce generata (appena fatta o mai trascritta)
 e la confronta col testo come giv qc --voice: xai, a pagamento, riserva e tetto come
 ogni richiesta, una sola richiesta mai rilanciata (incerta: resta contata); avvisa e
-basta, i video proseguono.
+basta, i video proseguono. Con approvazione: true il definitivo parte solo per le scene
+video approvate (giv story approve) con la ricetta di adesso; le altre si saltano.
 
 Flag (anche dopo il file):
   --scene <id>       rifà solo questa scena video o avatar, anche fatta, incerta o fallita: la
@@ -125,10 +148,42 @@ Flag (anche dopo il file):
                      se testo o impostazioni cambiano (avviso); una incerta resta contata
                      e si rifà solo così
   --voices           solo le voci dai testi, nessun video (con --scene, solo la sua)
+  --keyframes        solo i fotogrammi chiave delle scene che ne hanno uno (quelli già
+                     pronti si riusano), poi foglio-contatto.jpg e foglio-approvazione.jpg;
+                     nessun video. Con --scene e --new-keyframe rifà solo quell'immagine:
+                     col tetto conta solo il suo costo, stimato o dichiarato
+  --bozza            le bozze video col profilo default.bozza (provider, modello e
+                     risoluzione; stessa richiesta, durata e riferimenti del definitivo)
+                     in clip/bozza/, con stato e spesa propri, riserva e tetto come ogni
+                     richiesta; poi giv story approve e giv story cut --bozza
+  --parallel <n>     scene tenute aperte insieme, da 1 a 4 (di partenza 1, o
+                     default.parallelo): gli avvii restano uno alla volta in ordine di
+                     storyboard, si sovrappongono solo attesa e scaricamento; continua_da
+                     aspetta la clip della scena precedente
   --kit <file>       kit di marca e personaggi al posto del campo kit dello storyboard
   -h, --help         questo aiuto
 `,
-	"cut": `uso: giv story cut [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
+	"approve": `uso: giv story approve [--all] [--kit <kit.json>] <storyboard.json> [<scena>…]
+
+Approva le scene video indicate (o con --all ogni scena video con materiale da vedere):
+registra in <nome>.stato.json, col blocco di giv story run, la ripresa vista, cioè la
+bozza in uso se c'è default.bozza, altrimenti il fotogramma chiave in uso, col contenuto
+del file, e la ricetta del definitivo (richiesta, modelli, durata, formato, riferimenti
+e file del kit col loro contenuto, continua_da). Con approvazione: true nello storyboard
+giv story run avvia il definitivo solo delle scene approvate; una nuova bozza, un altro
+fotogramma chiave o un cambio della ricetta chiedono una nuova approvazione, un cambio
+in un'altra scena indipendente no. Una scena senza materiale da vedere resta da
+preparare (giv story run --bozza o --keyframes); le scene avatar non si approvano e
+partono come prima. Con le scene indicate è tutto o niente (codice 2, stato invariato);
+--all salta ed elenca le altre (skipped). Uscita: le scene approvate col file visto e
+il suo sha256. Nessuna rete e nessuna spesa.
+
+Flag (anche dopo il file):
+  --all          ogni scena video con materiale da vedere; le altre in skipped col motivo
+  --kit <file>   kit di marca e personaggi al posto del campo kit dello storyboard
+  -h, --help     questo aiuto
+`,
+	"cut": `uso: giv story cut [--bozza] [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
 
 Monta con ffmpeg e ffprobe le scene nell'ordine dello storyboard (per le scene video la
 clip in uso nello stato di giv story run, poi clip e immagini) con transizione, voce (il
@@ -143,7 +198,13 @@ Riscrive anche foglio-contatto.jpg accanto allo storyboard (foglio_contatto: fal
 non farlo) e, con controllo.tecnico, controlla clip, voci e montati come giv qc
 (<nome>.controllo.json e campo controllo; avvisa e basta).
 
+Con --bozza monta le bozze in uso (clip/bozza/; senza bozza il definitivo) in
+<nome>.bozza.mp4 (con formati <nome>.bozza-<WxH>.mp4) con la scritta BOZZA su tutto il
+montato, e riscrive solo foglio-approvazione.jpg: montato definitivo, foglio di
+contatto e controllo restano come sono; niente --export.
+
 Flag (anche dopo il file):
+  --bozza             le bozze, con la scritta BOZZA, in <nome>.bozza.mp4
   --formato <r>       monta solo questo formato (16:9, 9:16, 1:1, 4:5; fra
                       montaggio.formati, se ci sono): file <nome>-<WxH>.mp4
   --export <canali>   dopo il montaggio, un file per canale come giv export
@@ -237,6 +298,11 @@ type storyCheck struct {
 	// né costo dichiarato
 	RunCostEstUSD   float64  `json:"run_cost_est_usd"`
 	RunNotEstimated []string `json:"run_not_estimated,omitempty"`
+	// quanto resta da spendere: bozze ancora da fare (con default.bozza) e
+	// definitivi ancora da fare, approvati o no (con approvazione)
+	DraftsCostEstUSD   *float64 `json:"drafts_cost_est_usd,omitempty"`
+	DraftsNotEstimated []string `json:"drafts_not_estimated,omitempty"`
+	FinalsCostEstUSD   *float64 `json:"finals_cost_est_usd,omitempty"`
 
 	exactUSD     float64 // totale con le stime non arrotondate: è quello che conta per il tetto
 	removedExact float64 // RemovedSpentUSD non arrotondata
@@ -329,6 +395,14 @@ type sceneCheck struct {
 	RunStatus     map[string]string `json:"run_status,omitempty"`
 	RunCostEstUSD *float64          `json:"run_cost_est_usd,omitempty"`
 
+	// approvazione nello storyboard (scene video): da_preparare, da_approvare,
+	// pronta, in_corso, fatta, e il motivo
+	Approval     string `json:"approval,omitempty"`
+	ApprovalNote string `json:"approval_note,omitempty"`
+	// default.bozza (scene video): profilo, stima e stato della bozza
+	// (da_generare, fatto, partito, incerto, fallito)
+	Draft *draftCheck `json:"draft,omitempty"`
+
 	length          float64 // secondi della scena nel montaggio previsti; 0 = ignota (clip senza durata)
 	voiceCheckExact float64 // VoiceCheckCostEstUSD non arrotondata
 }
@@ -401,6 +475,11 @@ func checkStory(s *story.Storyboard, path string) (*storyCheck, error) {
 		fmt.Fprintf(os.Stderr, "avviso: senza stima del costo (non contate nel totale): %s\n", strings.Join(out.NotEstimated, ", "))
 	}
 	runParts(s, st, out)
+	if s.Default.Bozza != nil {
+		if err := chk.drafts(st, out); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 
@@ -423,6 +502,7 @@ var runPartOrder = []string{partKeyframe, partVideo, partVoice, partVoiceCheck}
 var runLabels = []struct{ status, label string }{
 	{story.Fatto, "fatto"}, {runToMake, "da generare"}, {story.Partito, "job partito da recuperare"},
 	{story.Incerto, "incerto"}, {story.Fallito, "fallito sul provider"}, {runMissing, "file mancante"},
+	{apprPending, "da approvare"},
 }
 
 // runParts dice, per scena, che cosa è già fatto nello stato e che cosa giv
@@ -436,7 +516,7 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 		_, err := s.CheckFile(f)
 		return err == nil
 	}
-	var est, decl float64
+	var est, decl, finals float64
 	var making int
 	var stops []string // scene per cui giv story run si ferma prima di ogni avvio
 	for i := range out.Scenes {
@@ -453,6 +533,13 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 				video = ss.Status
 			case ss.Clip != nil && have(ss.Clip.File):
 				video = story.Fatto
+			}
+			if approvalGated(s, scene) {
+				// approvazione: giv story run lancia solo i definitivi approvati
+				c.Approval, c.ApprovalNote = approvalStatus(s, st, scene, have)
+				if video == runToMake && c.Approval != apprReady {
+					video = apprPending
+				}
 			}
 			parts[partVideo] = video
 			if c.Keyframe != nil {
@@ -528,6 +615,20 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 				notEst(c.ID + " (controllo della voce)")
 			}
 		}
+		if parts[partVideo] == runToMake || parts[partVideo] == apprPending {
+			// definitivo ancora da fare, col fotogramma chiave da fare
+			fin := 0.0
+			switch {
+			case c.CostEstUSD != nil:
+				fin += *c.CostEstUSD
+			case c.CostDeclaredUSD != nil:
+				fin += *c.CostDeclaredUSD
+			}
+			if k := c.Keyframe; k != nil && k.CostDeclaredUSD != nil && parts[partKeyframe] != story.Fatto {
+				fin += *k.CostDeclaredUSD
+			}
+			finals += fin
+		}
 		usd = round4(usd)
 		c.RunStatus, c.RunCostEstUSD = parts, &usd
 		if parts[partVideo] == story.Incerto || parts[partVoice] == story.Incerto || parts[partVoice] == runMissing ||
@@ -558,6 +659,11 @@ func runParts(s *story.Storyboard, st *story.State, out *storyCheck) {
 		fmt.Fprintf(os.Stderr, "scena %s: %s%s\n", c.ID, strings.Join(line, "; "), cost)
 	}
 	out.RunCostEstUSD = round4(round4(est) + round4(decl))
+	if s.Approvazione {
+		v := round4(finals)
+		out.FinalsCostEstUSD = &v
+		fmt.Fprintf(os.Stderr, "definitivi ancora da fare (approvati o no): stima %.4f $\n", v)
+	}
 	if making == 0 {
 		fmt.Fprintf(os.Stderr, "giv story run adesso: niente da generare (storyboard intero %.4f $)\n", out.CostTotalUSD)
 	} else {
@@ -678,6 +784,10 @@ type storyChecker struct {
 	clients      map[string]*storyClient
 	notEstimated []string
 	voices       map[string]*sceneVoice // voci dai testi, controllate e stimate
+
+	// profile è il profilo delle scene video: vuoto o story.TakeFinal il
+	// definitivo, story.TakeDraft la bozza di default.bozza (videoOptions)
+	profile string
 
 	// giv story run: cartella e nome dei file per scena, job pronti a partire
 	out    string
@@ -911,6 +1021,12 @@ func (sc *storyChecker) videoOptions(scene *story.Scene) (videoOptions, error) {
 		o.Refs = refs
 	}
 
+	if b := s.Default.Bozza; sc.profile == story.TakeDraft && b != nil {
+		// bozza (default.bozza): provider, modello e risoluzione economici; i
+		// parametri passanti sono del modello del definitivo e non valgono
+		o.Provider, o.Model, o.Resolution = pick(b.Provider, o.Provider), b.Modello, pick(b.Risoluzione, o.Resolution)
+		o.Params = nil
+	}
 	if o.Provider == "" {
 		return o, errNoVideoProvider("indica provider nel blocco default dello storyboard o nella scena:")
 	}

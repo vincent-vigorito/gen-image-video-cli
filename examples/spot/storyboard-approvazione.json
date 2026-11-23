@@ -1,0 +1,39 @@
+{
+  "titolo": "Spot di prova con bozze e approvazione: crema alle erbe",
+  "formato": { "aspect": "16:9", "risoluzione": "720p", "fps": 24 },
+  "default": {
+    "provider": "openrouter", "modello": "alibaba/wan-3.0", "audio": "off",
+    "bozza": { "modello": "alibaba/wan-3.0", "risoluzione": "480p" },
+    "parallelo": 3
+  },
+  "approvazione": true,
+  "tetto_costo_usd": 3,
+  "controllo": { "tecnico": true, "aderenza": true },
+  "riferimenti": { "prodotto": ["img/prodotto.png"] },
+  "scene": [
+    {
+      "id": "s1", "tipo": "video", "durata": 5,
+      "immagine": "img/prodotto.png", "preset": ["dolly-in"],
+      "prompt": "il vasetto di crema su un piano di legno chiaro, luce del mattino da una finestra"
+    },
+    {
+      "id": "s2", "tipo": "video", "durata": 5,
+      "usa": ["prodotto"], "preset": ["orbit"],
+      "prompt": "la camera gira attorno al vasetto, foglie di salvia fresche sul tavolo"
+    },
+    {
+      "id": "s3", "tipo": "video", "durata": 5,
+      "usa": ["prodotto"], "preset": ["static"],
+      "prompt": "una mano apre il vasetto e mostra la crema bianca e morbida"
+    },
+    {
+      "id": "chiusura", "tipo": "immagine", "durata": 3,
+      "file": "img/logo.png"
+    }
+  ],
+  "montaggio": {
+    "transizione": "dissolvenza", "uscita": "spot-approvazione.mp4",
+    "musica": { "file": "musica/musica.wav", "volume": 0.2, "sfuma_fine": 2 },
+    "logo": { "file": "img/logo.png", "posizione": "alto-destra", "larghezza": 0.12 }
+  }
+}
