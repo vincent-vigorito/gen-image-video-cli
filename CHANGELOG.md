@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti del progetto, nel formato
 [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/);
 versioning [SemVer](https://semver.org/lang/it/).
 
-## [0.12.1] - non rilasciata
+## [0.12.1] - 2026-11-23
 
 > **Pulizia dei rilievi più visibili della 0.12.0, a costo zero.** Il controllo tecnico non
 > dà più avvisi a vuoto sul cartello finale e sulla copertina delle clip; `giv story check`
