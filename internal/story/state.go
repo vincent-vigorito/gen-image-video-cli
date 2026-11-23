@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gen-image-video-cli/internal/speech"
 )
 
 // StateVersion è la versione del formato del file di stato.
@@ -92,6 +94,9 @@ type VoiceCheck struct {
 	Result  string    `json:"result,omitempty"`  // fatto: ok, avviso o difetto (parole e lingua)
 	Message string    `json:"message,omitempty"` // esito del confronto, o errore della trascrizione incerta
 	At      time.Time `json:"at"`
+	// Comparison è il riepilogo del confronto col testo (fatto; assente negli
+	// stati della 0.12.0): speech.Comparison.Summary, senza testi lunghi
+	Comparison *speech.Comparison `json:"comparison,omitempty"`
 }
 
 // Esiti di VoiceCheck.Result (gli stessi di giv qc).
@@ -355,8 +360,16 @@ func (st *State) validate() error {
 				if vc.Result != "" {
 					fail("%s voice_check: result vale solo per una trascrizione fatta", where)
 				}
+				if vc.Comparison != nil {
+					fail("%s voice_check: comparison vale solo per una trascrizione fatta", where)
+				}
 			default:
 				fail("%s voice_check: status %q sconosciuto (fatto, incerto)", where, vc.Status)
+			}
+			if c := vc.Comparison; c != nil {
+				if err := c.CheckSummary(); err != nil {
+					fail("%s voice_check comparison: %v", where, err)
+				}
 			}
 		}
 		takeOK(where+" clip", sc.Clip)
