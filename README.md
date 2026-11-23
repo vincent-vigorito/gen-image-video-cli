@@ -1410,6 +1410,9 @@ un'altra scena indipendente no.
   col comando per approvarle e l'id in `awaiting_approval`; con `--scene` una scena da
   approvare esce con codice 2. Una scena con `continua_da` da una scena che aspetta
   l'approvazione aspetta con lei. Riprese già fatte e job già partiti restano.
+  L'approvazione si ricontrolla subito prima di ogni video definitivo: un fotogramma
+  chiave rigenerato (`--scene <id> --new-keyframe`) o un file approvato cambiato nel
+  frattempo la rendono vecchia, il video non parte e la scena torna da approvare.
 - `foglio-approvazione.jpg`, accanto allo storyboard, mostra per ogni scena video il
   fotogramma chiave e la bozza in uso, con id, materiale e «approvata» nelle etichette;
   lo riscrivono `giv story run --keyframes`, `giv story run --bozza` e `giv story cut
