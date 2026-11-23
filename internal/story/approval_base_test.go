@@ -215,3 +215,53 @@ func TestBaseApprovazioneMaterialeCambiato(t *testing.T) {
 		t.Fatalf("fotogramma approvato, poi default.bozza: %v", err)
 	}
 }
+
+// continua_da: B approvata prima che A abbia la clip; A registrata e fissata
+// (PinSource): B vale; file di A sostituito o clip rigenerata: B cade; clip di
+// A senza PinSource: B cade.
+func TestBaseApprovazioneClipDiPartenza(t *testing.T) {
+	prepara := func(t *testing.T) (*Storyboard, *State, string) {
+		s, path := nuovoStoryboard(t)
+		st := newState(StatePath(path))
+		approva(t, s, st, "s2", "bozza2.mp4") // s2 continua da s1, s1 senza clip
+		if err := valida(t, s, st, "s2"); err != nil {
+			t.Fatalf("senza clip di partenza: %v", err)
+		}
+		return s, st, filepath.Dir(path)
+	}
+	registra := func(t *testing.T, s *Storyboard, st *State, dir, file, contenuto string) {
+		os.WriteFile(filepath.Join(dir, file), []byte(contenuto), 0o644)
+		st.Scene("s1").Clip = &Take{File: file}
+	}
+	t.Run("fissata", func(t *testing.T) {
+		s, st, dir := prepara(t)
+		registra(t, s, st, dir, "a1.mp4", "clip a")
+		if err := st.PinSource(s, "s1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := valida(t, s, st, "s2"); err != nil {
+			t.Fatalf("clip fissata: %v", err)
+		}
+		os.WriteFile(filepath.Join(dir, "a1.mp4"), []byte("sostituita"), 0o644)
+		if err := valida(t, s, st, "s2"); !errors.Is(err, ErrStaleApproval) {
+			t.Fatalf("file sostituito: %v", err)
+		}
+	})
+	t.Run("rigenerata", func(t *testing.T) {
+		s, st, dir := prepara(t)
+		registra(t, s, st, dir, "a1.mp4", "clip a")
+		st.PinSource(s, "s1")
+		registra(t, s, st, dir, "a2.mp4", "clip a2")
+		st.PinSource(s, "s1") // non cambia una sorgente già fissata
+		if err := valida(t, s, st, "s2"); !errors.Is(err, ErrStaleApproval) {
+			t.Fatalf("clip rigenerata: %v", err)
+		}
+	})
+	t.Run("senza PinSource", func(t *testing.T) {
+		s, st, dir := prepara(t)
+		registra(t, s, st, dir, "a1.mp4", "clip a")
+		if err := valida(t, s, st, "s2"); !errors.Is(err, ErrStaleApproval) {
+			t.Fatalf("clip non fissata: %v", err)
+		}
+	})
+}
