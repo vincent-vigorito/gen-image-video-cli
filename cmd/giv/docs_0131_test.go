@@ -22,7 +22,7 @@ func TestQR131NovitaNelReadmeENellHelp(t *testing.T) {
 	}
 }
 
-func TestQR131ChangelogEVersione(t *testing.T) {
+func TestQR131Changelog(t *testing.T) {
 	b, err := os.ReadFile("../../CHANGELOG.md")
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +30,10 @@ func TestQR131ChangelogEVersione(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^## \[0\.13\.1\]`).Match(b) {
 		t.Error("CHANGELOG senza la voce 0.13.1")
 	}
+}
+
+// la versione si imposta nel task di rilascio: rosso atteso fino ad allora.
+func TestQR131Versione(t *testing.T) {
 	so, _, code, _ := runGiv(t, nil, "--version")
 	if code != 0 || strings.TrimSpace(so) != "giv 0.13.1" {
 		t.Errorf("giv --version: code=%d out=%q", code, so)
