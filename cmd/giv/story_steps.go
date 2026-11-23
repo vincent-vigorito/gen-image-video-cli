@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -194,23 +195,64 @@ func (r *storyRunner) uncertain(scene *story.Scene) bool {
 }
 
 // afterKeyframe è lo stato del definitivo dopo un fotogramma chiave finito
-// senza esito incerto, vuoto per idle: nel definitivo segue la clip (come
-// nella 0.12); con --keyframes e --bozza il definitivo resta com'era
-// (fallito, partito, incerto per la sua clip), salvo l'incerto del
-// fotogramma stesso, ora rifatto con --scene.
-func (r *storyRunner) afterKeyframe(ss *story.SceneState) string {
-	if r.mode == modeFinal {
+// senza esito incerto, vuoto per idle: nel definitivo che prosegue col video
+// segue la clip (come nella 0.12); con --keyframes, con --bozza e con
+// l'approvazione (il fotogramma nuovo la rende vecchia: nessun video) il
+// definitivo resta com'era (fallito, partito, incerto per la sua clip), salvo
+// l'incerto del solo fotogramma, ora rifatto con --scene. Una clip senza esito
+// resta tale anche dopo: la sua riserva lo dice (finalUncertain), anche dopo
+// un arresto.
+func (r *storyRunner) afterKeyframe(scene *story.Scene, ss *story.SceneState) string {
+	if r.mode == modeFinal && !approvalGated(r.s, scene) {
 		return ""
 	}
 	switch ss.Status {
 	case "", story.DaFare, story.Fatto:
 		return ""
 	case story.Incerto:
-		if ss.Keyframe == nil {
-			return ""
+		if _, clip := finalUncertain(ss); !clip {
+			return "" // senza esito solo il fotogramma
+		}
+		// stati 0.12: la riserva della clip non ha stato, ora è incerta, così
+		// il fotogramma registrato dopo non la confonde
+		if c := lastCharge(ss, story.ChargeClip); c >= 0 && ss.Charges[c].Status == "" {
+			ss.MarkUncertain(c)
 		}
 	}
 	return ss.Status
+}
+
+// finalUncertain dice quale richiesta del definitivo incerto è rimasta senza
+// esito: il fotogramma chiave (kf), la clip (clip) o entrambe, dalle rispettive
+// riserve (l'ultima di ogni tipo aperta o incerta; aperta vale incerta dopo un
+// arresto). Senza riserve con stato (stati 0.12, risposta arrivata senza file
+// salvato) è senza esito l'ultima richiesta registrata; senza nessuna, la
+// clip.
+func finalUncertain(ss *story.SceneState) (kf, clip bool) {
+	if ss.Status != story.Incerto {
+		return false, false
+	}
+	k, c := lastCharge(ss, story.ChargeKeyframe), lastCharge(ss, story.ChargeClip)
+	kf = k >= 0 && ss.Charges[k].Status != ""
+	clip = c >= 0 && ss.Charges[c].Status != ""
+	if kf || clip {
+		return kf, clip
+	}
+	if k > c {
+		return true, false
+	}
+	return false, true
+}
+
+// lastCharge è l'indice dell'ultima generazione di tipo kind della scena, -1
+// se non c'è.
+func lastCharge(ss *story.SceneState, kind string) int {
+	for i := len(ss.Charges) - 1; i >= 0; i-- {
+		if ss.Charges[i].Kind == kind {
+			return i
+		}
+	}
+	return -1
 }
 
 // keyframeIdle è lo stato del definitivo dopo il fotogramma chiave (after di
@@ -245,7 +287,7 @@ func (r *storyRunner) gate() error {
 			keep = append(keep, scene)
 			continue
 		}
-		r.await(scene.ID, why)
+		r.await(scene.ID, "niente fotogramma chiave né video", why)
 	}
 	r.order = keep
 	return nil
@@ -268,14 +310,62 @@ func (r *storyRunner) gateWhy(scene *story.Scene) (string, error) {
 	return strings.TrimPrefix(err.Error(), "scena "+scene.ID+": "), nil
 }
 
-// await registra la scena come da approvare: nessuna richiesta, fuori dal
-// conto delle richieste da fare, elencata in awaiting_approval.
-func (r *storyRunner) await(id, why string) {
+// await registra la scena come da approvare: nessuna richiesta (what dice
+// cosa non parte), fuori dal conto delle richieste da fare, elencata in
+// awaiting_approval.
+func (r *storyRunner) await(id, what, why string) {
 	r.waiting[id], r.sent[id] = true, true
 	delete(r.judgeEst, id)
 	r.thisRun[id] = "da approvare"
 	r.man.AwaitingApproval = append(r.man.AwaitingApproval, id)
-	fmt.Fprintf(os.Stderr, "scena %s: da approvare, niente fotogramma chiave né video (%s): giv story approve %s %s\n", id, why, r.path, id)
+	fmt.Fprintf(os.Stderr, "scena %s: da approvare, %s (%s): giv story approve %s %s\n", id, what, why, r.path, id)
+}
+
+// lastGate ricontrolla l'approvazione subito prima della riserva di ogni video
+// definitivo: un fotogramma chiave rigenerato in questa esecuzione
+// (--new-keyframe, made) o un file cambiato nel frattempo la rendono vecchia.
+// Se non vale più il video non parte e la scena aspetta la nuova
+// approvazione, fuori dal conto (true).
+func (r *storyRunner) lastGate(scene *story.Scene, made bool) bool {
+	if r.mode != modeFinal {
+		return false
+	}
+	err := definitiveGate(r.s, r.st, scene)
+	if err == nil {
+		return false
+	}
+	what := "nessun video"
+	if made {
+		what = "fotogramma chiave nuovo da vedere, nessun video"
+	}
+	r.await(scene.ID, what, strings.TrimPrefix(err.Error(), "scena "+scene.ID+": "))
+	return true
+}
+
+// otherJobs valida offline, senza chiave, i job dell'altra serie di riprese
+// di ogni scena dello stato (la bozza nel definitivo, con --keyframes e con
+// --voices; il definitivo con --bozza), che questa esecuzione non recupera:
+// con un job non valido nello stato non parte nessun avvio, come per quelli
+// da recuperare (preflight).
+func (r *storyRunner) otherJobs() []error {
+	var errs []error
+	for _, id := range slices.Sorted(maps.Keys(r.st.Scenes)) {
+		ss := r.st.Scenes[id]
+		if ss == nil {
+			continue
+		}
+		other, name := ss.Draft, "bozza"
+		if r.drafts(id) {
+			other, name = &ss.Track, "definitivo"
+		}
+		if other == nil || other.Job == nil {
+			continue
+		}
+		if err := r.validJob(other.Job, true); err != nil {
+			errs = append(errs, fmt.Errorf("scena %s (%s): %w", id, name, err))
+		}
+	}
+	return errs
 }
 
 // regate ricontrolla, subito prima del suo avvio, il definitivo di una scena
@@ -291,7 +381,7 @@ func (r *storyRunner) regate(scene *story.Scene) (skip bool, err error) {
 	if err != nil || why == "" {
 		return false, err
 	}
-	r.await(scene.ID, why)
+	r.await(scene.ID, "niente fotogramma chiave né video", why)
 	return true, nil
 }
 
