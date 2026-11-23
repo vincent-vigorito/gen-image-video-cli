@@ -24,7 +24,7 @@ const (
 	// Provider è l'unico destinatario del giudizio: Gemini diretto.
 	Provider = "gemini"
 	// DefaultModel è il modello visivo predefinito.
-	DefaultModel = "gemini-2.5-flash-lite"
+	DefaultModel = "gemini-3.5-flash-lite"
 	// MaxOutputTokens è il limite dei token d'uscita (ragionamento compreso)
 	// che va in ogni richiesta: lo stesso della stima.
 	MaxOutputTokens = 2048
