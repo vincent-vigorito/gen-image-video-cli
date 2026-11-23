@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -82,9 +81,6 @@ func num(m map[string]any, k string) float64 {
 	return f
 }
 
-const clipDone = `{"status":"fatto","clip":{"file":"clip/%s.mp4","job_id":"j","done":"2026-01-01T00:00:00Z"}`
-const voiceDone = `,"voice":{"kind":"","file":"voce/%s.wav","done":"2026-01-01T00:00:00Z"},"voice_status":"fatto"`
-
 func (e *doneEnv) writeState(t *testing.T, scenes string) {
 	t.Helper()
 	if err := os.WriteFile(e.statePath(), []byte(`{"version":1,"scenes":{`+scenes+`}}`), 0o600); err != nil {
@@ -93,20 +89,16 @@ func (e *doneEnv) writeState(t *testing.T, scenes string) {
 }
 
 func (e *doneEnv) fullState(t *testing.T) {
-	e.file(t, "clip/s1.mp4")
-	e.file(t, "clip/s2.mp4")
-	e.file(t, "clip/s3.mp4")
-	e.file(t, "voce/s1.wav")
-	e.file(t, "voce/s3.wav")
-	e.writeState(t, strings.ReplaceAll(`"s1":`+clipDone+voiceDone+`},"s2":`+clipDone+`},"s3":`+clipDone+voiceDone+`}`, "%s", "X"))
-	// i nomi file per scena
-	b, _ := os.ReadFile(e.statePath())
-	s := string(b)
-	for _, id := range []string{"s1", "s2", "s3"} {
-		s = strings.Replace(s, "clip/X.mp4", "clip/"+id+".mp4", 1)
-		s = strings.Replace(s, "voce/X.wav", "voce/"+id+".wav", 1)
+	for _, f := range []string{"clip/s1.mp4", "clip/s2.mp4", "clip/s3.mp4", "voce/s1.wav", "voce/s3.wav"} {
+		e.file(t, f)
 	}
-	os.WriteFile(e.statePath(), []byte(s), 0o600)
+	clip := func(id string) string {
+		return `{"status":"fatto","clip":{"file":"clip/` + id + `.mp4","job_id":"j","done":"2026-01-01T00:00:00Z"}`
+	}
+	voice := func(id string) string {
+		return `,"voice":{"file":"voce/` + id + `.wav","done":"2026-01-01T00:00:00Z"},"voice_status":"fatto"}`
+	}
+	e.writeState(t, `"s1":`+clip("s1")+voice("s1")+`,"s2":`+clip("s2")+`},"s3":`+clip("s3")+voice("s3"))
 }
 
 // senza stato: tutto da fare, ciò che parte = stima dell'intero storyboard.
