@@ -155,7 +155,8 @@ type storyRunManifest struct {
 	// sono quelli delle bozze); vuoto per il definitivo
 	Mode string `json:"mode,omitempty"`
 	// AwaitingApproval sono le scene il cui definitivo aspetta giv story
-	// approve (approvazione nello storyboard): né fotogramma né video
+	// approve (approvazione nello storyboard): né fotogramma né video; con
+	// --bozza le scene la cui bozza, a fine giro, aspetta l'approvazione
 	AwaitingApproval []string `json:"awaiting_approval,omitempty"`
 	// Judgements sono i giudizi di aderenza (controllo.aderenza) con esito in
 	// questa esecuzione
@@ -376,6 +377,8 @@ func runStory(ctx context.Context, path string, o storyRunOptions) (*storyRunMan
 	// controllo.aderenza: le riprese nuove (o mai giudicate) si giudicano a
 	// fine giro, una richiesta per ripresa; avvisa e basta
 	r.judgeScenes(ctx)
+	// --bozza: le scene la cui bozza ora aspetta l'approvazione
+	r.draftsAwaiting()
 	r.summary()
 	r.man.voiceChecks = r.voiceChecks
 	return &r.man, r.stopped(nil)

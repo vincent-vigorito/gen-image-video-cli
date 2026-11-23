@@ -321,6 +321,24 @@ func (r *storyRunner) await(id, what, why string) {
 	fmt.Fprintf(os.Stderr, "scena %s: da approvare, %s (%s): giv story approve %s %s\n", id, what, why, r.path, id)
 }
 
+// draftsAwaiting elenca in awaiting_approval, a fine giro --bozza, le scene
+// del giro la cui bozza ora aspetta giv story approve (approvalStatus da
+// approvare: mai approvata o approvazione non più valida), come le elenca
+// giv story check. Locale: nessuna richiesta.
+func (r *storyRunner) draftsAwaiting() {
+	if r.mode != modeDraft {
+		return
+	}
+	for _, scene := range r.order {
+		if !approvalGated(r.s, scene) {
+			continue
+		}
+		if st, _ := approvalStatus(r.s, r.st, scene, r.exists); st == apprPending {
+			r.man.AwaitingApproval = append(r.man.AwaitingApproval, scene.ID)
+		}
+	}
+}
+
 // lastGate ricontrolla l'approvazione subito prima della riserva di ogni video
 // definitivo: un fotogramma chiave rigenerato in questa esecuzione
 // (--new-keyframe, made) o un file cambiato nel frattempo la rendono vecchia.
@@ -585,7 +603,7 @@ func (r *storyRunner) judgeScene(ctx context.Context, scene *story.Scene) error 
 		r.save()
 		return err
 	}
-	settle(ss, k, 0, res.UsageUSD)
+	settleJudge(ss, k, res.UsageUSD)
 	if i >= 0 {
 		t.Judgements[i] = res.Judgement
 	}
