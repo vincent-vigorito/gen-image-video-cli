@@ -85,26 +85,32 @@ func EstimateCost(r Request, at time.Time) (*Estimate, string) {
 	return &Estimate{USD: math.Round(exact*1e6) / 1e6, Exact: exact, InputTokens: in, OutputTokens: MaxOutputTokens, Source: src}, ""
 }
 
-// Usage sono i token riportati da Gemini (usageMetadata).
+// Usage sono i token riportati da Gemini (usageMetadata); Total 0 se non
+// riportato.
 type Usage struct {
 	Prompt     int64
 	Candidates int64
 	Thoughts   int64
+	Total      int64
 }
+
+// Output sono i token d'uscita da pagare: risposta e ragionamento, o il
+// totale riportato meno l'ingresso se è di più (per eccesso).
+func (u *Usage) Output() int64 { return max(u.Candidates+u.Thoughts, u.Total-u.Prompt) }
 
 // UsageCost è il costo di un giudizio fatto dai token riportati, alla data at
 // della richiesta: ok false senza tariffa o senza consumi validi.
 func UsageCost(model string, u *Usage, at time.Time) (usd float64, source string, ok bool) {
 	p, found := priceAt(model, at)
-	if !found || u == nil || u.Prompt <= 0 || u.Candidates < 0 || u.Thoughts < 0 {
+	if !found || u == nil || u.Prompt <= 0 || u.Candidates < 0 || u.Thoughts < 0 || u.Total < 0 {
 		return 0, "", false
 	}
-	usd = tokenCost(p, u.Prompt, u.Candidates+u.Thoughts)
+	usd = tokenCost(p, u.Prompt, u.Output())
 	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
 		return 0, "", false
 	}
 	return usd, fmt.Sprintf("token riportati da gemini: %d d'ingresso × %g $/M + %d d'uscita e ragionamento × %g $/M%s",
-		u.Prompt, p.USDPerMInputTokens, u.Candidates+u.Thoughts, p.USDPerMOutputTokens, priceDate(p)), true
+		u.Prompt, p.USDPerMInputTokens, u.Output(), p.USDPerMOutputTokens, priceDate(p)), true
 }
 
 func tokenCost(p Price, in, out int64) float64 {
