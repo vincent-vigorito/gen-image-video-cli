@@ -442,7 +442,7 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
      la clausola. Un valore sconosciuto esce con codice 2.
 3. `giv story check storyboard.json` finché non esce con 0. Con codice 2 l'errore elenca
    tutti i problemi, uno per riga. Sul JSON stampato (stdout solo JSON, avvisi su
-   stderr) guardare `cost_total_usd` (contro il tetto), `not_estimated` (generazioni senza
+   stderr) guardare `cost_total_usd` (l'intero storyboard), `not_estimated` (generazioni senza
    stima: dare un `costo_dichiarato_usd`, per esempio ai modelli a token come Seedance e
    ai fotogrammi chiave), `removed_scenes`/`removed_spent_usd` (spesa già registrata nello
    stato per scene tolte dallo storyboard: conta nel tetto) e i `warnings` di ogni scena
@@ -450,7 +450,10 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    `run_cost_est_usd` è ciò che `story run` lancerebbe adesso (a pagamento) e per scena
    `run_status` dice parte per parte (`fotogramma`, `video`, `voce`, `trascrizione`)
    `fatto`, `da_generare`, `partito` (si recupera senza pagare), `incerto`, `fallito` o
-   `mancante` (da rifare con `--scene`). Nessuna generazione, nessun costo.
+   `mancante` (da rifare con `--scene`). Col tetto il verdetto è quello di `story run`:
+   spesa già registrata più `run_cost_est_usd` oltre il tetto è codice 2; se ci sta ma
+   l'intero storyboard no, solo un avviso e `storyboard_over_cap: true` (alzare il tetto
+   prima di generare il resto). Nessuna generazione, nessun costo.
 4. Il modello va scelto fra quelli del catalogo letto in quel momento: un modello sparito
    viene rifiutato (`giv models --provider openrouter --kind video --caps`).
 5. Generazione: `giv story run storyboard.json`, a pagamento, solo dopo un check con 0 e
@@ -502,7 +505,8 @@ secondi dell'audio arrotondati per eccesso; oltre 60 s un avviso. Il costo resta
    attesa e scaricamento; il tetto conta anche le riserve delle scene aperte.
    **Aderenza**: `"controllo": {"tecnico": true, "aderenza": true}` fa giudicare a `giv story
    run` ogni ripresa video nuova come `giv qc --judge` (gemini, a pagamento, nel tetto;
-   spento se assente). Il giudizio resta nello stato legato alla ripresa, non si reinvia e
+   spento se assente; la stima è `judge_cost_est_usd` in `story check`, già dentro
+   `run_cost_est_usd`). Il giudizio resta nello stato legato alla ripresa, non si reinvia e
    non rigenera niente: con `non aderente` decidere se rifare la scena (`--scene`, da
    chiedere).
 6. Montaggio: `giv story cut storyboard.json` (serve `ffmpeg`), gratis e senza rete,

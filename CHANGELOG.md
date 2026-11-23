@@ -118,6 +118,11 @@ versioning [SemVer](https://semver.org/lang/it/).
   eccesso.
 - **`--bozza` e approvazione**: `awaiting_approval` elenca anche le scene la cui bozza
   aspetta l'approvazione.
+- **`giv story check` col tetto**: il tetto si confronta come in `giv story run` (spesa già
+  registrata nello stato più la stima del giro di adesso); l'intero storyboard oltre il
+  tetto è solo un avviso (`storyboard_over_cap`). Stima dei giudizi di aderenza
+  (`judge_cost_est_usd`) compresa in `run_cost_est_usd`; con tetto un giudizio non
+  stimabile è codice 2.
 
 ### Verificato dal vivo
 
