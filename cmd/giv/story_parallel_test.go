@@ -47,6 +47,7 @@ type parEnv struct {
 	images   int32   // POST /images
 	judges   int32   // POST generateContent (giudizio di aderenza)
 	judgeTxt string  // testo della risposta del giudice ("" = aderente)
+	judgeUse string  // usageMetadata del giudice come JSON ("" = consumi completi 1000/100/1100)
 }
 
 func newParEnv(t *testing.T, boardJSON string, noPrice bool) *parEnv {
@@ -121,9 +122,13 @@ func newParEnv(t *testing.T, boardJSON string, noPrice bool) *parEnv {
 			if txt == "" {
 				txt = `{"verdetto":"aderente","riconoscibile":"si","azione":"rispettata","motivi":["ok"],"difetti":[],"non_valutabile":[]}`
 			}
+			use := e.judgeUse
+			if use == "" {
+				use = `{"promptTokenCount":1000,"candidatesTokenCount":100,"totalTokenCount":1100}`
+			}
 			rep, _ := json.Marshal(map[string]any{
 				"candidates":    []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": txt}}}, "finishReason": "STOP"}},
-				"usageMetadata": map[string]any{"promptTokenCount": 1000, "candidatesTokenCount": 100},
+				"usageMetadata": json.RawMessage(use),
 			})
 			w.Write(rep)
 		case r.URL.Path == "/content":

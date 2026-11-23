@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -296,5 +297,112 @@ func TestIntegrazioneNuovoFotogrammaRevocaEnonAvviaVideo(t *testing.T) {
 	}
 	if !strings.Contains(out, "da approvare") || !strings.Contains(out, "awaiting_approval") {
 		t.Errorf("scena non elencata da approvare: %s", out)
+	}
+}
+
+// addebiti nello stato, per tipo.
+type chargeRow struct {
+	Kind    string  `json:"kind"`
+	CostEst float64 `json:"cost_est_usd"`
+	Cost    float64 `json:"cost_usd"`
+}
+
+func stateCharges(t *testing.T, e *parEnv) (rows []chargeRow, spent float64) {
+	t.Helper()
+	raw, err := os.ReadFile(e.statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st struct {
+		Scenes map[string]struct {
+			Charges []chargeRow `json:"charges"`
+		} `json:"scenes"`
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range st.Scenes {
+		for _, c := range s.Charges {
+			rows = append(rows, c)
+			if c.Cost > 0 {
+				spent += c.Cost
+			} else {
+				spent += c.CostEst
+			}
+		}
+	}
+	return
+}
+
+// consumi completi: l'addebito del giudizio è il costo dai consumi (1000
+// token in ingresso a 0,30 $/M e 100 in uscita a 2,50 $/M), non la stima, e
+// il totale dello stato è la somma dei costi reali.
+func TestIntegrazioneGiudizioAddebitoDaiConsumi(t *testing.T) {
+	e := newParEnv(t, ib("", `,"tetto_costo_usd":3,"controllo":{"aderenza":true}`, ps("s1", "")), false)
+	e.withJudge(t)
+	so, se, code := e.rawRun(t)
+	if code != 0 || e.posts != 1 || e.judges != 1 {
+		t.Fatalf("code=%d posts=%d giudizi=%d\n%s\n%s", code, e.posts, e.judges, so, se)
+	}
+	rows, spent := stateCharges(t, e)
+	want := 1000*0.30/1e6 + 100*2.50/1e6
+	n := 0
+	for _, c := range rows {
+		if c.Kind != "giudizio" {
+			continue
+		}
+		n++
+		if math.Abs(c.Cost-want) > 1e-9 {
+			t.Errorf("addebito del giudizio %v, atteso %v dai consumi (stima %v)", c.Cost, want, c.CostEst)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("addebiti di giudizio: %d", n)
+	}
+	if math.Abs(spent-(0.5+want)) > 1e-9 {
+		t.Errorf("totale dello stato %v, atteso video 0.5 + giudizio %v", spent, want)
+	}
+	if !strings.Contains(so, `"spent_usd"`) {
+		t.Errorf("uscita senza spent_usd")
+	}
+}
+
+// consumi incompleti (manca il conteggio in uscita): resta la stima.
+func TestIntegrazioneGiudizioConsumiIncompletiRestaLaStima(t *testing.T) {
+	e := newParEnv(t, ib("", `,"tetto_costo_usd":3,"controllo":{"aderenza":true}`, ps("s1", "")), false)
+	e.withJudge(t)
+	e.judgeUse = `{"promptTokenCount":1000}`
+	if so, se, code := e.rawRun(t); code != 0 || e.judges != 1 {
+		t.Fatalf("code=%d giudizi=%d\n%s\n%s", code, e.judges, so, se)
+	}
+	rows, _ := stateCharges(t, e)
+	for _, c := range rows {
+		if c.Kind == "giudizio" {
+			if c.CostEst <= 0 || c.Cost > 0 && math.Abs(c.Cost-c.CostEst) > 1e-12 {
+				t.Errorf("giudizio con consumi incompleti: stima %v, costo %v: deve restare la stima", c.CostEst, c.Cost)
+			}
+			return
+		}
+	}
+	t.Error("nessun addebito di giudizio nello stato")
+}
+
+// --bozza su tre scene: tutte e tre in awaiting_approval.
+func TestIntegrazioneBozzaTreSceneDaApprovare(t *testing.T) {
+	e := newParEnv(t, ib(`,"bozza":{"modello":"alibaba/wan-3.0","risoluzione":"480p"}`, `,"approvazione":true,"tetto_costo_usd":3`,
+		ps("s1", ""), ps("s2", ""), ps("s3", "")), false)
+	e.cost = 0.25
+	so, se, code := e.rawRun(t, "--bozza", "--parallel", "3")
+	if code != 0 || e.posts != 3 {
+		t.Fatalf("code=%d posts=%d\n%s\n%s", code, e.posts, so, se)
+	}
+	var out struct {
+		Awaiting []string `json:"awaiting_approval"`
+	}
+	if err := json.Unmarshal([]byte(so), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(out.Awaiting, ",") != "s1,s2,s3" {
+		t.Errorf("awaiting_approval = %v, attese s1,s2,s3", out.Awaiting)
 	}
 }
