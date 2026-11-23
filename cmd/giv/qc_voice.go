@@ -33,12 +33,13 @@ import (
 
 const qcVoiceHelp = `Controllo della voce (a pagamento: trascrizione con xai, 0,10 $ per ora di audio):
   giv qc --voice <file audio> --script "<testo>" | --script-file <f> [--pronuncia <file.json>]
-         [--kit <kit.json>] [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
+         [--kit <kit.json>] [--nome <nome>]... [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
 
   Prima i controlli tecnici del file (gratuiti), poi la trascrizione confrontata col testo
   atteso, parola per parola senza maiuscole, punteggiatura e accenti; una parola detta come
-  la sua pronuncia del dizionario vale come la parola scritta, e le parole del dizionario
-  vanno al provider come termini da riconoscere. Controlli in più:
+  la sua pronuncia del dizionario vale come la parola scritta; i nomi propri (--nome e
+  nomi del kit) e le parole del dizionario vanno al provider come termini da riconoscere
+  (al massimo 100: oltre, un avviso e i seguenti non inviati). Controlli in più:
   voice     parole diverse, mancanti e in più: nessuna ok, altrimenti avviso; meno di metà
             delle parole attese sentite uguali: difetto
   language  lingua rilevata diversa da --lang: avviso (non riportata: saltato)
@@ -47,7 +48,9 @@ const qcVoiceHelp = `Controllo della voce (a pagamento: trascrizione con xai, 0,
                          con una sola traccia audio (più tracce: codice 2, estrai quella da controllare)
   --script "<testo>"     testo atteso (come scritto); oppure --script-file <file> UTF-8
   --pronuncia <file>     pronunce JSON {"parola": "come dirla"} (sopra quelle del kit)
-  --kit <kit.json>       pronunce e lingua dal kit
+  --kit <kit.json>       pronunce, nomi propri e lingua dal kit
+  --nome <nome>          nome proprio da far riconoscere (marca, personaggio), ripetibile: al più
+                         100, ognuno al più 50 caratteri, senza caratteri di controllo
   --lang <codice>        lingua attesa (default it, o quella del kit)
   --provider xai         provider della trascrizione (solo xai)
   --max-cost <usd>       rifiuta (codice 2) se la stima supera il tetto o non è stimabile
@@ -75,6 +78,7 @@ const qcVoiceDefectRatio = 0.5
 type qcVoiceOptions struct {
 	Provider, File, Script, ScriptFile string
 	Pronuncia, Kit, Lang               string
+	Nomi                               []string // nomi propri (--nome; in giv story run quelli del kit)
 	DryRun, Strict                     bool
 	MaxCost                            *float64 // nil = nessun tetto
 	Set                                []string // flag indicati
@@ -177,7 +181,8 @@ func parseQCVoiceFlags(args []string) (qcVoiceOptions, error) {
 	fl.StringVar(&o.Script, "script", "", "testo atteso")
 	fl.StringVar(&o.ScriptFile, "script-file", "", "testo atteso da un file")
 	fl.StringVar(&o.Pronuncia, "pronuncia", "", "file JSON delle pronunce")
-	fl.StringVar(&o.Kit, "kit", "", "kit di marca: pronunce e lingua")
+	fl.StringVar(&o.Kit, "kit", "", "kit di marca: pronunce, nomi propri e lingua")
+	fl.Var((*stringList)(&o.Nomi), "nome", "nome proprio da far riconoscere (ripetibile)")
 	fl.StringVar(&o.Lang, "lang", "", "lingua attesa")
 	fl.StringVar(&o.Provider, "provider", "", "provider della trascrizione")
 	maxCost := fl.Float64("max-cost", 0, "rifiuta se il costo stimato supera questi dollari")
@@ -235,12 +240,17 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 	if n := utf8.RuneCountInString(script); n > speech.MaxTextChars {
 		return nil, usageError("testo atteso di %d caratteri: al massimo %d", n, speech.MaxTextChars)
 	}
+	names, err := speech.CheckNames("--nome", o.Nomi)
+	if err != nil {
+		return nil, usageError("%v", err)
+	}
 	dict, lang := o.Dict, o.Lang
 	if o.Kit != "" {
 		k, err := loadKit(o.Kit)
 		if err != nil {
 			return nil, err
 		}
+		names = append(names, k.Nomi...)
 		if len(k.Pronuncia) > 0 {
 			dict = dict.Merge(speech.Dictionary(maps.Clone(k.Pronuncia)))
 		}
@@ -274,7 +284,7 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 		return nil, usageError("--voice %s: %v", o.File, err)
 	}
 	req, warns, err := speech.CheckTranscribe(speech.TranscribeRequest{
-		Provider: o.Provider, Audio: audio, Format: format, Keyterms: speech.Keyterms(dict),
+		Provider: o.Provider, Audio: audio, Format: format, Keyterms: speech.Keyterms(names, dict),
 	})
 	if err != nil {
 		return nil, usageError("--voice %s: %v", o.File, err)
@@ -311,6 +321,9 @@ func prepareVoiceCheck(o qcVoiceOptions) (*voiceCheck, error) {
 		"language": lang, "keyterms": len(req.Keyterms)}
 	if len(dict) > 0 {
 		params["pronunce"] = len(dict)
+	}
+	if len(names) > 0 {
+		params["nomi"] = len(names)
 	}
 	for _, f := range []struct{ k, v string }{{"script_file", o.ScriptFile}, {"pronuncia_file", o.Pronuncia}, {"kit", o.Kit}} {
 		if f.v != "" {

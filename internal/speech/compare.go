@@ -2,8 +2,11 @@ package speech
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Confronto fra il testo atteso di una voce e la sua trascrizione (giv qc
@@ -32,6 +35,81 @@ type Comparison struct {
 	Different []WordDiff `json:"different"`
 	Missing   []WordDiff `json:"missing"`
 	Extra     []WordDiff `json:"extra"`
+	// Truncated: elenchi accorciati (solo nel riepilogo dello stato, Summary)
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// Limiti del riepilogo del confronto conservato nello stato di giv story run
+// (Summary).
+const (
+	MaxSummaryDiffs     = 20 // differenze per elenco
+	MaxSummaryWordChars = 50 // caratteri di una parola
+)
+
+// Summary è il confronto ridotto per lo stato di giv story run: gli stessi
+// campi, al più MaxSummaryDiffs differenze per elenco (le prime) e parole di
+// al più MaxSummaryWordChars caratteri, con Truncated se qualcosa è stato
+// tolto. nil per un confronto nil.
+func (c *Comparison) Summary() *Comparison {
+	if c == nil {
+		return nil
+	}
+	out := &Comparison{Words: c.Words, Matched: c.Matched, Ratio: c.Ratio, Truncated: c.Truncated}
+	cut := func(l []WordDiff) []WordDiff {
+		r := make([]WordDiff, 0, min(len(l), MaxSummaryDiffs))
+		for i, d := range l {
+			if i == MaxSummaryDiffs {
+				out.Truncated = true
+				break
+			}
+			for _, w := range []*string{&d.Expected, &d.Heard} {
+				if rs := []rune(*w); len(rs) > MaxSummaryWordChars {
+					*w, out.Truncated = string(rs[:MaxSummaryWordChars]), true
+				}
+			}
+			r = append(r, d)
+		}
+		return r
+	}
+	out.Different, out.Missing, out.Extra = cut(c.Different), cut(c.Missing), cut(c.Extra)
+	return out
+}
+
+// CheckSummary controlla un riepilogo letto dallo stato: conteggi e quota
+// coerenti, al più MaxSummaryDiffs differenze per elenco, parole non vuote
+// dove servono, di al più MaxSummaryWordChars caratteri, UTF-8 valido e senza
+// caratteri invisibili, posizioni dentro il testo atteso.
+func (c *Comparison) CheckSummary() error {
+	switch {
+	case c.Words < 0 || c.Words > MaxTextChars:
+		return fmt.Errorf("words %d fuori intervallo (da 0 a %d)", c.Words, MaxTextChars)
+	case c.Matched < 0 || c.Matched > c.Words:
+		return fmt.Errorf("matched %d fuori intervallo (da 0 a words)", c.Matched)
+	case math.IsNaN(c.Ratio) || c.Ratio < 0 || c.Ratio > 1:
+		return errors.New("ratio non è un numero da 0 a 1")
+	}
+	word := func(w string, need bool) bool {
+		if w == "" {
+			return !need
+		}
+		return need && utf8.ValidString(w) && utf8.RuneCountInString(w) <= MaxSummaryWordChars && !strings.ContainsFunc(w, invisible)
+	}
+	for _, l := range []struct {
+		name            string
+		list            []WordDiff
+		expected, heard bool
+		minPos          int
+	}{{"different", c.Different, true, true, 1}, {"missing", c.Missing, true, false, 1}, {"extra", c.Extra, false, true, 0}} {
+		if len(l.list) > MaxSummaryDiffs {
+			return fmt.Errorf("%s: %d differenze, al più %d", l.name, len(l.list), MaxSummaryDiffs)
+		}
+		for i, d := range l.list {
+			if !word(d.Expected, l.expected) || !word(d.Heard, l.heard) || d.Position < l.minPos || d.Position > c.Words {
+				return fmt.Errorf("%s n. %d non valida", l.name, i+1)
+			}
+		}
+	}
+	return nil
 }
 
 // Same dice se il testo sentito coincide con l'atteso.

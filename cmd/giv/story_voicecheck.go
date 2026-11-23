@@ -229,6 +229,9 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 	}
 	req := storyVoiceRequest(r.s, scene)
 	o := qcVoiceOptions{Provider: voiceCheckProvider, File: file, Script: req.Text, Lang: req.Language, Dict: req.Dict, client: r.transcriber}
+	if k := r.s.KitData; k != nil {
+		o.Nomi = k.Nomi // nomi propri del kit come termini da riconoscere
+	}
 	cap := r.s.TettoCostoUSD
 	if cap != nil {
 		// con un tetto la durata va misurata sui campioni e la stima c'è
@@ -296,6 +299,7 @@ func (r *storyRunner) checkVoice(ctx context.Context, scene *story.Scene) {
 		}
 	}
 	ss.VoiceCheck.Result, ss.VoiceCheck.Message = voiceCheckResult(res.checks)
+	ss.VoiceCheck.Comparison = out.Comparison.Summary() // per il controllo dopo giv story cut
 	ss.VoiceCheck.Status = story.Fatto
 	r.voiceChecks[id] = res
 	r.man.VoiceChecks++
@@ -335,6 +339,8 @@ func voiceRowChecks(row *voiceRow, ss *story.SceneState, now *storyVoiceCheck) {
 	case vc != nil && ss.Voice != nil && vc.File == ss.Voice.File && vc.Status == story.Fatto:
 		add = []montage.QCCheck{{Name: "voice", Result: vc.Result, Message: strings.TrimPrefix(vc.Message+"; ", "; ") +
 			"trascrizione del " + vc.At.UTC().Format(time.RFC3339)}}
+		// il riepilogo del confronto registrato (assente negli stati della 0.12.0)
+		row.Comparison = vc.Comparison
 	case vc != nil && ss.Voice != nil && vc.File == ss.Voice.File:
 		add = []montage.QCCheck{{Name: "voice", Result: montage.QCWarning, Skipped: true, Message: "trascrizione rimasta senza esito (contata nella spesa), non rilanciata"}}
 	default:
