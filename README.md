@@ -148,9 +148,10 @@ giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
 giv story check [--kit <kit.json>] <storyboard.json>
                                               # valida uno storyboard a più scene e ne stima il costo
 giv story run [--scene <id> [--new-keyframe] [--new-voice]] [--voices] [--keyframes | --bozza]
-              [--parallel <n>] [--kit <kit.json>] <storyboard.json>
+              [--parallel <n>] [--max-cost <usd>] [--kit <kit.json>] <storyboard.json>
                                               # genera le voci dai testi e le scene video (a pagamento), riprende da dove si era fermato;
-                                              # --keyframes solo i fotogrammi chiave, --bozza le bozze economiche, --parallel fino a 4 scene aperte
+                                              # --keyframes solo i fotogrammi chiave, --bozza le bozze economiche, --parallel fino a 4 scene aperte;
+                                              # --max-cost tetto del singolo giro, oltre a tetto_costo_usd
 giv story approve [--all] [--kit <kit.json>] <storyboard.json> [<scena>…]
                                               # approva la bozza o il fotogramma chiave visti: il definitivo parte solo per quelle (locale, gratuito)
 giv story cut [--bozza] [--formato <r>] [--export <canali>] [--kit <kit.json>] <storyboard.json>
@@ -208,7 +209,7 @@ prima o dopo.
 | `avatar` | `--image <file\|url>` e `--audio <wav\|mp3>` obbligatori · `--model standard\|pro` (default `standard`) · prompt facoltativo · `--dry-run` · `--max-cost` · `--strict` · `--timeout`; provider `fal` |
 | `job fetch` | `--provider` (gemini, xai, openrouter o fal, quello del job) · `--out` · `--name` · `--timeout <durata>` (default `15m`); l'id del job è l'unico argomento |
 | `story check` | `--kit <file>` (kit di marca e personaggi al posto del campo `kit`); il file dello storyboard è l'unico argomento; dalla 0.13.0 dice anche scene da preparare, da approvare e pronte, la spesa ancora prevista per bozze e definitivi e la stima dei giudizi di aderenza, e con `tetto_costo_usd` dà il verdetto di `story run` |
-| `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; `--new-voice` (solo con `--scene`) rigenera anche la voce dal testo della scena; `--voices` genera solo le voci dai testi, nessun video; dalla 0.13.0 `--keyframes` genera solo i fotogrammi chiave (nessun video), `--bozza` solo le bozze video col profilo `default.bozza` in `clip/bozza/` (i due flag non vanno insieme, né con le voci) e `--parallel <n>` tiene aperte fino a n scene insieme, da 1 a 4 (di partenza 1, o `default.parallelo`); `--kit <file>` come in `story check`; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
+| `story run` | `--scene <id>` rifà una sola scena; `--new-keyframe` (solo con `--scene`) rigenera anche il suo fotogramma chiave; `--new-job` (solo con `--scene`) abbandona il job già partito della scena che non si scarica più (addebito contato, job fra i precedenti) e ne avvia uno nuovo; `--new-voice` (solo con `--scene`) rigenera anche la voce dal testo della scena; `--voices` genera solo le voci dai testi, nessun video; dalla 0.13.0 `--keyframes` genera solo i fotogrammi chiave (nessun video), `--bozza` solo le bozze video col profilo `default.bozza` in `clip/bozza/` (i due flag non vanno insieme, né con le voci) e `--parallel <n>` tiene aperte fino a n scene insieme, da 1 a 4 (di partenza 1, o `default.parallelo`); dalla 0.13.1 `--max-cost <usd>` è il tetto del singolo giro, in aggiunta a `tetto_costo_usd` (vince il più stretto; oltre, o con una richiesta non stimabile, codice 2 senza nuovi avvii); `--kit <file>` come in `story check`; stato e spesa in `<nome>.stato.json` accanto allo storyboard: `tetto_costo_usd` conta la spesa registrata lì (togliendo il file il conto riparte da zero) |
 | `story approve` | le scene da approvare dopo il file dello storyboard, oppure `--all` (ogni scena video con materiale da vedere; le altre in `skipped`); `--kit <file>` come in `story check`; locale e gratuito: vedi [Approvare prima del definitivo](#approvare-prima-del-definitivo-giv-story-approve) |
 | `story cut` | `--bozza` monta le bozze in `<nome>.bozza.mp4` con la scritta BOZZA (niente `--export`); `--formato <r>` monta solo quel formato (16:9, 9:16, 1:1 o 4:5; fra `montaggio.formati`, se ci sono) in `<nome>-<WxH>.mp4`; senza, i formati di `montaggio.formati` o, se mancano, un solo file come prima; `--export <canali>` (come `giv export --for`) esporta per canale il file montato nel formato del canale, in `<nome>-<canale>-<WxH>.mp4`, al volume di `montaggio.volume` o a -14 LUFS; `--kit <file>` come in `story check` |
 | `kit check` | nessun flag: il file del kit è l'unico argomento; `giv kit help` (o `giv kit --help`) stampa l'aiuto |
@@ -974,9 +975,9 @@ definitivo](#approvare-prima-del-definitivo-giv-story-approve)).
 |---|---|
 | `titolo` | facoltativo |
 | `formato` | `aspect`, `risoluzione` e `fps` del video: valgono per le scene video che non li indicano |
-| `default` | `provider`, `modello`, `risoluzione`, `aspect`, `audio` (`on`/`off`), `seed`, `tutela`, `param` (oggetto, come `--param`) per tutte le scene video; senza `modello` vale il default di `giv video` per quel provider; senza `provider` (qui o nella scena) vale `GIV_PROVIDER`, altrimenti codice 2; dalla 0.13.0, solo qui, `bozza` (`provider`, vuoto: quello del definitivo; `modello`, obbligatorio; `risoluzione`): il profilo economico delle bozze video di `giv story run --bozza`, con la stessa richiesta, durata e riferimenti del definitivo; e `parallelo` (da 1 a 4, assente: 1): le scene che `giv story run` tiene aperte insieme, `--parallel` prevale |
+| `default` | `provider`, `modello`, `risoluzione`, `aspect`, `audio` (`on`/`off`), `seed`, `tutela`, `param` (oggetto, come `--param`) per tutte le scene video; senza `modello` vale il default di `giv video` per quel provider; senza `provider` (qui o nella scena) vale `GIV_PROVIDER`, altrimenti codice 2; dalla 0.13.0, solo qui, `bozza` (`provider`, vuoto: quello del definitivo; `modello`, obbligatorio; `risoluzione`): il profilo economico delle bozze video di `giv story run --bozza`, con la stessa richiesta, durata e riferimenti del definitivo; e `parallelo` (da 1 a 4, assente: 1; dalla 0.13.1 uno 0 scritto è codice 2): le scene che `giv story run` tiene aperte insieme, `--parallel` prevale |
 | `approvazione` | `true` (dalla 0.13.0): il definitivo di ogni scena video parte solo dopo `giv story approve` sulla sua bozza o sul suo fotogramma chiave; assente: come prima. Vedi [Approvare prima del definitivo](#approvare-prima-del-definitivo-giv-story-approve) |
-| `tetto_costo_usd` | tetto in dollari, cumulativo sullo stato: in `story check` e `story run` la spesa già registrata più la stima di ciò che partirebbe adesso oltre il tetto, o una generazione senza stima né costo dichiarato, esce con codice 2; dalla 0.13.0 l'intero storyboard oltre il tetto, se il giro di adesso ci sta, è solo un avviso (`storyboard_over_cap`) |
+| `tetto_costo_usd` | tetto in dollari, cumulativo sullo stato: in `story check` e `story run` la spesa già registrata più la stima di ciò che partirebbe adesso oltre il tetto, o una generazione senza stima né costo dichiarato, esce con codice 2; dalla 0.13.0 l'intero storyboard oltre il tetto, se il giro di adesso ci sta, è solo un avviso (`storyboard_over_cap`); per un tetto del solo giro `giv story run --max-cost` (dalla 0.13.1) |
 | `strict` | come `--strict` di `giv video`: anche i controlli di rifinitura sono errori |
 | `riferimenti` | insiemi di immagini per nome (`"prodotto": ["img/prodotto.png"]`), richiamati dalle scene con `usa` |
 | `scene` | le scene, in ordine |
@@ -1064,7 +1065,9 @@ dopo l'inizio della scena; senza vale 0.
 - **costi**: `cost_est_usd` (stime da listino, voci e trascrizioni comprese: queste anche a
   parte in `voice_cost_est_usd` e `voice_check_cost_est_usd`), `cost_declared_usd` (costi dichiarati
   dall'autore dove la stima non c'è, per esempio i modelli a token come Seedance),
-  `cost_total_usd`; le generazioni senza stima né costo dichiarato (compresi i
+  `cost_total_usd` (l'intero storyboard: voci, trascrizioni, fotogrammi chiave e video;
+  **non comprende i giudizi di aderenza**, che stanno in `judge_cost_est_usd` e in
+  `run_cost_est_usd`, vedi sotto); le generazioni senza stima né costo dichiarato (compresi i
   fotogrammi chiave) sono in `not_estimated` e non contano come zero. Con
   `tetto_costo_usd` vengono rifiutate.
 - **spesa di scene tolte**: se lo stato di `giv story run` (`<nome>.stato.json`) ha spesa
@@ -1247,7 +1250,9 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
   check` (`judge_cost_est_usd`, compresa in `run_cost_est_usd`; con `tetto_costo_usd` un
   giudizio non stimabile esce con codice 2 prima di ogni avvio),
   passa dalla stessa riserva di ogni richiesta ed è registrato nello stato con un addebito
-  di tipo `giudizio`, col costo dai consumi riportati da Gemini (la stima se mancano). Il giudizio resta legato alla ripresa giudicata (`judgements` della
+  di tipo `giudizio`, col costo dai consumi riportati da Gemini (la stima se mancano; dalla
+  0.13.1 `cost_from_usage: true` nell'addebito dice che `cost_est_usd` è il costo dai
+  consumi, assente è la stima o un addebito della 0.13.0). Il giudizio resta legato alla ripresa giudicata (`judgements` della
   ripresa nello stato: `status` `fatto` o `incerto`, `provider`, `model`, `key`, `result`,
   `message`, `at`): le esecuzioni dopo e `giv story cut` lo rileggono dallo stato **senza
   reinviarlo**, e una ripresa già giudicata con la stessa richiesta non si giudica di
@@ -1277,7 +1282,10 @@ avvio rifà i controlli di `giv story check` sul catalogo letto in quel momento:
 problema esce con codice 2 senza avviare niente. I `fotogrammi_intermedi` da URL si
 scaricano e si controllano prima del fotogramma chiave: uno non valido ferma la scena
 senza spesa. Le clip vanno in `clip/` nella cartella
-dello storyboard (`<id>-r<N>-<data>.mp4`, mai sovrascritte) e ogni clip entra nel
+dello storyboard (`<id>-r<N>-<data>.mp4`, mai sovrascritte; i fotogrammi chiave
+`<id>-r<N>-fotogramma-<data>.<ext>`; dalla 0.13.1, se un file con lo stesso nome c'è già,
+per esempio due fotogrammi della stessa scena nello stesso secondo, `-2`, `-3`… prima
+dell'estensione, come `giv image`) e ogni clip entra nel
 registro di `giv log` con `command` `story video` (`story avatar` per le scene avatar).
 Alla fine riscrive `foglio-contatto.jpg` accanto allo storyboard, come `giv sheet
 storyboard.json --labels` (salvo `"foglio_contatto": false`; un problema col foglio è solo
@@ -1334,6 +1342,22 @@ anche le scene non più nello storyboard: conta nel tetto, ma è mostrata a part
 stderr, `removed_scenes` e `removed_spent_usd`, e nel messaggio di rifiuto del tetto).
 **Cancellando il file di stato il conto riparte da zero** e le scene tornano da generare.
 
+**Tetto del singolo giro (`--max-cost <usd>`, dalla 0.13.1).** `giv story run --max-cost
+2.50 spot.json` aggiunge un tetto alla sola esecuzione di adesso, in aggiunta a
+`tetto_costo_usd`: valgono entrambi, sul valore non arrotondato, e il primo dei due
+superato ferma gli avvii (vince il più stretto). Il tetto del giro conta tutto ciò che
+questo giro riserva e addebita: fotogrammi chiave, bozze, definitivi, voci, trascrizioni e
+giudizi di aderenza. Prima del primo avvio la stima di ciò che il giro lancerebbe deve
+starci; poi, prima di ogni richiesta a pagamento, riserve e addebiti di questo giro più le
+stime ancora da fare. Oltre il tetto codice 2 senza nuovi avvii; con
+`--max-cost` una richiesta senza stima né costo dichiarato è codice 2 prima di ogni avvio,
+come con `tetto_costo_usd`. Un valore non valido (non numerico, zero o negativo, non
+finito) è codice 2 prima di tutto. Vale per il definitivo, per `--bozza` e per
+`--keyframes`, anche con `--parallel`. Il tetto del giro non si scrive né nello storyboard né
+nello stato: al giro dopo vale solo se lo si indica di nuovo. Nel JSON `run_cap_usd` (solo
+con `--max-cost`) e `run_spent_usd`, la spesa contata del giro (con `--max-cost` presente
+anche a 0).
+
 **Solo i fotogrammi chiave (`--keyframes`, dalla 0.13.0).** `giv story run --keyframes`
 genera, a pagamento, solo i `fotogramma_chiave` che mancano (quelli già pronti si
 riusano), nessun video né voce, poi riscrive `foglio-contatto.jpg` e
@@ -1342,7 +1366,9 @@ immagini prima di pagare un video. Per rifare una sola immagine venuta male, `--
 --scene s2 --new-keyframe`: anche con un tetto conta solo il costo di quell'immagine,
 stimato o dichiarato (`costo_dichiarato_usd` del fotogramma). Con `--scene` la scena deve
 essere video con `fotogramma_chiave` (altrimenti codice 2); `--keyframes` non va con
-`--bozza`, `--voices`, `--new-voice` né `--new-job`.
+`--bozza`, `--voices`, `--new-voice` né `--new-job`. Con `"approvazione": true` e senza
+`default.bozza` (si approva il fotogramma chiave), dalla 0.13.1 `awaiting_approval` elenca
+le scene il cui fotogramma aspetta `giv story approve`.
 
 **Bozze (`--bozza`, dalla 0.13.0).** Con `default.bozza` nello storyboard, `giv story run
 --bozza` genera **a pagamento** le bozze delle scene video col profilo della bozza
@@ -1358,7 +1384,7 @@ movimento diverso: la bozza mostra inquadratura, azione e tempi, non il risultat
 definitivo.
 
 **Scene in parallelo (`--parallel <n>`, dalla 0.13.0).** `--parallel 3` (o
-`default.parallelo`, da 1 a 4; il flag prevale; di partenza 1, come prima) tiene aperte
+`default.parallelo`, da 1 a 4, assente 1, uno 0 scritto è codice 2; il flag prevale; di partenza 1, come prima) tiene aperte
 fino a tre scene insieme. Gli avvii restano **uno alla volta e in ordine di storyboard**:
 si sovrappongono solo l'attesa dei job e lo scaricamento, e un solo coordinatore scrive lo
 stato. Prima di ogni avvio il tetto conta la spesa registrata, le riserve ancora aperte
@@ -1383,7 +1409,9 @@ che li ha avviati; assenti se non è partito niente), `removed_scenes` e
 servono: `mode` (`keyframes` o `bozza`; assente per il definitivo: con `bozza` stato, file
 e riprese delle scene sono quelli delle bozze), `parallel` (le scene aperte insieme, se più
 di una), `awaiting_approval` (le scene il cui definitivo aspetta `giv story approve`; con `--bozza`
-quelle la cui bozza aspetta l'approvazione) e
+quelle la cui bozza aspetta l'approvazione; dalla 0.13.1 con `--keyframes` quelle il cui
+fotogramma chiave aspetta l'approvazione, senza `default.bozza`), `run_cap_usd` (dalla
+0.13.1, il tetto del giro di `--max-cost`) e
 `judgements` (i giudizi di aderenza con esito in questa esecuzione).
 
 ### Approvare prima del definitivo: `giv story approve`
@@ -1449,6 +1477,12 @@ riprese già fatte valgono come definitive, con la loro spesa e i job da recuper
 attivare `approvazione` governa solo gli avvii futuri. `giv story check` e `giv story cut`
 leggono i vecchi stati senza riscriverli. Nessun aggiornamento attiva da solo un giudizio a
 pagamento.
+
+**Compatibilità con la 0.13.0.** Storyboard, kit e stati della 0.13.0 restano validi: senza
+`--max-cost` tutto si comporta come nella 0.13.0. Unica eccezione voluta: `"parallelo": 0`
+scritto in `default`, prima letto come 1, esce con codice 2 (togliere il campo o scrivere
+1). Gli addebiti di giudizio degli stati della 0.13.0, senza `cost_from_usage`, si leggono
+come prima.
 
 ### Montaggio: `giv story cut`
 
