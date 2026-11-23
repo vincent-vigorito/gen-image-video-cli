@@ -1236,7 +1236,7 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
   pagamento**: la stima entra nel piano e nel tetto prima del primo avvio (con
   `tetto_costo_usd` un giudizio non stimabile esce con codice 2 prima di ogni avvio),
   passa dalla stessa riserva di ogni richiesta ed è registrato nello stato con un addebito
-  di tipo `giudizio`. Il giudizio resta legato alla ripresa giudicata (`judgements` della
+  di tipo `giudizio`, col costo dai consumi riportati da Gemini (la stima se mancano). Il giudizio resta legato alla ripresa giudicata (`judgements` della
   ripresa nello stato: `status` `fatto` o `incerto`, `provider`, `model`, `key`, `result`,
   `message`, `at`): le esecuzioni dopo e `giv story cut` lo rileggono dallo stato **senza
   reinviarlo**, e una ripresa già giudicata con la stessa richiesta non si giudica di
@@ -1370,7 +1370,8 @@ che li ha avviati; assenti se non è partito niente), `removed_scenes` e
 `removed_spent_usd` (le scene tolte, se ce ne sono) e `cap_usd`. Dalla 0.13.0, quando
 servono: `mode` (`keyframes` o `bozza`; assente per il definitivo: con `bozza` stato, file
 e riprese delle scene sono quelli delle bozze), `parallel` (le scene aperte insieme, se più
-di una), `awaiting_approval` (le scene il cui definitivo aspetta `giv story approve`) e
+di una), `awaiting_approval` (le scene il cui definitivo aspetta `giv story approve`; con `--bozza`
+quelle la cui bozza aspetta l'approvazione) e
 `judgements` (i giudizi di aderenza con esito in questa esecuzione).
 
 ### Approvare prima del definitivo: `giv story approve`

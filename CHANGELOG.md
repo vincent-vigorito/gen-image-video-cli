@@ -111,13 +111,46 @@ versioning [SemVer](https://semver.org/lang/it/).
   attivare `approvazione` governa solo gli avvii futuri. `giv story check` e `giv story
   cut` leggono i vecchi stati senza riscriverli.
 
+### Corretto dopo le prove
+
+- **Addebito del giudizio di aderenza**: nello stato e nella spesa del giro di `giv story
+  run` il giudizio conta il costo dai consumi riportati da Gemini, non più la stima per
+  eccesso.
+- **`--bozza` e approvazione**: `awaiting_approval` elenca anche le scene la cui bozza
+  aspetta l'approvazione.
+
 ### Verificato dal vivo
 
-- _(dalle prove reali della 0.13.0, da completare)_
+Prove del 23/11/2026, 3,10 $ in tutto.
+
+- I nomi del kit mandati come parole da riconoscere correggono la trascrizione di
+  «Swerpify» (xAI).
+- `giv qc --judge` con `gemini-3.5-flash-lite` dà `aderente` sulla richiesta vera e `non
+  aderente`, con il motivo giusto, su un dettaglio cambiato: circa 0,002 $ a giudizio dai
+  consumi.
+- Un fotogramma chiave dal kit (0,05 $).
+- Tre bozze in parallelo con `alibaba/wan-3.0` via OpenRouter, aperte insieme: 0,48 $
+  l'una addebitati contro 0,80 $ stimati.
+- Montato delle bozze con la scritta BOZZA.
+- Approvazione di una scena e definitivo solo per quella (Veo 3.1 via OpenRouter, 8 s,
+  1,60 $), con le altre lasciate «da approvare».
+- Giudizio sul definitivo, che ha segnalato a ragione la scritta del prodotto sparita.
 
 ### Limiti noti
 
-- _(dalle prove reali della 0.13.0, da completare)_
+- Veo non è risultato attivo sull'API Gemini diretta: il definitivo è stato provato via
+  OpenRouter.
+- `giv story run` non ha un tetto per singolo giro: vale `tetto_costo_usd` dello
+  storyboard.
+- La bozza anticipa soggetto e inquadratura, non i difetti del definitivo.
+- Con l'approvazione sul fotogramma chiave (senza profilo di bozza) `--keyframes` non
+  elenca le scene da approvare.
+- Due fotogrammi chiave della stessa scena generati nello stesso secondo collidono sul
+  nome del file.
+- `"parallelo": 0` esplicito in `default` non è segnalato.
+- Il costo reale del giudizio sta nel campo `cost_est_usd` dell'addebito.
+- Alcune bozze arrivano con misure leggermente diverse da quelle richieste e con una
+  traccia audio anche ad audio spento.
 
 ## [0.12.1] - 2026-11-23
 
