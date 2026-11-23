@@ -285,3 +285,85 @@ func TestJudgeUsoIncompletoNonAbbassaIlCosto(t *testing.T) {
 		t.Errorf("costo reale %v sotto la stima %v con uso incompleto", *o.Usage, o.Est)
 	}
 }
+
+func judgeLogLines(t *testing.T, e *judgeEnv) []map[string]any {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(e.dir, "giv-log.jsonl"))
+	if err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if l == "" {
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) != nil {
+			t.Fatalf("riga di registro non JSON: %s", l)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// CLI-1019: modello predefinito disponibile, con tariffa: la stima del dry-run
+// con tetto esiste (circa 0,0079 $) e usa gemini-3.5-flash-lite.
+func TestJudgeModelloPredefinitoConTariffa(t *testing.T) {
+	e := newJudgeEnv(t, geminiText(judgeVerdict("aderente", "")))
+	out, se, code := judgeRun(t, "--video", e.video, "--judge", "--prompt", "x", "--dry-run", "--max-cost", "1")
+	if code != 0 {
+		t.Fatalf("code=%d %s", code, se)
+	}
+	var o struct {
+		Model string   `json:"model"`
+		Est   *float64 `json:"cost_est_usd"`
+	}
+	json.Unmarshal([]byte(out), &o)
+	if o.Model != "gemini-3.5-flash-lite" || o.Est == nil || *o.Est <= 0 || *o.Est > 0.05 {
+		t.Errorf("modello=%q stima=%v", o.Model, o.Est)
+	}
+	if e.hits() != 0 {
+		t.Errorf("invii in dry-run: %d", e.hits())
+	}
+}
+
+// CLI-1019: errore certo 4xx = una riga di errore a costo zero, senza corpo
+// del provider ne' chiave; 5xx = riga failed e codice 5.
+func TestJudgeRifiutoCertoRegistraRigaACostoZero(t *testing.T) {
+	e := newJudgeEnv(t, func(w http.ResponseWriter) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":{"message":"SEGRETO-DEL-PROVIDER model gone"}}`))
+	})
+	_, se, code := judgeRun(t, "--video", e.video, "--judge", "--prompt", "x")
+	if code == 0 {
+		t.Fatalf("atteso errore, code=%d", code)
+	}
+	lines := judgeLogLines(t, e)
+	if len(lines) != 1 {
+		t.Fatalf("righe di registro: %d", len(lines))
+	}
+	l := lines[0]
+	raw, _ := json.Marshal(l)
+	if l["status"] != "error" || strings.Contains(string(raw), "SEGRETO-DEL-PROVIDER") || strings.Contains(string(raw), "fake-key-xyz") ||
+		strings.Contains(se, "fake-key-xyz") {
+		t.Errorf("riga: %s", raw)
+	}
+	if v, ok := l["cost_est_usd"].(float64); ok && v != 0 {
+		t.Errorf("costo non zero: %v", v)
+	}
+}
+
+func TestJudgeErrore5xxRestaIncerto(t *testing.T) {
+	e := newJudgeEnv(t, func(w http.ResponseWriter) { w.WriteHeader(503) })
+	_, _, code := judgeRun(t, "--video", e.video, "--judge", "--prompt", "x")
+	if code != 5 {
+		t.Fatalf("code=%d", code)
+	}
+	if e.hits() != 1 {
+		t.Errorf("invii: %d", e.hits())
+	}
+	lines := judgeLogLines(t, e)
+	if len(lines) != 1 || lines[0]["status"] != "failed" {
+		t.Errorf("registro: %v", lines)
+	}
+}
