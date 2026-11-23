@@ -181,7 +181,7 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
                                               # controllo tecnico: durata, misure, neri, fermi, muti, volume,
                                               # profilo dei canali (locale con ffprobe e ffmpeg, gratuito)
 giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <file.json>] [--kit <kit.json>]
-            [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
+            [--nome <nome>]... [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
                                               # controllo della voce: trascrizione confrontata col testo (xai, a pagamento)
 giv version
 ```
@@ -211,7 +211,7 @@ prima o dopo.
 | `gif` | `--video <file>` obbligatorio · `--start <s>` · `--end <s>` · `--width <px>` (default 480) · `--fps <n>` (default 12) · `--out` · `--name` · `--dry-run` |
 | `export` | `--video <file>` obbligatorio · `--for <canali>` obbligatorio: `instagram`, `tiktok`, `youtube`, `linkedin` separati da virgole, ognuno col formato facoltativo `<canale>:<formato>` (`9:16`, `1:1`, `4:5`, `16:9`; predefiniti: 9:16 per Instagram (Reel) e TikTok, 16:9 per YouTube e LinkedIn; es. `instagram:4:5`) · `--fit crop\|pad\|blur` (default `crop`) · `--focus <x>[,<y>]` (solo con `crop`, da 0 a 1, default centro) · `--loudness <lufs>\|off` (default -14 LUFS, convenzione dei social) · `--out` · `--name` (file `<nome>-<canale>-<formato>.mp4`) · `--dry-run`. Misure 1080x1920, 1080x1080, 1080x1350, 1920x1080; H.264 e AAC 48 kHz, moov in testa; durata fuori dai limiti del canale (Instagram 3 s-15 min, TikTok 10 min, YouTube 15 min e Shorts 3 min, LinkedIn 3 s-10 min) = codice 2 prima di scrivere; gratuito, nessuna chiamata a provider |
 | `qc` | file o storyboard come argomento · `--expect-duration <s>` · `--expect-size <LxA>` · `--expect-fps <n>` · `--expect-audio on\|off` · `--expect-loudness <lufs>` (attese, solo per un file) · `--for <canali>` (come `giv export`) · `--strict` (un difetto = codice 1) · soglie `--black-min <s>` (default 0.5) · `--freeze-min <s>` (2) · `--freeze-noise <dB>` (-60) · `--silence-min <s>` (2) · `--silence-noise <dB>` (-50): vedi [Controllo tecnico](#controllo-tecnico-giv-qc) |
-| `qc --voice` | `--voice <file audio>` · `--script "<testo>"` oppure `--script-file <file>` · `--pronuncia <file.json>` · `--kit <kit.json>` · `--lang <codice>` (default `it`) · `--provider xai` · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Controllo della voce](#controllo-della-voce-giv-qc---voice) |
+| `qc --voice` | `--voice <file audio>` · `--script "<testo>"` oppure `--script-file <file>` · `--pronuncia <file.json>` · `--kit <kit.json>` · `--nome <nome>` (ripetibile) · `--lang <codice>` (default `it`) · `--provider xai` · `--max-cost <usd>` · `--dry-run` · `--strict`: vedi [Controllo della voce](#controllo-della-voce-giv-qc---voice) |
 
 Flag di `giv video` (i valori ammessi dipendono dal modello: vedi
 [Video: capacità, costi e preset](#video-capacità-costi-e-preset)):
@@ -585,8 +585,9 @@ giv voice --voices --provider gemini
   2027. Non è un massimo garantito (non è confermato che l'API rispetti il limite): la
   stima è **probabile** (`cost_source`), con un avviso su stderr, e **con `--max-cost`
   gemini esce con codice 2** prima di qualsiasi chiamata (usa xai o togli il tetto).
-  Dopo la generazione il manifest ha anche il costo dai token riportati o, se mancano,
-  dalla durata misurata (`cost_usage_usd`). `--dry-run` stampa la richiesta e la stima
+  Dopo la generazione il manifest ha anche il costo della chiamata (`cost_usage_usd` e
+  `cost_usage_source`): con gemini dai token riportati o, se mancano, dalla durata
+  misurata; con xai calcolato da giv sui caratteri del testo inviato e sul listino. `--dry-run` stampa la richiesta e la stima
   senza chiamare nessuno; `--max-cost` rifiuta con codice 2 se la stima supera il tetto
   o non è stimabile.
 - **una sola richiesta, mai ripetuta**: un esito incerto (redirect, errore del server,
@@ -830,8 +831,12 @@ giv qc --voice out/s1-voce.wav --script-file testi/s1.txt --kit kit/argo.json --
 - Il file (`wav`, `mp3`, `ogg`, `flac`, `aac`, `m4a`, `mp4`, al massimo 100 MiB, con **una sola traccia
   audio**: con più tracce codice 2 prima di ogni richiesta, anche senza tetto; estrai quella
   da controllare con `ffmpeg -i <file> -map 0:a:<n> -c copy voce.m4a`) va al provider come ultimo campo del caricamento, col nome generico `audio.<estensione>`;
-  prima i termini da riconoscere (`keyterm`): le parole scritte del dizionario (al massimo
-  100, da 50 caratteri). La lingua non si invia: si controlla quella rilevata.
+  prima i termini da riconoscere (`keyterm`): i nomi propri (`--nome`, ripetibile, poi il
+  campo `nomi` del kit), poi le parole scritte del dizionario, senza ripetizioni; al massimo
+  100 da 50 caratteri (oltre, un avviso e i seguenti non inviati). Un `--nome` vuoto, oltre
+  50 caratteri, con caratteri di controllo, o più di 100 escono con codice 2. Che i nomi
+  correggano davvero la trascrizione di un nome come «Swerpify» non è ancora verificato dal
+  vivo. La lingua non si invia: si controlla quella rilevata.
 - Il confronto è parola per parola, senza maiuscole, punteggiatura e accenti; una parola
   detta come la sua pronuncia (`--pronuncia`, o le pronunce del kit sotto) vale come la
   parola scritta. In `comparison` le parole `different` (attesa e sentita), `missing` e
@@ -1121,13 +1126,15 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
 - Con `controllo.voce` `giv story run` trascrive ogni voce **generata da giv** appena
   fatta (prima dei video), o già fatta e mai trascritta, e la confronta col testo della
   scena come [`giv qc --voice`](#controllo-della-voce-giv-qc---voice) (xai, lingua e
-  pronunce del blocco `parlato`; i file `voce` delle scene non si trascrivono: per quelli
+  pronunce del blocco `parlato`, nomi propri del campo `nomi` del kit; i file `voce` delle scene non si trascrivono: per quelli
   `giv qc --voice`). Si carica solo `voce/<id>-v<N>.wav` della scena, file normale in una
   cartella `voce` vera (niente link): uno stato che indica un altro file salta la
   trascrizione con un avviso. Serve `XAI_API_KEY` (senza, codice 2 prima di ogni avvio). La riga
   della voce in `voices[]` porta i controlli `voice` e `language`, `transcript` e
   `comparison`; nelle esecuzioni dopo, e in `giv story cut`, l'esito registrato nello
-  stato. Ogni trascrizione è **a pagamento** (0,10 $ l'ora, al minuto per eccesso): la
+  stato, con il riepilogo del confronto in `comparison` (stessi campi, al più 20 parole
+  per elenco da 50 caratteri, `truncated` se accorciato; assente per le voci controllate
+  con la 0.12.0). Ogni trascrizione è **a pagamento** (0,10 $ l'ora, al minuto per eccesso): la
   stima entra nel piano e nel tetto (`voice_check_cost_est_usd` in `story check`), prima
   della richiesta la spesa registrata più la trascrizione più le generazioni ancora da
   fare non deve superare `tetto_costo_usd` (sul valore non arrotondato; altrimenti la
@@ -1137,7 +1144,7 @@ storyboard), `warnings` e `file`. Avvisi e difetti si elencano anche su stderr.
   si ritrascrive solo se cambia il file, con `--new-voice`, o a mano con `giv qc
   --voice`); rifiutata (4xx) o col caricamento non completo non conta e si riprova al
   giro dopo. Nello stato la scena ha `voice_check` (`file`, `status` `fatto` o
-  `incerto`, `result`, `message`, `at`). Anche qui il controllo avvisa e basta: una voce
+  `incerto`, `result`, `message`, `at` e, per una trascrizione fatta, `comparison`). Anche qui il controllo avvisa e basta: una voce
   con parole diverse non si rigenera; con `strict` un difetto (meno di metà delle parole
   sentite uguali) fa uscire con 1. `controllo.voce` senza `controllo.tecnico` controlla
   solo le voci.
@@ -1389,7 +1396,11 @@ giv kit help                            # aiuto; anche giv kit check --help
   `velocita` (da 0,7 a 1,5) e `stile` (a parole).
 - **`pronuncia`**: al più 200 parole (al più 100 caratteri), ognuna con la sua pronuncia
   (al più 128), su una riga; vuoto nell'esempio.
-- Serve almeno uno fra `marca`, `personaggi`, `voce` e `pronuncia`; un campo sconosciuto,
+- **`nomi`** (facoltativo, es. `"nomi": ["Swerpify", "ARGO"]`): i nomi propri (marca, prodotti, personaggi) che il controllo
+  della voce (`giv qc --voice --kit`, `controllo.voce` di `giv story run`) manda alla
+  trascrizione come termini da riconoscere; al più 100, ognuno da 1 a 50 caratteri, senza
+  caratteri di controllo né ripetizioni a meno delle maiuscole.
+- Serve almeno uno fra `marca`, `personaggi`, `voce`, `pronuncia` e `nomi`; un campo sconosciuto,
   un valore fuori dai limiti o un file del kit oltre 1 MiB escono con codice 2.
 
 **File.** Il kit è in sola lettura e chiuso nella sua cartella (quella del file JSON):
@@ -1414,7 +1425,7 @@ che xAI ignora) restano avvisi.
 Il JSON su stdout ha `kit`, `files` (per file `field`, `file`, `kind` fra `logo`, `font`,
 `musica` e `riferimento`, `bytes`, e secondo il tipo `width`, `height`, `alpha`,
 `font_family`, `duration_s`, `codec`), `characters` (`name`, `references`, `tutela`,
-`description_chars`), `voice`, `pronunciations` (quante parole) e `warnings`; gli avvisi
+`description_chars`), `voice`, `pronunciations` (quante parole), `names` (quanti nomi) e `warnings`; gli avvisi
 vanno anche su stderr.
 
 ## Uso da un agente (Claude Code)

@@ -124,6 +124,24 @@ func UsageCost(req Request, res *Result, at time.Time) (usd float64, source stri
 	return usd, source, true
 }
 
+// CharsCost è il costo di una voce generata per i provider a caratteri (xai),
+// calcolato da giv alla data at della richiesta: caratteri del testo inviato
+// (req.Spoken) × prezzo del listino, come la stima (il provider non riporta
+// il costo). ok false per i provider a token o senza tariffa.
+func CharsCost(req Request, at time.Time) (usd float64, source string, ok bool) {
+	p, found := priceAt(req.Provider, req.Model, at)
+	if !found || p.USDPerMChars <= 0 {
+		return 0, "", false
+	}
+	chars := utf8.RuneCountInString(req.Spoken())
+	usd = float64(chars) * p.USDPerMChars / 1e6
+	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
+		return 0, "", false
+	}
+	return usd, fmt.Sprintf("calcolato da giv: listino %s %g $ per milione di caratteri × %d caratteri del testo inviato%s",
+		req.Provider, p.USDPerMChars, chars, priceDate(p)), true
+}
+
 func tokenCost(p Price, input, audio int64) float64 {
 	return float64(input)*p.USDPerMInputTokens/1e6 + float64(audio)*p.USDPerMAudioTokens/1e6
 }

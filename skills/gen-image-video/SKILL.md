@@ -84,7 +84,7 @@ giv qc      <file|storyboard.json> [--expect-duration <s>] [--expect-size <LxA>]
             [--expect-audio on|off] [--for <canali>] [--strict]
                                                 # controllo tecnico in locale (neri, fermi, muti, volume, canali), gratis
 giv qc      --voice <audio> --script "<testo>" | --script-file <f> [--pronuncia <f.json>] [--kit <kit.json>]
-            [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
+            [--nome <nome>]... [--lang it] [--max-cost <usd>] [--dry-run] [--strict]
                                                 # in più trascrive la voce (xai, 0,10 $/h) e la confronta col testo
 giv job fetch --provider P [--out D] [--name S] [--timeout 15m] <id>
                                                 # scarica un job video già partito, senza nuovo avvio

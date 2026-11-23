@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -125,9 +126,59 @@ func CheckTranscribe(req TranscribeRequest) (TranscribeRequest, []string, error)
 	return req, warns, nil
 }
 
-// Keyterms sono i termini da far riconoscere alla trascrizione: le parole
-// scritte del dizionario, in ordine.
-func Keyterms(d Dictionary) []string { return d.keys() }
+// Keyterms sono i termini da far riconoscere alla trascrizione: i nomi propri
+// (names, già passati da CheckNames), nell'ordine dato, poi le parole scritte
+// del dizionario, in ordine. Ripetizioni e il limite del provider li toglie
+// CheckTranscribe, con un avviso.
+func Keyterms(names []string, d Dictionary) []string {
+	return append(slices.Clone(names), d.keys()...)
+}
+
+// MaxNames e MaxNameChars: nomi propri da far riconoscere alla trascrizione
+// (giv qc --voice --nome, campo nomi del kit), entro i limiti dei termini di
+// xAI.
+const (
+	MaxNames     = MaxKeyterms
+	MaxNameChars = MaxKeytermChars
+)
+
+// CheckNames controlla i nomi propri da far riconoscere alla trascrizione e
+// li restituisce senza spazi in testa e in coda: al più MaxNames, ognuno non
+// vuoto, di al più MaxNameChars caratteri, UTF-8 valido, senza caratteri di
+// controllo né invisibili. what è il nome del campo per i messaggi.
+func CheckNames(what string, names []string) ([]string, error) {
+	if len(names) > MaxNames {
+		return nil, fmt.Errorf("%s: %d nomi, al più %d", what, len(names), MaxNames)
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		t := strings.TrimSpace(n)
+		switch {
+		case t == "":
+			return nil, fmt.Errorf("%s vuoto", what)
+		case !utf8.ValidString(t):
+			return nil, fmt.Errorf("%s: testo non UTF-8", what)
+		case strings.ContainsFunc(t, invisible):
+			return nil, fmt.Errorf("%s %q: caratteri di controllo o invisibili non ammessi", what, short(strings.Map(visible, t)))
+		case utf8.RuneCountInString(t) > MaxNameChars:
+			return nil, fmt.Errorf("%s %q: %d caratteri, al più %d", what, short(t), utf8.RuneCountInString(t), MaxNameChars)
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// invisible: carattere di controllo o di formato (a capo, tabulazioni,
+// direzione del testo, spazi di larghezza zero).
+func invisible(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
+
+// visible toglie i caratteri invisibili per mostrare un testo in un messaggio.
+func visible(r rune) rune {
+	if invisible(r) {
+		return '?'
+	}
+	return r
+}
 
 func audioFormatNames() []string {
 	names := make([]string, 0, len(AudioFormats))
