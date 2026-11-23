@@ -125,6 +125,20 @@ func settle(ss *story.SceneState, k int, costUSD, usageUSD float64) {
 	}
 }
 
+// settleJudge registra la riserva k di un giudizio di aderenza con il costo
+// calcolato dai consumi (token riportati da gemini per la tariffa del
+// listino: il cost_usage_usd del registro) al posto della stima, anche se è
+// più basso: per il giudizio è il costo vero. Con i consumi incompleti il
+// giudizio dà come costo la stima per eccesso, che quindi resta; 0 (non
+// calcolabile) lascia la stima della riserva.
+func settleJudge(ss *story.SceneState, k int, usageUSD float64) {
+	ss.Settle(k, 0)
+	if usageUSD > 0 {
+		u := usageUSD
+		ss.Charges[k].CostEstUSD = &u
+	}
+}
+
 // jobCharge è l'indice della generazione di tipo kind (clip o bozza) del job
 // id, -1 se non c'è.
 func jobCharge(ss *story.SceneState, kind, id string) int {
