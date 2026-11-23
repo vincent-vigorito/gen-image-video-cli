@@ -76,9 +76,10 @@ func (c *Comparison) Summary() *Comparison {
 }
 
 // CheckSummary controlla un riepilogo letto dallo stato: conteggi e quota
-// coerenti, al più MaxSummaryDiffs differenze per elenco, parole non vuote
-// dove servono, di al più MaxSummaryWordChars caratteri, UTF-8 valido e senza
-// caratteri invisibili, posizioni dentro il testo atteso.
+// coerenti (ratio uguale a matched/words), al più MaxSummaryDiffs differenze
+// per elenco, parole non vuote dove servono, di al più MaxSummaryWordChars
+// caratteri, UTF-8 valido e senza caratteri invisibili, posizioni dentro il
+// testo atteso.
 func (c *Comparison) CheckSummary() error {
 	switch {
 	case c.Words < 0 || c.Words > MaxTextChars:
@@ -87,6 +88,8 @@ func (c *Comparison) CheckSummary() error {
 		return fmt.Errorf("matched %d fuori intervallo (da 0 a words)", c.Matched)
 	case math.IsNaN(c.Ratio) || c.Ratio < 0 || c.Ratio > 1:
 		return errors.New("ratio non è un numero da 0 a 1")
+	case c.Words > 0 && math.Abs(c.Ratio-float64(c.Matched)/float64(c.Words)) > 1e-9:
+		return errors.New("ratio diverso da matched/words")
 	}
 	word := func(w string, need bool) bool {
 		if w == "" {
