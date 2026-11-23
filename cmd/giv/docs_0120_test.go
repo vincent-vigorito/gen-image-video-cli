@@ -96,10 +96,7 @@ func TestV9ChangelogEVersione(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^## \[0\.12\.0\]`).Match(b) {
 		t.Error("CHANGELOG senza la voce 0.12.0")
 	}
-	so, _, code, _ := runGiv(t, nil, "--version")
-	if code != 0 || strings.TrimSpace(so) != "giv 0.12.0" {
-		t.Errorf("giv --version: code=%d out=%q", code, so)
-	}
+	// la versione corrente è provata in docs_0121_test.go
 }
 
 // examples/kit passa giv kit check.
