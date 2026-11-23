@@ -29,7 +29,8 @@ description: Generazione di immagini e video via CLI `giv` (gen-image-video-cli)
   `inputs` (`image`/`last_frame`/`refs[]` con `sha256` breve), `params`, `job_id`,
   `duration_s`, `cost_est_usd` + `cost_source` (stima da listino dove il costo non è
   riportato, es. xai; nei comandi sulle clip resta accanto a `cost_usd`), `cost_usage_usd` + `cost_usage_source` (gemini: costo dai token
-  riportati, accanto alla stima), `warnings[]` (controlli ignorati).
+  riportati, accanto alla stima; `giv voice` xai: calcolato da giv sui caratteri, non
+  letto dal provider), `warnings[]` (controlli ignorati).
 - Exit code (il messaggio d'errore API e un `suggerimento:` sono in chiaro su stderr):
   0 ok · 1 errore generico · 2 uso errato (flag, prompt, provider o modello; anche video
   openai, anche con `--model`, e video senza un provider scelto) · 3 modello non trovato (404: `giv models --provider P`) ·
@@ -593,8 +594,11 @@ e non rigenera):
 - La voce detta come il testo: `./bin/giv qc --voice voce/s1-v1.wav --script-file
   testi/s1.txt --kit kit.json --max-cost 0.01` (trascrizione xai, a pagamento, frazioni di
   centesimo; `--dry-run` per la stima). In `comparison` le parole `different`, `missing` ed
-  `extra`; sui nomi propri la trascrizione sbaglia spesso: ascoltare prima di rifare la
-  voce (`giv story run --scene s1 --new-voice`, a pagamento, da chiedere).
+  `extra`; sui nomi propri la trascrizione sbaglia spesso: metterli nel campo `nomi` del
+  kit (o `--nome`, ripetibile), che vanno alla trascrizione come termini da riconoscere,
+  e ascoltare prima di rifare la voce (`giv story run --scene s1 --new-voice`, a
+  pagamento, da chiedere). Dopo `giv story cut` il confronto è anche in `voices[]` di
+  `storyboard.controllo.json`.
 
 **Kit di marca e personaggi**: prima di usarlo `./bin/giv kit check kit.json` (gratis):
 file con le misure, avvisi su logo senza trasparenza, font, riferimenti e descrizione;
@@ -602,7 +606,8 @@ codice 2 con un problema per riga se qualcosa non va. Esempio in `examples/kit/`
 storyboard: campo `"kit": "../kit/kit.json"` (o `--kit` su `story check`, `run` e `cut`);
 logo, cartello finale, musica e stile dei testi del kit arrivano da soli nel montaggio, i
 personaggi si usano per nome in `usa` (descrizione davanti al prompt, tutela del
-personaggio), la voce e le pronunce del kit fanno da predefiniti del blocco `parlato`.
+personaggio), la voce e le pronunce del kit fanno da predefiniti del blocco `parlato`, i
+`nomi` (marca, prodotti, personaggi) vanno alla trascrizione del controllo della voce.
 Vince la scena, poi lo storyboard, poi il kit.
 
 ## Costi
